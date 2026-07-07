@@ -20,6 +20,7 @@ export interface Toggles {
   territories: boolean;
   labels: boolean;
   beams: boolean;
+  halos: boolean; // pulsing hub rings (the "radial bubbles")
   noise: boolean;
   legend: boolean;
 }
@@ -85,7 +86,7 @@ export const appStore = createStore<AppState>()((set) => ({
   morphT: 0,
   hover: null,
   selection: null,
-  toggles: { territories: true, labels: true, beams: true, noise: true, legend: true },
+  toggles: { territories: true, labels: true, beams: true, halos: true, noise: true, legend: true },
   settings: { pointScale: 1, bloom: true, confidenceFloor: 0 },
 
   setCapabilities: (capabilities) => set({ capabilities }),

@@ -86,7 +86,7 @@ export class HaloLayer {
   }
 
   dispose(): void {
+    // shared THREE.Sprite quad geometry — never dispose (see PointsLayer.dispose)
     this.material.dispose();
-    this.object.geometry.dispose();
   }
 }

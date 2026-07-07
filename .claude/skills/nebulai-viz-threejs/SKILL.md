@@ -90,6 +90,26 @@ traps and patterns, hardest-won first.
 
 ## Assorted traps
 
+- **Never dispose a `THREE.Sprite`'s `geometry`.** All sprites share ONE
+  module-level quad `_geometry` (three.core.js). A layer that calls
+  `sprite.geometry.dispose()` in its teardown destroys that buffer for *every*
+  sprite in the app — points, flare, halos, id-mesh. Symptom on WebGPU: a flood
+  of `[Buffer] used in submit while destroyed` every frame plus a blank scene
+  after a dataset switch (the switch is what triggers the layer disposal). Only
+  `material.dispose()` — the per-instance data lives on the TSL nodes. Mesh/Line
+  layers that build their *own* geometry (BeamsLayer's InstancedMesh,
+  TerritoriesLayer's merged hulls) do own it and must dispose it.
+- Orbit on an ortho "map" camera: keep azimuth/elevation scaled by the 2D↔3D
+  morph so morph=0 is exactly overhead — HTML/SVG overlays project top-down and
+  will visibly drift from the GPU scene if the flat map is ever tilted. Gate the
+  orbit gesture (middle/right-drag, trackpad horizontal swipe) to 3D; nudge a
+  flat map into 3D when the gesture starts so it never feels dead. The trackpad
+  swipe must not steal scroll-zoom: only a **horizontal-dominant, non-pinch**
+  wheel (`!ctrlKey && |deltaX| > |deltaY|`) orbits the azimuth — vertical scroll
+  and pinch (`ctrlKey`) keep zooming. Mouse wheels report `deltaX===0`, so they
+  fall through to zoom and never accidentally orbit. Verified live: horizontal
+  swipe orbited with zero zoom change; vertical scroll and pinch zoomed with zero
+  azimuth change.
 - Halo/annulus radii need clamping against cluster spread — a fixed
   world-radius halo looks absurd on tight clusters and invisible on spread
   ones.

@@ -120,9 +120,9 @@ export class FlareLayer {
   }
 
   dispose(): void {
+    // the sprite quad geometry is shared module-wide by THREE.Sprite — never
+    // dispose it (see PointsLayer.dispose). Materials own the per-sprite nodes.
     this.flareMat.dispose();
     this.sparkleMat.dispose();
-    this.flare.geometry.dispose();
-    this.sparkle.geometry.dispose();
   }
 }

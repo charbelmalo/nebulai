@@ -45,7 +45,6 @@ export class PointsLayer {
   readonly uConfFloor = uniform(0);
 
   private material: THREE.SpriteNodeMaterial;
-  private geometryOwned = false;
   private idSprite: THREE.Sprite | null = null;
 
   // attribute nodes kept so the id-pick material can share the exact same
@@ -111,14 +110,13 @@ export class PointsLayer {
     material.colorNode = iColor;
     // visibility gates: noise toggle kills dust; confidence floor cuts weak
     // clustered points (noise is exempt so the two controls stay orthogonal)
-    const gate = select(iNoise.greaterThan(0.5), this.uNoiseVis, this.uConfFloor.step(iConf));
+    const gate = select(iNoise.greaterThan(0.5), this.uNoiseVis, iConf.step(this.uConfFloor));
     material.opacityNode = disc.mul(select(hovered, float(1), iAlpha)).mul(gate);
 
     this.material = material;
     this.object = new THREE.Sprite(material);
     this.object.count = n;
     this.object.frustumCulled = false;
-    this.geometryOwned = true;
   }
 
   setHover(index: number | null): void {
@@ -146,7 +144,7 @@ export class PointsLayer {
     // hard disc + the same visibility gates as the visual layer; alphaTest
     // discards instead of blending so ids never mix
     const d = uv().sub(0.5).length();
-    const gate = select(this.iNoise.greaterThan(0.5), this.uNoiseVis, this.uConfFloor.step(this.iConf));
+    const gate = select(this.iNoise.greaterThan(0.5), this.uNoiseVis, this.iConf.step(this.uConfFloor));
     material.opacityNode = select(d.lessThan(0.45), float(1), float(0)).mul(gate);
     material.alphaTest = 0.5;
 
@@ -158,11 +156,15 @@ export class PointsLayer {
   }
 
   dispose(): void {
+    // NB: never dispose `object.geometry` — THREE.Sprite shares ONE module-level
+    // quad geometry across every sprite (points, flare, halos, id-mesh). Freeing
+    // it here destroys that buffer for all of them → "Buffer used in submit while
+    // destroyed" every frame and a blank atlas after a dataset switch. The
+    // per-instance data lives on the material's TSL nodes, freed by dispose().
     this.material.dispose();
     if (this.idSprite) {
       (this.idSprite.material as THREE.Material).dispose();
       this.idSprite = null;
     }
-    if (this.geometryOwned) this.object.geometry.dispose();
   }
 }

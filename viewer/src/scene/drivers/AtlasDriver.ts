@@ -30,6 +30,16 @@ const DRAG_THRESHOLD_PX = 3;
 const MAX_CLUSTER_BEAMS = 12; // strongest neighbors of the selected hub
 const HALO_HUBS = 8; // top clusters by summed edge weight get pulsing rings
 
+// orbit (3-D only): middle/right-drag rotates azimuth+elevation; a trackpad
+// two-finger horizontal swipe rotates azimuth. Elevation offset is clamped so
+// the camera never dips under the map or snaps fully overhead.
+const ORBIT_AZ_SPEED = 0.008; // rad per px of horizontal drag
+const ORBIT_EL_SPEED = 0.006; // rad per px of vertical drag
+const ORBIT_EL_MIN = -0.55;
+const ORBIT_EL_MAX = 0.85;
+const WHEEL_ORBIT_AZ = 0.004; // rad per px of horizontal wheel/swipe
+const EL_CLAMP_MAX = 1.45; // ~83° from overhead — keep the horizon off-screen
+
 // 2D↔3D morph: the camera lifts to this tilt while points glide pos2→pos3
 const TILT_RAD = (38 * Math.PI) / 180;
 const MORPH_MS = 900;
@@ -72,6 +82,13 @@ export class AtlasDriver implements SceneDriver {
   private dragging = false;
   private pointerDown: { x: number; y: number } | null = null;
   private lastPointer: { x: number; y: number } | null = null;
+
+  // orbit: user azimuth + extra elevation, scaled by morph so a flat 2-D map
+  // stays exactly top-down (overlays project top-down and must not drift)
+  private orbiting = false;
+  private orbitLast: { x: number; y: number } | null = null;
+  private orbitAz = 0;
+  private orbitEl = 0;
 
   /** dataset bounds in pos2 space; fit is deferred while the viewport is
    *  degenerate (booting in a hidden/zero-size tab) and applied on resize */
@@ -139,6 +156,7 @@ export class AtlasDriver implements SceneDriver {
         if (s.toggles !== prev.toggles) {
           if (this.territories) this.territories.visible = s.toggles.territories;
           if (this.labels) this.labels.visible = s.toggles.labels;
+          if (this.halos) this.halos.visible = s.toggles.halos;
           if (this.points) this.points.uNoiseVis.value = s.toggles.noise ? 1 : 0;
           this.applyBeamsVisibility(s.toggles.beams);
           this.cameraDirty = true;
@@ -238,6 +256,7 @@ export class AtlasDriver implements SceneDriver {
       }
       this.halos = new HaloLayer(halos);
       if (this.reducedMotion) this.halos.uMotion.value = 0;
+      this.halos.visible = t.halos;
       this.scene.add(this.halos.object);
     }
 
@@ -293,12 +312,16 @@ export class AtlasDriver implements SceneDriver {
       this.camera.top = hy;
       this.camera.bottom = -hy;
       // tilt lifts the (still orthographic) camera off the map plane as the
-      // morph progresses — the video's axonometric flythrough look
-      const tilt = this.morph * TILT_RAD;
+      // morph progresses — the video's axonometric flythrough look. Orbit adds
+      // azimuth + extra elevation; both are scaled by morph so at morph=0 the
+      // camera is exactly overhead (flat map, no overlay drift).
+      const el = Math.min(this.morph * (TILT_RAD + this.orbitEl), EL_CLAMP_MAX);
+      const az = this.morph * this.orbitAz;
+      const sinEl = Math.sin(el);
       this.camera.position.set(
-        this.cam.cx,
-        this.cam.cy - Math.sin(tilt) * this.camDist,
-        Math.cos(tilt) * this.camDist,
+        this.cam.cx + Math.sin(az) * sinEl * this.camDist,
+        this.cam.cy - Math.cos(az) * sinEl * this.camDist,
+        Math.cos(el) * this.camDist,
       );
       this.camera.lookAt(this.cam.cx, this.cam.cy, 0);
       this.camera.updateProjectionMatrix();
@@ -528,6 +551,16 @@ export class AtlasDriver implements SceneDriver {
     c.addEventListener(
       "pointerdown",
       (e) => {
+        // middle (wheel-click) or right button → orbit the camera
+        if (e.button === 1 || e.button === 2) {
+          e.preventDefault();
+          c.setPointerCapture(e.pointerId);
+          this.orbiting = true;
+          this.orbitLast = { x: e.clientX, y: e.clientY };
+          this.hoverClear();
+          c.style.cursor = "move";
+          return;
+        }
         if (e.button !== 0) return;
         c.setPointerCapture(e.pointerId);
         this.pointerDown = { x: e.clientX, y: e.clientY };
@@ -537,9 +570,29 @@ export class AtlasDriver implements SceneDriver {
       opts,
     );
 
+    // right-drag orbits; suppress the browser context menu on the canvas
+    c.addEventListener("contextmenu", (e) => e.preventDefault(), opts);
+
     c.addEventListener(
       "pointermove",
       (e) => {
+        if (this.orbiting && this.orbitLast) {
+          this.userDroveCamera = true;
+          // orbiting is a 3-D affordance — on the first drag movement, lift a
+          // flat map into the flythrough so the gesture is never a no-op (a
+          // stray middle/right *click* without drag leaves the map alone)
+          if (this.morph <= 0.02 && appStore.getState().dims !== 3) {
+            appStore.getState().setDims(3);
+          }
+          this.orbitAz += (e.clientX - this.orbitLast.x) * ORBIT_AZ_SPEED;
+          this.orbitEl = Math.min(
+            Math.max(this.orbitEl + (e.clientY - this.orbitLast.y) * ORBIT_EL_SPEED, ORBIT_EL_MIN),
+            ORBIT_EL_MAX,
+          );
+          this.orbitLast = { x: e.clientX, y: e.clientY };
+          this.cameraDirty = true;
+          return;
+        }
         if (this.pointerDown && this.lastPointer) {
           const dx = e.clientX - this.pointerDown.x;
           const dy = e.clientY - this.pointerDown.y;
@@ -552,7 +605,8 @@ export class AtlasDriver implements SceneDriver {
             this.userDroveCamera = true;
             // tilted view foreshortens vertically — scale dy so the map
             // tracks the cursor instead of lagging it
-            const tiltComp = 1 / Math.max(Math.cos(this.morph * TILT_RAD), 0.5);
+            const el = Math.min(this.morph * (TILT_RAD + this.orbitEl), EL_CLAMP_MAX);
+            const tiltComp = 1 / Math.max(Math.cos(el), 0.5);
             this.cam.panPixels(
               e.clientX - this.lastPointer.x,
               (e.clientY - this.lastPointer.y) * tiltComp,
@@ -572,6 +626,12 @@ export class AtlasDriver implements SceneDriver {
     c.addEventListener(
       "pointerup",
       (e) => {
+        if (this.orbiting) {
+          this.orbiting = false;
+          this.orbitLast = null;
+          c.style.cursor = "";
+          return;
+        }
         const wasDrag = this.dragging;
         this.pointerDown = null;
         this.lastPointer = null;
@@ -606,6 +666,13 @@ export class AtlasDriver implements SceneDriver {
       (e) => {
         e.preventDefault();
         this.userDroveCamera = true;
+        // in 3-D, a horizontal-dominant trackpad swipe orbits the azimuth;
+        // pinch-zoom (ctrlKey) and vertical scroll / mouse-wheel keep zooming
+        if (this.morph > 0.02 && !e.ctrlKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+          this.orbitAz += e.deltaX * WHEEL_ORBIT_AZ;
+          this.cameraDirty = true;
+          return;
+        }
         const factor = Math.exp(e.deltaY * 0.0012);
         this.cam.zoomAt(e.clientX, e.clientY, factor);
         this.cameraDirty = true;

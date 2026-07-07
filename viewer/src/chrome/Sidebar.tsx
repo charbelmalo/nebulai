@@ -23,6 +23,7 @@ const TOGGLE_ROWS: { key: keyof Toggles; label: string }[] = [
   { key: "territories", label: "Territories" },
   { key: "labels", label: "Labels" },
   { key: "beams", label: "Connections" },
+  { key: "halos", label: "Halos" },
   { key: "noise", label: "Noise" },
   { key: "legend", label: "Legend" },
 ];
