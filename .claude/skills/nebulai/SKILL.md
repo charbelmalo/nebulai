@@ -110,6 +110,46 @@ Full protocol, worked examples, and the propagation table:
 reason this project is one orchestrator over separate pipeline skills rather
 than three disconnected tools.
 
+## Settings home (viewer) — MANDATORY for every user-facing knob
+
+The viewer has ONE canonical Settings page at
+`viewer/src/chrome/SettingsPage.tsx`. It is the single place a user goes to
+customize anything — theme, per-graph appearance, model probing, dataset
+choice, provenance. It is opened by the top-right gear in `TopBar` and by
+the "All settings…" button at the bottom of the `Sidebar`.
+
+**Rule for future agents (this includes you):** any new customizable
+feature — a new driver knob, a new chrome preference, a new probing option,
+a new dataset filter, ANY toggle/slider/select a user should reach — MUST be
+added to `SettingsPage.tsx` under the correct tab, backed by the matching
+slice of `appStore` (`settings`, `appearance[<graph>]`, `probing`, etc.).
+
+Do not:
+- Bury a new knob only inside the compact left `Sidebar`. The sidebar is
+  a quick-access subset; the full option lives in `SettingsPage`.
+- Read a driver-tunable value from a driver's private state. If a driver
+  wants it configurable, it reads from `appStore.appearance[<graph>]`.
+- Add a new top-level state slice for options without also surfacing it in
+  a Settings tab.
+
+Do:
+- Add a new **tab** if the feature category doesn't fit existing ones
+  (General / Appearance / Model Probing / Data / About). Update the `TABS`
+  array in `SettingsPage.tsx` and add the matching `TabName` case.
+- Add a new **sub-tab** under Appearance if a new graph type is introduced.
+- Extend `Appearance`, `Settings`, or `Probing` in `viewer/src/app/store.ts`
+  with the new field and a default value; the chrome `state.ts` signal
+  bridge picks it up automatically once the store slice is added.
+- Reuse the primitives in `viewer/src/chrome/controls.tsx`
+  (`SelectRow`, `SliderRow`, `ToggleRow`, `TextRow`) — do not invent
+  bespoke inputs.
+
+If a knob affects only one graph, put it under Appearance → that graph's
+sub-tab. If it affects all rendering, put it under General → Rendering. If
+it affects the pipeline itself (endpoints, live probing, auto-rebuild),
+put it under Model Probing and wire progress events through
+`chrome/probe.ts` so the progress strip animates.
+
 ## Bundled scripts
 
 - `scripts/inspect_map.py <nebulai.json>` — summarize any map: meta line, top-N

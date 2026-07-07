@@ -25,11 +25,84 @@ export interface Toggles {
   legend: boolean;
 }
 
-/** "Additional" tab knobs — render-quality settings, all live-applied. */
+/** Global render-quality settings — live-applied. Per-view appearance knobs
+ *  live in `appearance` below; general chrome/render knobs live here. */
 export interface Settings {
   pointScale: number; // × base point size, 0.5–2
   bloom: boolean; // post bloom (webgpu tier only; forced off by reduced motion)
   confidenceFloor: number; // hide points below this confidence, 0–1
+  theme: "dark" | "light" | "auto";
+  labelDensity: number; // 0.2–2 — culling threshold multiplier for cluster labels
+  animationSpeed: number; // 0.25–2 — global time-uniform multiplier
+  reducedMotion: boolean; // manual override; caps.reducedMotion still wins on init
+}
+
+/** Per-view appearance settings. Every graph type gets its own tab in the
+ *  Settings page; every knob a driver honors MUST live here — this is the
+ *  single source of truth for graph looks. New driver knobs belong in the
+ *  matching sub-interface, not the driver's private state. */
+export interface Appearance {
+  atlas: {
+    hullOpacity: number; // 0–1 — territory hull fill alpha
+    beamWidth: number; // 0.25–3 — connection line width scale
+    haloIntensity: number; // 0–1 — pulsing hub ring strength
+    background: "vignette" | "flat" | "grid"; // stage background
+    orbitEnabled: boolean; // slow camera orbit in 3D flythrough
+    orbitSpeed: number; // 0.1–3
+  };
+  chord: {
+    ribbonOpacity: number; // 0–1
+    curveTension: number; // 0–1 (0 = straight, 1 = maximum bezier)
+    labelRotation: boolean; // rotate rim labels tangentially
+    showTicks: boolean;
+  };
+  hierarchy: {
+    linkStroke: number; // 0.5–3
+    nodeSize: number; // 0.5–3
+    fanAngle: number; // 60–360 — arc span in degrees
+    colorBy: "cluster" | "depth" | "confidence";
+  };
+  compare: {
+    swatchSize: number; // 4–20 px
+    strokeOnHover: boolean;
+    dimOthers: boolean; // when a model is highlighted, dim the rest
+  };
+}
+
+/** Model probing config — live probing tests a model endpoint before it's
+ *  used for cluster naming or embedding. Progress state is separate and
+ *  transient (mirrors the pipeline stages the backend actually reports). */
+export interface Probing {
+  endpoint: string; // custom OpenAI-compatible base URL, empty = default chain
+  apiKey: string; // never persisted, kept in memory only
+  model: string; // e.g. "llama3.2:3b" or "gpt-4o-mini"
+  liveProbe: boolean; // ping /models on config change
+  probeIntervalMs: number; // 5000–60000 — recurring health check
+  autoRun: boolean; // rebuild the map when config changes
+  useM4Worker: boolean; // route through 192.168.0.200 (m4worker-bridge)
+}
+
+export type ProbeStage =
+  | "idle"
+  | "probing"
+  | "loading"
+  | "reducing"
+  | "clustering"
+  | "naming"
+  | "exporting"
+  | "rendering"
+  | "done"
+  | "error";
+
+/** Live progress — populated by the probe/build pipeline. Progress bars in
+ *  the Settings page bind directly to these fields. */
+export interface Progress {
+  stage: ProbeStage;
+  pct: number; // 0–1
+  message: string; // human-readable status line
+  latencyMs: number | null; // last successful probe RTT
+  history: { id: number; t: number; stage: ProbeStage; message: string }[]; // event log
+  error: string | null;
 }
 
 /** Compare-view UI state. `hiddenModels` holds source indices toggled off in
@@ -55,6 +128,10 @@ export interface AppState {
   selection: Selection | null;
   toggles: Toggles;
   settings: Settings;
+  appearance: Appearance;
+  probing: Probing;
+  progress: Progress;
+  settingsOpen: boolean; // Settings page overlay visibility
 
   setCapabilities(c: Capabilities): void;
   setDatasets(d: DatasetEntry[]): void;
@@ -71,6 +148,16 @@ export interface AppState {
   setSelection(s: Selection | null): void;
   setToggle(key: keyof Toggles, value: boolean): void;
   setSetting<K extends keyof Settings>(key: K, value: Settings[K]): void;
+  setAppearance<G extends keyof Appearance, K extends keyof Appearance[G]>(
+    graph: G,
+    key: K,
+    value: Appearance[G][K],
+  ): void;
+  setProbing<K extends keyof Probing>(key: K, value: Probing[K]): void;
+  setProgress(patch: Partial<Progress>): void;
+  pushProgressEvent(stage: ProbeStage, message: string): void;
+  resetProgress(): void;
+  setSettingsOpen(open: boolean): void;
 }
 
 export const appStore = createStore<AppState>()((set) => ({
@@ -87,7 +174,60 @@ export const appStore = createStore<AppState>()((set) => ({
   hover: null,
   selection: null,
   toggles: { territories: true, labels: true, beams: true, halos: true, noise: true, legend: true },
-  settings: { pointScale: 1, bloom: true, confidenceFloor: 0 },
+  settings: {
+    pointScale: 1,
+    bloom: true,
+    confidenceFloor: 0,
+    theme: "dark",
+    labelDensity: 1,
+    animationSpeed: 1,
+    reducedMotion: false,
+  },
+  appearance: {
+    atlas: {
+      hullOpacity: 0.28,
+      beamWidth: 1,
+      haloIntensity: 0.7,
+      background: "vignette",
+      orbitEnabled: false,
+      orbitSpeed: 1,
+    },
+    chord: {
+      ribbonOpacity: 0.55,
+      curveTension: 0.6,
+      labelRotation: true,
+      showTicks: true,
+    },
+    hierarchy: {
+      linkStroke: 1,
+      nodeSize: 1,
+      fanAngle: 300,
+      colorBy: "cluster",
+    },
+    compare: {
+      swatchSize: 10,
+      strokeOnHover: true,
+      dimOthers: true,
+    },
+  },
+  probing: {
+    endpoint: "",
+    apiKey: "",
+    model: "",
+    liveProbe: false,
+    probeIntervalMs: 15000,
+    autoRun: false,
+    useM4Worker: false,
+  },
+  progress: {
+    stage: "idle",
+    pct: 0,
+    message: "",
+    latencyMs: null,
+    history: [],
+    error: null,
+  },
+  settingsOpen: false,
 
   setCapabilities: (capabilities) => set({ capabilities }),
   setDatasets: (datasets) => set({ datasets }),
@@ -116,4 +256,32 @@ export const appStore = createStore<AppState>()((set) => ({
     set((s) => ({ toggles: { ...s.toggles, [key]: value } })),
   setSetting: (key, value) =>
     set((s) => ({ settings: { ...s.settings, [key]: value } })),
+  setAppearance: (graph, key, value) =>
+    set((s) => ({
+      appearance: {
+        ...s.appearance,
+        [graph]: { ...s.appearance[graph], [key]: value },
+      },
+    })),
+  setProbing: (key, value) =>
+    set((s) => ({ probing: { ...s.probing, [key]: value } })),
+  setProgress: (patch) => set((s) => ({ progress: { ...s.progress, ...patch } })),
+  pushProgressEvent: (stage, message) =>
+    set((s) => {
+      const last = s.progress.history[s.progress.history.length - 1];
+      const id = (last?.id ?? 0) + 1;
+      return {
+        progress: {
+          ...s.progress,
+          stage,
+          message,
+          history: [...s.progress.history.slice(-49), { id, t: Date.now(), stage, message }],
+        },
+      };
+    }),
+  resetProgress: () =>
+    set({
+      progress: { stage: "idle", pct: 0, message: "", latencyMs: null, history: [], error: null },
+    }),
+  setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
 }));

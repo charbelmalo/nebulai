@@ -5,6 +5,7 @@ import { render } from "preact";
 import { Sidebar } from "./Sidebar";
 import { ComparePanel } from "./ComparePanel";
 import { LegendCard } from "./LegendCard";
+import { SettingsPage } from "./SettingsPage";
 import { TopBar } from "./TopBar";
 import { $viewMode } from "./state";
 
@@ -14,6 +15,7 @@ function Chrome() {
       <TopBar />
       <Sidebar />
       {$viewMode.value === "compare" ? <ComparePanel /> : <LegendCard />}
+      <SettingsPage />
     </>
   );
 }

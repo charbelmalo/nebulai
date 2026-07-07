@@ -8,6 +8,17 @@ component; record the result in the PR description. Items that don't apply
 to a component (e.g. submenus in a viewer with none) are marked N/A, not
 skipped silently.
 
+## Settings-home rule
+
+Any new user-facing knob — driver setting, chrome preference, probing
+option, dataset filter — MUST land in
+[`src/chrome/SettingsPage.tsx`](src/chrome/SettingsPage.tsx) under the
+matching tab (General / Appearance / Model Probing / Data / About) and be
+backed by a slice of `appStore` (`settings`, `appearance[<graph>]`,
+`probing`). The compact left `Sidebar` is a quick-access subset, never the
+only home for an option. See the `nebulai` skill's "Settings home" section
+for the full rule.
+
 The automated half of the bar lives in `npm run test` (vitest unit),
 `npm run e2e` (Playwright: goldens per view × gpu rung, perf budgets, axe,
 keyboard reachability, reduced motion) and `npm run typecheck`. All three

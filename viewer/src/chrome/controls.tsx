@@ -151,3 +151,30 @@ export function Tabs(props: {
     </div>
   );
 }
+
+export function TextRow(props: {
+  label: string;
+  value: string;
+  placeholder?: string;
+  type?: "text" | "password" | "url";
+  onChange: (value: string) => void;
+  hint?: string;
+}) {
+  const id = `txt-${props.label.replace(/\s+/g, "-").toLowerCase()}`;
+  return (
+    <label class="ctl-row ctl-row-text" for={id}>
+      <span class="ctl-label">
+        {props.label}
+        {props.hint ? <span class="ctl-hint"> {props.hint}</span> : null}
+      </span>
+      <input
+        id={id}
+        class="ctl-input"
+        type={props.type ?? "text"}
+        value={props.value}
+        placeholder={props.placeholder}
+        onInput={(e) => props.onChange((e.currentTarget as HTMLInputElement).value)}
+      />
+    </label>
+  );
+}

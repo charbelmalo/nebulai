@@ -125,6 +125,14 @@ export function Sidebar() {
               ))}
             </>
           )}
+          <div class="sidebar-sep" />
+          <button
+            type="button"
+            class="sidebar-more"
+            onClick={() => appStore.getState().setSettingsOpen(true)}
+          >
+            All settings…
+          </button>
         </div>
       ) : (
         <div class="sidebar-body" role="tabpanel">
@@ -153,6 +161,14 @@ export function Sidebar() {
             hint={caps?.tier !== "webgpu" ? "(webgpu only)" : undefined}
             onChange={(v) => appStore.getState().setSetting("bloom", v)}
           />
+          <div class="sidebar-sep" />
+          <button
+            type="button"
+            class="sidebar-more"
+            onClick={() => appStore.getState().setSettingsOpen(true)}
+          >
+            All settings…
+          </button>
         </div>
       )}
     </aside>

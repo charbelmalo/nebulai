@@ -5,7 +5,10 @@
 import { signal } from "@preact/signals";
 import {
   appStore,
+  type Appearance,
   type CompareUI,
+  type Probing,
+  type Progress,
   type Selection,
   type Settings,
   type Toggles,
@@ -28,6 +31,10 @@ export const $dims = signal<2 | 3>(s.dims);
 export const $selection = signal<Selection | null>(s.selection);
 export const $toggles = signal<Toggles>(s.toggles);
 export const $settings = signal<Settings>(s.settings);
+export const $appearance = signal<Appearance>(s.appearance);
+export const $probing = signal<Probing>(s.probing);
+export const $progress = signal<Progress>(s.progress);
+export const $settingsOpen = signal<boolean>(s.settingsOpen);
 export const $compareData = signal<CompareData | null>(s.compareData);
 export const $compare = signal<CompareUI>(s.compare);
 
@@ -42,6 +49,10 @@ appStore.subscribe((st) => {
   if (st.selection !== $selection.value) $selection.value = st.selection;
   if (st.toggles !== $toggles.value) $toggles.value = st.toggles;
   if (st.settings !== $settings.value) $settings.value = st.settings;
+  if (st.appearance !== $appearance.value) $appearance.value = st.appearance;
+  if (st.probing !== $probing.value) $probing.value = st.probing;
+  if (st.progress !== $progress.value) $progress.value = st.progress;
+  if (st.settingsOpen !== $settingsOpen.value) $settingsOpen.value = st.settingsOpen;
   if (st.compareData !== $compareData.value) $compareData.value = st.compareData;
   if (st.compare !== $compare.value) $compare.value = st.compare;
 });
