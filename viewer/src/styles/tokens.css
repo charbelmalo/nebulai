@@ -1,0 +1,35 @@
+/* Nebul.AI viewer design tokens — single source of truth for chrome color.
+   Mirrored in tokens.ts for GPU consumption; tests/unit/tokens-sync.test.ts
+   fails if the two drift. Values matched to the syncatlas reference frames. */
+
+:root {
+  --bg: #150f17;
+  --bg-raise: #1d1420;
+  --bg-pill: #221826;
+
+  --hairline: rgba(233, 215, 240, 0.1);
+  --text: #efe7f2;
+  --text-dim: #9d8fa6;
+
+  /* the 5-stop connection ramp: beams, legend bar, badges, cluster accents */
+  --ramp-0: #f5c33b;
+  --ramp-1: #f0863a;
+  --ramp-2: #ea4f86;
+  --ramp-3: #e33bd0;
+  --ramp-4: #8b3bf0;
+  --ramp: linear-gradient(
+    90deg,
+    var(--ramp-0),
+    var(--ramp-1),
+    var(--ramp-2),
+    var(--ramp-3),
+    var(--ramp-4)
+  );
+
+  --radius-pill: 999px;
+  --radius-card: 14px;
+
+  --font-ui:
+    "Inter var", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+}

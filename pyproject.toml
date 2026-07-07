@@ -1,0 +1,30 @@
+[project]
+name = "nebulai"
+version = "0.1.0"
+description = "Nebul.AI — a semantic cloud of a micro model's concept space"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "safetensors",
+    "huggingface-hub",
+    "tokenizers",
+    "umap-learn",
+    "scikit-learn>=1.4",
+    "datamapplot",
+    "matplotlib",
+    "anthropic",
+]
+
+[project.scripts]
+nebulai = "nebulai.cli:main"
+
+[dependency-groups]
+dev = ["pytest"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nebulai"]

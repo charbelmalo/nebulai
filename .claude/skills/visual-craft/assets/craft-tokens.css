@@ -1,0 +1,64 @@
+/* craft-tokens.css — visual-craft token layer.
+   Encodes concentric radius, squircle corners, and tabular figures as defaults
+   so they aren't re-decided per component. */
+
+:root {
+  /* One radius scale; derive everything else from it. */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 20px;
+  --r-pill: 999px;
+}
+
+/* ---------------------------------------------------------------------------
+   Concentric nesting: child radius = parent radius − parent padding.
+   Clamp at 0 so padding >= radius yields square inner corners, not a negative.
+--------------------------------------------------------------------------- */
+.surface {
+  --pad: 8px;
+  border-radius: var(--r-lg);
+  padding: var(--pad);
+}
+.surface > .nested {
+  border-radius: max(0px, calc(var(--r-lg) - var(--pad)));
+}
+/* Working the other way (know the inner, want the outer):
+   .surface { border-radius: calc(var(--inner) + var(--pad)); } */
+
+/* ---------------------------------------------------------------------------
+   Squircle / continuous corners — progressive enhancement.
+   Baseline works everywhere; continuous corners where supported (Chromium
+   M139+ as of early 2026). For Safari/Firefox parity today, use an SVG
+   clip-path/mask or a library (figma-squircle / squircle.js / CornerKit).
+--------------------------------------------------------------------------- */
+.squircle { border-radius: var(--r-lg); }
+@supports (corner-shape: superellipse(2)) {
+  .squircle { corner-shape: superellipse(2); } /* squircle keyword = superellipse(2) */
+}
+/* Optional animated corner accent:
+   .squircle { transition: corner-shape .4s ease; }
+   .squircle:hover { corner-shape: superellipse(1.8); } */
+
+/* ---------------------------------------------------------------------------
+   Tabular figures — aligned numbers, timers, prices, ordered lists, counters.
+--------------------------------------------------------------------------- */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;   /* low-level fallback for stubborn webfonts */
+}
+/* Add where relevant: */
+.tnum-slashed { font-variant-numeric: tabular-nums slashed-zero; }
+.tnum-lining  { font-variant-numeric: tabular-nums lining-nums; }
+
+/* ---------------------------------------------------------------------------
+   Icon box — put every icon in a shared fixed box; align optical centers
+   (nudge triangles/chevrons manually), not bounding boxes.
+--------------------------------------------------------------------------- */
+.icon-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 20px;
+  block-size: 20px;
+  flex: 0 0 auto;
+}

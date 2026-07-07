@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+out/
+uv.lock
+.DS_Store
+viewer/node_modules/
+viewer/dist/
+viewer/tests/e2e/.artifacts/

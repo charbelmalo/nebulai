@@ -1,0 +1,58 @@
+/* interaction.css — drop-in utilities for interaction-craft.
+   Pairs with safe-polygon.js and combobox-keyboard.js. */
+
+/* ---------------------------------------------------------------------------
+   1. Forgiving hit targets (Fitts's Law)
+   Keep the visual element small; grow the *hittable* area past its bounds so
+   clicking slightly off still works. Baselines: 44pt (Apple), 48dp (Material),
+   44px WCAG 2.5.5 AAA, 24px WCAG 2.5.8 AA.
+--------------------------------------------------------------------------- */
+.hit { position: relative; }
+.hit::before {
+  content: "";
+  position: absolute;
+  inset: -8px;            /* extends the target 8px past the visual box */
+  /* invisible; it only intercepts the pointer */
+}
+@media (pointer: coarse) {
+  .hit::before { inset: -12px; }   /* fingers need more slack than a mouse */
+}
+
+/* ---------------------------------------------------------------------------
+   2. State-aware adaptive corners for grouped / selectable rows
+   Share --r with your radius scale (see visual-craft) so nested content stays
+   concentric. Position via [data-pos] OR the pure-CSS adjacency block below.
+--------------------------------------------------------------------------- */
+:root { --r: 10px; }
+
+.row { border-radius: 0; }
+.row[data-pos="single"] { border-radius: var(--r); }
+.row[data-pos="first"]  { border-radius: var(--r) var(--r) 0 0; }
+.row[data-pos="last"]   { border-radius: 0 0 var(--r) var(--r); }
+
+/* A selected row can promote to a fully-rounded, detached block. */
+.row[aria-selected="true"] { border-radius: var(--r); }
+
+/* Pure-CSS adjacency — round the first/last of a run without bookkeeping. */
+.row-group > .row:first-of-type {
+  border-start-start-radius: var(--r);
+  border-start-end-radius: var(--r);
+}
+.row-group > .row:last-of-type {
+  border-end-start-radius: var(--r);
+  border-end-end-radius: var(--r);
+}
+
+/* ---------------------------------------------------------------------------
+   3. Active-item scroll padding (the "autoscroll keeps a padding" feel)
+   Used with combobox-keyboard.js `scrollIntoView({block:'nearest'})`.
+--------------------------------------------------------------------------- */
+[role="listbox"] {
+  overflow: auto;
+  scroll-padding-block: 8px;   /* active row never sits flush to the edge */
+}
+
+/* Respect reduced-motion for any transitions layered on these states. */
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto; }
+}
