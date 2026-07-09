@@ -133,6 +133,57 @@ def compute_fourier(m: GPT2Numpy) -> dict:
     }
 
 
+def _pca_rows(rows: np.ndarray, dims: int) -> tuple[np.ndarray, np.ndarray, float]:
+    """Exact PCA of a row matrix via the (d×d) covariance eigendecomposition —
+    float64, deterministic axis signs (largest-|loading| positive). Returns
+    (coords (n,dims) PC scores, explained-variance ratio per PC, total variance).
+    Shared by compute_embed / compute_neurons / compute_sae so the three
+    constellations are the SAME math on different row sets."""
+    R = rows.astype(np.float64)
+    Rc = R - R.mean(axis=0)
+    cov = Rc.T @ Rc
+    evals, evecs = np.linalg.eigh(cov)
+    order = np.argsort(evals)[::-1]
+    evals = evals[order]
+    evecs = evecs[:, order]
+    axes = evecs[:, :dims]
+    for j in range(dims):
+        k = int(np.argmax(np.abs(axes[:, j])))
+        if axes[k, j] < 0:
+            axes[:, j] = -axes[:, j]
+    coords = Rc @ axes
+    evr = evals[:dims] / evals.sum()
+    return coords, evr, float(evals.sum())
+
+
+def _unembed_readout(
+    rows32: np.ndarray, m: GPT2Numpy, chunk: int = 2048
+) -> tuple[list[str], list[float], list[str], list[float]]:
+    """Direct-path logit readout of residual-stream write directions through the
+    model's own final LN + tied unembedding: ℓ = ((w − mean(w)) ⊙ γ_f)·W_Eᵀ.
+    Folds in ln_f's centering and gain; drops only the per-input 1/σ — a
+    positive scalar, so token RANKING is preserved. Direct path only (no
+    downstream-layer effects), positive activation assumed — callers must state
+    that caveat in their meta."""
+    g_f = m._g("ln_f.weight")  # (d,)
+    v = (rows32 - rows32.mean(axis=1, keepdims=True)) * g_f
+    n = v.shape[0]
+    top_tok: list[str] = []
+    top_val: list[float] = []
+    bot_tok: list[str] = []
+    bot_val: list[float] = []
+    for s in range(0, n, chunk):
+        lg = v[s : s + chunk] @ m.wte.T  # (chunk, V) logit deltas
+        hi = np.argmax(lg, axis=1)
+        lo = np.argmin(lg, axis=1)
+        r = np.arange(lg.shape[0])
+        top_tok += [m.decode1(int(t)) for t in hi]
+        top_val += [round(float(x), 2) for x in lg[r, hi]]
+        bot_tok += [m.decode1(int(t)) for t in lo]
+        bot_val += [round(float(x), 2) for x in lg[r, lo]]
+    return top_tok, top_val, bot_tok, bot_val
+
+
 def compute_embed(m: GPT2Numpy, dims: int = 3) -> dict:
     """#15 Embedding Constellation — PCA of the token-embedding matrix W_E.
 
@@ -147,24 +198,8 @@ def compute_embed(m: GPT2Numpy, dims: int = 3) -> dict:
     PCA is done via the 768×768 covariance eigendecomposition (cheap and exact),
     not a giant thin-U SVD, so it runs in seconds and stays float64.
     """
-    We = m.wte.astype(np.float64)  # (V, d)
-    mu = We.mean(axis=0)
-    Wc = We - mu  # mean-centered rows
-    cov = Wc.T @ Wc  # (d, d) — symmetric PSD, tiny
-    evals, evecs = np.linalg.eigh(cov)  # ascending eigenpairs
-    order = np.argsort(evals)[::-1]
-    evals = evals[order]
-    evecs = evecs[:, order]
-    axes = evecs[:, :dims]  # (d, dims) top principal axes
-    # deterministic sign per axis: make its largest-magnitude loading positive,
-    # so re-exports don't flip the constellation left/right between runs.
-    for j in range(dims):
-        k = int(np.argmax(np.abs(axes[:, j])))
-        if axes[k, j] < 0:
-            axes[:, j] = -axes[:, j]
-    coords = Wc @ axes  # (V, dims) principal-component scores
-    evr = evals[:dims] / evals.sum()  # explained-variance ratio of each PC
-    norms = np.linalg.norm(We, axis=1)  # exact per-token embedding magnitude
+    coords, evr, total_var = _pca_rows(m.wte, dims)  # (V, dims) exact PC scores
+    norms = np.linalg.norm(m.wte.astype(np.float64), axis=1)  # exact per-token magnitude
     strs = [m.decode1(i) for i in range(m.V)]
     lead = [1 if s[:1] == " " else 0 for s in strs]
     xy = coords[:, :2].reshape(-1)  # flat [pc1_0, pc2_0, pc1_1, pc2_1, …]
@@ -184,7 +219,7 @@ def compute_embed(m: GPT2Numpy, dims: int = 3) -> dict:
         "n": int(m.V),
         "dims": dims,
         "explained_variance_ratio": [round(float(x), 5) for x in evr],
-        "total_variance": round(float(evals.sum()), 3),
+        "total_variance": round(total_var, 3),
         "coords": [round(float(v), 3) for v in xy],  # flat 2N (PC1, PC2)
         "z": [round(float(v), 3) for v in z],  # PC3 (hover only)
         "norm": [round(float(v), 3) for v in norms],
@@ -222,42 +257,9 @@ def compute_neurons(m: GPT2Numpy, dims: int = 3) -> dict:
     rows32 = np.concatenate(blocks, axis=0)  # (n_layer*d_mlp, d) float32
     n = rows32.shape[0]
 
-    # --- exact PCA of the write directions (float64) ---
-    rows = rows32.astype(np.float64)
-    mu = rows.mean(axis=0)
-    Rc = rows - mu
-    cov = Rc.T @ Rc  # (d, d)
-    evals, evecs = np.linalg.eigh(cov)
-    order = np.argsort(evals)[::-1]
-    evals = evals[order]
-    evecs = evecs[:, order]
-    axes = evecs[:, :dims]
-    # deterministic sign per axis (same convention as compute_embed)
-    for j in range(dims):
-        k = int(np.argmax(np.abs(axes[:, j])))
-        if axes[k, j] < 0:
-            axes[:, j] = -axes[:, j]
-    coords = Rc @ axes  # (n, dims)
-    evr = evals[:dims] / evals.sum()
-    norms = np.linalg.norm(rows, axis=1)  # exact ‖w_out‖₂ per neuron
-
-    # --- direct-path logit readout through the tied unembedding (float32) ---
-    g_f = m._g("ln_f.weight")  # (d,)
-    v = (rows32 - rows32.mean(axis=1, keepdims=True)) * g_f  # LN-centered ⊙ gain
-    top_tok: list[str] = []
-    top_val: list[float] = []
-    bot_tok: list[str] = []
-    bot_val: list[float] = []
-    chunk = 2048
-    for s in range(0, n, chunk):
-        lg = v[s : s + chunk] @ m.wte.T  # (chunk, V) logit deltas
-        hi = np.argmax(lg, axis=1)
-        lo = np.argmin(lg, axis=1)
-        r = np.arange(lg.shape[0])
-        top_tok += [m.decode1(int(t)) for t in hi]
-        top_val += [round(float(x), 2) for x in lg[r, hi]]
-        bot_tok += [m.decode1(int(t)) for t in lo]
-        bot_val += [round(float(x), 2) for x in lg[r, lo]]
+    coords, evr, total_var = _pca_rows(rows32, dims)
+    norms = np.linalg.norm(rows32.astype(np.float64), axis=1)  # exact ‖w_out‖₂
+    top_tok, top_val, bot_tok, bot_val = _unembed_readout(rows32, m)
 
     xy = coords[:, :2].reshape(-1)
     z = coords[:, 2] if dims >= 3 else np.zeros(n)
@@ -281,10 +283,93 @@ def compute_neurons(m: GPT2Numpy, dims: int = 3) -> dict:
         "n": int(n),
         "dims": dims,
         "explained_variance_ratio": [round(float(x), 5) for x in evr],
-        "total_variance": round(float(evals.sum()), 3),
+        "total_variance": round(total_var, 3),
         "coords": [round(float(x), 3) for x in xy],  # flat 2n (PC1, PC2)
         "z": [round(float(x), 3) for x in z],  # PC3 (hover only)
         "norm": [round(float(x), 3) for x in norms],
+        "top_tok": top_tok,
+        "top_val": top_val,
+        "bot_tok": bot_tok,
+        "bot_val": bot_val,
+    }
+
+
+# The open-source GPT-2-small residual SAEs (Joseph Bloom's "res-jb" release,
+# trained on 300M activations, the set Neuronpedia indexes). Layer 8 is the
+# canonical mid-late hook where features are most semantic.
+SAE_REPO = "jbloom/GPT2-Small-SAEs-Reformatted"
+SAE_HOOK = "blocks.8.hook_resid_pre"
+
+
+def compute_sae(m: GPT2Numpy, repo: str = SAE_REPO, hook: str = SAE_HOOK, dims: int = 3) -> dict:
+    """#5 SAE Decoder Constellation — PCA of every SAE feature's decoder direction.
+
+    A sparse-autoencoder feature i reconstructs its share of the residual stream
+    as a_i · W_dec[i] — ROW i of W_dec (d_sae × d_in in the sae_lens format,
+    shape-asserted) is feature i's write direction, exactly analogous to an MLP
+    neuron's c_proj row. Same exact-PCA treatment as compute_embed /
+    compute_neurons (shared _pca_rows), same direct-path unembedding readout
+    (shared _unembed_readout) — so the three constellations are directly
+    comparable: W_E rows vs W_out rows vs W_dec rows.
+
+    The release ships each feature's measured log10 firing sparsity (fraction of
+    tokens the feature fires on, over the evaluation set) — a REAL activation
+    statistic, exported per feature. Features that never fire ("dead") sit at
+    the sparsity floor. NOTE the readout caveat is stronger here than for
+    neurons: these directions enter at the layer-8 residual and pass through
+    blocks 8-11 before the unembedding, so the direct path skips even more of
+    the model. Stated in meta and in the viewer.
+    """
+    from huggingface_hub import hf_hub_download
+    from safetensors.numpy import load_file
+
+    cfg = json.loads(open(hf_hub_download(repo, f"{hook}/cfg.json")).read())
+    t = load_file(hf_hub_download(repo, f"{hook}/sae_weights.safetensors"))
+    sp = load_file(hf_hub_download(repo, f"{hook}/sparsity.safetensors"))
+
+    W_dec = t["W_dec"]
+    d_sae, d_in = int(cfg["d_sae"]), int(cfg["d_in"])
+    assert W_dec.shape == (d_sae, d_in), f"W_dec shape {W_dec.shape} != ({d_sae},{d_in})"
+    assert d_in == m.d, f"SAE d_in {d_in} != model d {m.d}"
+    sparsity = sp["sparsity"].astype(np.float64)  # log10 firing fraction
+    assert sparsity.shape == (d_sae,), f"sparsity shape {sparsity.shape} != ({d_sae},)"
+
+    coords, evr, total_var = _pca_rows(W_dec, dims)
+    norms = np.linalg.norm(W_dec.astype(np.float64), axis=1)  # exact ‖W_dec[i]‖₂
+    top_tok, top_val, bot_tok, bot_val = _unembed_readout(W_dec.astype(np.float32), m)
+
+    n = d_sae
+    xy = coords[:, :2].reshape(-1)
+    z = coords[:, 2] if dims >= 3 else np.zeros(n)
+    return {
+        "meta": {
+            "model": m.model_id,
+            "created": _now(),
+            "sae_repo": repo,
+            "hook_point": hook,
+            "quantity": "PCA of SAE decoder directions (rows of W_dec) + measured "
+            "log10 firing sparsity + direct-path logit readout per feature",
+            "formula": "Rc = W_dec − mean_row; eig(RcᵀRc) → top-k axes V; "
+            "coords = Rc·V. readout ℓ = ((w − mean(w)) ⊙ γ_f)·W_Eᵀ "
+            "(rank-preserving). sparsity = log10(firing fraction), measured "
+            "by the SAE release over its evaluation set.",
+            "note": "readout = direct path only — decoder directions enter at "
+            f"{hook} and pass through the remaining blocks before the "
+            "unembedding, so this skips more of the model than the neuron "
+            "readout. coords rounded to 3 dp for transport.",
+            "d_sae": d_sae,
+            "d_in": d_in,
+            "l1_coefficient": cfg.get("l1_coefficient"),
+            "training_tokens": cfg.get("training_tokens"),
+        },
+        "n": int(n),
+        "dims": dims,
+        "explained_variance_ratio": [round(float(x), 5) for x in evr],
+        "total_variance": round(total_var, 3),
+        "coords": [round(float(x), 3) for x in xy],  # flat 2n (PC1, PC2)
+        "z": [round(float(x), 3) for x in z],  # PC3 (hover only)
+        "norm": [round(float(x), 4) for x in norms],
+        "log_sparsity": [round(float(x), 3) for x in sparsity],
         "top_tok": top_tok,
         "top_val": top_val,
         "bot_tok": bot_tok,
@@ -375,6 +460,13 @@ def write_bundles(
     dump("fourier.json", compute_fourier(m))
     dump("embed.json", compute_embed(m))
     dump("neurons.json", compute_neurons(m))
+    # SAE decoder constellation — only where an open SAE release exists for the
+    # model (res-jb covers gpt2-small). External download; skip loudly if absent.
+    if model_id == "gpt2":
+        try:
+            dump("sae.json", compute_sae(m))
+        except Exception as e:  # noqa: BLE001 — report and continue, never fake
+            print(f"[interp] sae.json skipped: {e}")
 
     traces_index = []
     for prompt in prompts or DEFAULT_PROMPTS:

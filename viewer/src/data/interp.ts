@@ -95,6 +95,41 @@ export interface NeuronsBundle {
   bot_val: number[]; // its Δlogit (negative)
 }
 
+/** PCA of every SAE feature's decoder direction (#5 SAE Decoder Constellation).
+ *  Rows of W_dec from an open SAE release (meta.sae_repo / meta.hook_point);
+ *  `log_sparsity` is the release's MEASURED log₁₀ firing fraction per feature
+ *  (−10 = clamp floor, dead). Decoder rows are unit-norm by construction, so
+ *  `norm` is hover-only proof, never an encoding. `top_*`/`bot_*` are the
+ *  direct-path unembedding readout (enters at the hook layer — skips the
+ *  remaining blocks, caveat in meta.note). */
+export interface SAEBundle {
+  meta: {
+    model: string;
+    created: string;
+    sae_repo: string;
+    hook_point: string;
+    quantity: string;
+    formula: string;
+    note: string;
+    d_sae: number;
+    d_in: number;
+    l1_coefficient: number | null;
+    training_tokens: number | null;
+  };
+  n: number;
+  dims: number;
+  explained_variance_ratio: number[]; // per PC
+  total_variance: number;
+  coords: number[]; // flat 2·n (PC1, PC2)
+  z: number[]; // PC3, length n
+  norm: number[]; // ‖W_dec[i]‖₂ (≈1), length n
+  log_sparsity: number[]; // measured log10 firing fraction, length n
+  top_tok: string[];
+  top_val: number[];
+  bot_tok: string[];
+  bot_val: number[];
+}
+
 /** [token string, probability] — the honest readout unit for lens/next-token. */
 export type LensTopk = [string, number][];
 
@@ -161,6 +196,9 @@ export const loadEmbed = (model: string, base = "/out") =>
 
 export const loadNeurons = (model: string, base = "/out") =>
   fetchJSON<NeuronsBundle>(`${interpBase(model, base)}/neurons.json`);
+
+export const loadSAE = (model: string, base = "/out") =>
+  fetchJSON<SAEBundle>(`${interpBase(model, base)}/sae.json`);
 
 export const loadTrace = (model: string, slug: string, base = "/out") =>
   fetchJSON<TraceBundle>(`${interpBase(model, base)}/trace_${slug}.json`);

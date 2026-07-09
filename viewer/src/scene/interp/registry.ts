@@ -23,6 +23,7 @@ import { LogitLensTunnelDriver } from "./LogitLensTunnelDriver";
 import { NeuronFieldDriver } from "./NeuronFieldDriver";
 import { ProbabilitySimplexDriver } from "./ProbabilitySimplexDriver";
 import { ResidualRibbonDriver } from "./ResidualRibbonDriver";
+import { SAEConstellationDriver } from "./SAEConstellationDriver";
 import { WeightSpectrumDriver } from "./WeightSpectrumDriver";
 
 export const INTERP_FEATURES: InterpFeature[] = [
@@ -269,6 +270,41 @@ export const INTERP_FEATURES: InterpFeature[] = [
     note: "no renormalization — position IS the true probability · switch prompts to compare",
     legendCorner: "br",
     create: () => new ProbabilitySimplexDriver(),
+  },
+  {
+    id: "sae-decoder",
+    n: 5,
+    label: "SAE Decoder Constellation",
+    group: "sae",
+    blurb:
+      "All 24,576 features of an open sparse autoencoder trained on GPT-2's " +
+      "layer-8 residual stream (Joseph Bloom's res-jb release), each placed at " +
+      "the exact PCA score of its decoder direction W_dec[i] — the vector the " +
+      "feature adds back to the residual stream. Same math as the embedding and " +
+      "neuron constellations, so the three views are directly comparable. " +
+      "Decoder rows are unit-norm by construction, so size and brightness " +
+      "encode the release's MEASURED firing sparsity — how often each feature " +
+      "actually fires — never the norm. Hover any feature for its exact PCs, " +
+      "log₁₀ sparsity, and the token its direction most promotes/suppresses.",
+    math:
+      "Rc = W_dec − mean_row (24576×768); eig(RcᵀRc) → top axes V; coords = " +
+      "Rc·V (exact PC scores). readout ℓ = ((w − mean(w)) ⊙ γ_f)·W_Eᵀ " +
+      "(rank-preserving). sparsity = log₁₀(firing fraction), measured by the " +
+      "release over its evaluation set (−10 = clamp floor, dead feature).",
+    source:
+      "sae.json — PCA of W_dec from jbloom/GPT2-Small-SAEs-Reformatted " +
+      "(blocks.8.hook_resid_pre, d_sae=24576) in float64; sparsity from the " +
+      "release's sparsity.safetensors. Readout is direct-path only — decoder " +
+      "directions enter at layer 8 and skip blocks 8–11 on the way to W_E.",
+    legend: [
+      { label: "fires ~10% of tokens (10⁻¹, ramp top)", rgb: "253,231,37" },
+      { label: "fires ~0.1% (10⁻³, mid ramp)", rgb: "71,189,110" },
+      { label: "fires ≤10⁻⁶ · incl. dead (ramp floor)", rgb: "59,82,138" },
+      { label: "unit-norm decoder — size ≠ norm", rgb: "205,210,224" },
+    ],
+    note: "color/size span firing fraction 10⁻⁶–10⁻¹ (clamped) · direct path skips blocks 8–11",
+    legendCorner: "tr",
+    create: () => new SAEConstellationDriver(),
   },
 ];
 
