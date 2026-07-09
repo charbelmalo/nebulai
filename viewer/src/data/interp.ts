@@ -228,6 +228,33 @@ export interface OVEigsBundle {
   copying: number[]; // per head, Σ Re λ / Σ |λ|
 }
 
+/** Q/K/V composition scores between every cross-layer head pair (#2c
+ *  Composition Web). `q`/`k`/`v` are flat over layer_pairs × h1 × h2
+ *  (pair-major, then h1·n_head + h2). Raw Frobenius composition has a
+ *  positive floor for unrelated maps: `baseline_mean ± baseline_std` is that
+ *  floor, measured over `baseline_n` seeded random factor pairs — scores are
+ *  only meaningful relative to it. Same-layer pairs are excluded (parallel
+ *  heads cannot compose). */
+export interface CompBundle {
+  meta: {
+    model: string;
+    created: string;
+    quantity: string;
+    formula: string;
+    note: string;
+    n_layer: number;
+    n_head: number;
+    d_head: number;
+    baseline_mean: number;
+    baseline_std: number;
+    baseline_n: number;
+  };
+  layer_pairs: [number, number][]; // [earlier, later], all i<j
+  q: number[]; // flat n_pairs·n_head² — h1 feeds h2's query
+  k: number[]; // — h1 feeds h2's key
+  v: number[]; // — h1 feeds h2's value
+}
+
 /** One prompt's direct logit attribution (#13). `heads` is flat
  *  n_layer·n_head layer-major; `mlp`/`bias` are per layer (bias = the attention
  *  out-projection b_o — it belongs to no head, so it's its own bucket).
@@ -345,6 +372,9 @@ export const loadOVEigs = (model: string, base = "/out") =>
 
 export const loadAttrib = (model: string, base = "/out") =>
   fetchJSON<AttribBundle>(`${interpBase(model, base)}/attrib.json`);
+
+export const loadComp = (model: string, base = "/out") =>
+  fetchJSON<CompBundle>(`${interpBase(model, base)}/comp.json`);
 
 export const loadHeads = (model: string, base = "/out") =>
   fetchJSON<HeadsBundle>(`${interpBase(model, base)}/heads.json`);

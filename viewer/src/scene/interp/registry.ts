@@ -16,6 +16,7 @@
 
 import { AttentionFlowDriver } from "./AttentionFlowDriver";
 import { AttentionRolloutDriver } from "./AttentionRolloutDriver";
+import { CompositionWebDriver } from "./CompositionWebDriver";
 import { EmbeddingConstellationDriver } from "./EmbeddingConstellationDriver";
 import { FourierAtlasDriver } from "./FourierAtlasDriver";
 import { HeadFingerprintDriver } from "./HeadFingerprintDriver";
@@ -218,6 +219,46 @@ export const INTERP_FEATURES: InterpFeature[] = [
     note: "log-polar: angle = arg λ · radius = log₁₀|λ| ∈ [−2,2] clamped · conjugate symmetry is the math",
     legendCorner: "bl",
     create: () => new OVEigenDriver(),
+  },
+  {
+    id: "comp-web",
+    n: 2,
+    label: "Composition Web",
+    group: "weights",
+    blurb:
+      "Which heads feed which heads — measured from the weights alone, no " +
+      "forward pass. For every cross-layer head pair, the Q/K/V composition " +
+      "score asks how much of head 1's OV write survives inside head 2's " +
+      "query, key, or value channel. Raw composition has a positive floor even " +
+      "for unrelated heads, so the measured random floor is shipped with the " +
+      "data and arcs are drawn only above a stated multiple of it. The " +
+      "induction circuit is visible and directional: the prev-token head " +
+      "L4H11 composes into L5H1/L5H5 through their KEYS (K-comp 2.7–2.8× " +
+      "floor) but not their queries — match the previous token, then copy. " +
+      "Hover an arc for all three scores; click a head to isolate its web.",
+    math:
+      "M_ov¹ = diag(γ₁)W_V¹W_O¹, M_qk² = diag(γ₁)W_Q²W_K²ᵀdiag(γ₁). " +
+      "Q-comp = ‖M_ov¹M_qk²‖_F/(‖M_ov¹‖‖M_qk²‖); K-comp = ‖M_qk²M_ov¹ᵀ‖_F/(same); " +
+      "V-comp = ‖M_ov¹M_ov²‖_F/(‖M_ov¹‖‖M_ov²‖) (Elhage et al. 2021). Rank ≤ 64 " +
+      "→ computed exactly via d_head-sized Grams; verified against explicit " +
+      "768×768 products. Random floor measured over 200 seeded Gaussian factor " +
+      "pairs; scores read relative to it.",
+    source:
+      "comp.json — float64 weight-only composition scores for all 9,504 " +
+      "cross-layer head pairs × {Q,K,V}, plus the measured random baseline. " +
+      "Same-layer pairs excluded (parallel heads cannot compose). Inter-layer " +
+      "LayerNorm folded as γ gain only — the data-dependent 1/σ is not a " +
+      "weight and is stated as unfolded.",
+    legend: [
+      { label: "arc at the display threshold (× floor)", rgb: "64,66,96" },
+      { label: "arc at ≥6× the random floor", rgb: "245,195,59" },
+      { label: "head in ≥1 arc at threshold", rgb: "166,173,200" },
+      { label: "head with no arc at threshold", rgb: "118,126,158" },
+    ],
+    note: "arc shape is layout, not data · floor measured, stated, and drawn only above it",
+    legendCollapsed: true,
+    legendCorner: "br",
+    create: () => new CompositionWebDriver(),
   },
   {
     id: "logit-lens-tunnel",

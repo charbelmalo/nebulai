@@ -12,6 +12,7 @@ Bundles written by `write_bundles`:
   neurons.json    — PCA of MLP-neuron write directions W_out     (#6  Neuron Write-Direction Field)
   heads.json      — per-head OV/QK circuit stats + behavior      (#2  Head Fingerprints)
   ov_eigs.json    — every head's full complex OV spectrum        (#2b OV Eigenvalue Constellation)
+  comp.json       — Q/K/V composition between cross-layer heads  (#2c Composition Web)
   sae_acts.json   — SAE encoder activations on the bundled prompts (#5 Firing Piano-Roll)
   attrib.json     — direct logit attribution of the final margin (#13 Logit Attribution)
   trace_<slug>.json — one real forward pass per curated prompt   (#3/7/8/18/23 …)
@@ -682,6 +683,130 @@ def compute_ov_eigs(m: GPT2Numpy) -> dict:
     }
 
 
+def compute_comp(m: GPT2Numpy, baseline_n: int = 200, seed: int = 0) -> dict:
+    """Q/K/V composition scores between every cross-layer head pair (#2c
+    Composition Web) — the weights-only quantity that reveals multi-head
+    CIRCUITS (Elhage et al. 2021, A Mathematical Framework).
+
+    With row-vector convention (x @ W) and ln_1 gain folded per layer:
+      M_ov^h = diag(γ₁)·W_V^h·W_O^h   (what the head writes given what it reads)
+      M_qk^h = diag(γ₁)·W_Q^h·W_K^hᵀ·diag(γ₁)  (how it scores query vs key)
+    Head 1 (earlier layer) composes into head 2 (later layer) when head 2
+    reads what head 1 wrote:
+      Q-comp = ‖M_ov¹·M_qk²‖_F / (‖M_ov¹‖_F·‖M_qk²‖_F)  (h1 feeds h2's query)
+      K-comp = ‖M_qk²·M_ov¹ᵀ‖_F / (same norms)           (h1 feeds h2's key)
+      V-comp = ‖M_ov¹·M_ov²‖_F / (‖M_ov¹‖_F·‖M_ov²‖_F)   (h1 feeds h2's value)
+    All matrices are rank ≤ d_head, so every norm is computed from d_head-sized
+    Gram matrices (‖X·M·Y‖_F² = tr(Mᵀ(XᵀX)M(YYᵀ)) — exact, no d×d products).
+
+    Honesty: raw Frobenius composition has a POSITIVE floor for unrelated maps.
+    The exported `baseline` is that floor measured over `baseline_n` random
+    Gaussian factor pairs of the same shapes (mean ± std, seeded) — scores
+    should be read relative to it, and the viewer says so. Same-layer pairs
+    are excluded: heads in one layer act in parallel and cannot compose. The
+    LayerNorm between the layers is folded as its gain only (the per-input
+    1/σ normalizer is not a weight); same convention as heads.json."""
+    H, dh, nL, d = m.n_head, m.d_head, m.n_layer, m.d
+    rng = np.random.default_rng(seed)
+
+    # per-head factors + Gram matrices (all float64)
+    P_ov = np.zeros((nL, H, d, dh))  # diag(γ₁)·W_V^h
+    Q_ov = np.zeros((nL, H, dh, d))  # W_O^h
+    P_q = np.zeros((nL, H, d, dh))  # diag(γ₁)·W_Q^h
+    K_q = np.zeros((nL, H, d, dh))  # diag(γ₁)·W_K^h
+    for L in range(nL):
+        p = f"h.{L}."
+        g1 = m._g(p + "ln_1.weight").astype(np.float64)
+        W = m._g(p + "attn.c_attn.weight").astype(np.float64)
+        Wq, Wk, Wv = np.split(W, 3, axis=1)
+        Wo = m._g(p + "attn.c_proj.weight").astype(np.float64)
+        for h in range(H):
+            s = slice(h * dh, (h + 1) * dh)
+            P_ov[L, h] = g1[:, None] * Wv[:, s]
+            Q_ov[L, h] = Wo[s, :]
+            P_q[L, h] = g1[:, None] * Wq[:, s]
+            K_q[L, h] = g1[:, None] * Wk[:, s]
+
+    def gram(X: np.ndarray) -> np.ndarray:
+        return np.einsum("...ij,...ik->...jk", X, X)  # XᵀX per head
+
+    gP_ov = gram(P_ov)  # (nL,H,dh,dh)
+    gQ_ov = np.einsum("...ij,...kj->...ik", Q_ov, Q_ov)  # Q·Qᵀ
+    gP_q = gram(P_q)
+    gK_q = gram(K_q)
+
+    # ‖M‖_F per head: ‖X·Yᵀ‖_F² = tr((XᵀX)(YᵀY)); ‖P·Q‖_F² = tr((PᵀP)(QQᵀ))
+    fro_ov = np.sqrt(np.einsum("lhij,lhji->lh", gP_ov, gQ_ov))
+    fro_qk = np.sqrt(np.einsum("lhij,lhji->lh", gP_q, gK_q))
+
+    def score(M: np.ndarray, G1: np.ndarray, G2: np.ndarray) -> float:
+        """‖X·M·Y‖_F where G1 = XᵀX, G2 = Y·Yᵀ (all d_head×d_head)."""
+        return float(np.sqrt(max(0.0, np.trace(M.T @ G1 @ M @ G2))))
+
+    layer_pairs = [(i, j) for i in range(nL) for j in range(i + 1, nL)]
+    q_s = np.zeros((len(layer_pairs), H, H))
+    k_s = np.zeros((len(layer_pairs), H, H))
+    v_s = np.zeros((len(layer_pairs), H, H))
+    for pi, (i, j) in enumerate(layer_pairs):
+        # cross terms, one batched contraction per type: (H1,dh,d)×(H2,d,dh)
+        m_q = np.einsum("aud,bdv->abuv", Q_ov[i], P_q[j])  # Q_ov1·P_q2
+        m_kq = np.einsum("aud,bdv->abuv", Q_ov[i], K_q[j])  # Q_ov1·K_q2
+        m_v = np.einsum("aud,bdv->abuv", Q_ov[i], P_ov[j])  # Q_ov1·P_ov2
+        for h1 in range(H):
+            for h2 in range(H):
+                nrm_qk = fro_ov[i, h1] * fro_qk[j, h2]
+                # Q-comp: M_ov1·M_qk2 = P_ov1·(Q_ov1·P_q2)·K_q2ᵀ
+                q_s[pi, h1, h2] = score(m_q[h1, h2], gP_ov[i, h1], gK_q[j, h2]) / nrm_qk
+                # K-comp: M_qk2·M_ov1ᵀ = P_q2·(K_q2ᵀ·Q_ov1ᵀ)·P_ov1ᵀ
+                k_s[pi, h1, h2] = score(m_kq[h1, h2].T, gP_q[j, h2], gP_ov[i, h1]) / nrm_qk
+                # V-comp: M_ov1·M_ov2 = P_ov1·(Q_ov1·P_ov2)·Q_ov2
+                v_s[pi, h1, h2] = score(m_v[h1, h2], gP_ov[i, h1], gQ_ov[j, h2]) / (
+                    fro_ov[i, h1] * fro_ov[j, h2]
+                )
+
+    # measured random-matrix floor: same shapes, iid Gaussian factors
+    base = []
+    for _ in range(baseline_n):
+        A = [rng.standard_normal((d, dh)) for _ in range(4)]
+        M = A[0] @ (A[1].T @ A[2]) @ A[3].T
+        base.append(
+            np.sqrt((M * M).sum())
+            / (np.linalg.norm(A[0] @ A[1].T) * np.linalg.norm(A[2] @ A[3].T))
+        )
+    base = np.array(base)
+
+    return {
+        "meta": {
+            "model": m.model_id,
+            "created": _now(),
+            "quantity": "Q/K/V composition scores between every cross-layer "
+            "attention-head pair (weights only, ln_1 gain folded)",
+            "formula": "Q = ‖M_ov¹·M_qk²‖_F/(‖M_ov¹‖‖M_qk²‖); "
+            "K = ‖M_qk²·M_ov¹ᵀ‖_F/(same); V = ‖M_ov¹·M_ov²‖_F/(‖M_ov¹‖‖M_ov²‖) "
+            "with M_ov = diag(γ₁)W_V W_O, M_qk = diag(γ₁)W_Q W_Kᵀ diag(γ₁) "
+            "(Elhage et al. 2021)",
+            "note": "raw Frobenius composition has a positive floor for "
+            f"unrelated maps: baseline = {base.mean():.4f} ± {base.std():.4f} "
+            f"measured over {baseline_n} random Gaussian factor pairs of the "
+            "same shapes (seeded). Read scores relative to it. Same-layer "
+            "pairs excluded (parallel heads cannot compose). The inter-layer "
+            "LayerNorm's per-input 1/σ is not a weight and is not folded. "
+            "Rounded to 4 dp.",
+            "n_layer": nL,
+            "n_head": H,
+            "d_head": dh,
+            "baseline_mean": round(float(base.mean()), 4),
+            "baseline_std": round(float(base.std()), 4),
+            "baseline_n": baseline_n,
+        },
+        # pair index = pair_of(i,j) in layer_pairs order, then h1·n_head + h2
+        "layer_pairs": [[i, j] for i, j in layer_pairs],
+        "q": [round(float(x), 4) for x in q_s.reshape(-1)],
+        "k": [round(float(x), 4) for x in k_s.reshape(-1)],
+        "v": [round(float(x), 4) for x in v_s.reshape(-1)],
+    }
+
+
 def compute_logit_attrib(m: GPT2Numpy, prompts: list[str] | None = None) -> dict:
     """Direct logit attribution: which components wrote the final prediction?
 
@@ -906,6 +1031,7 @@ def write_bundles(
     dump("neurons.json", compute_neurons(m))
     dump("heads.json", compute_heads(m, prompts=prompts or DEFAULT_PROMPTS))
     dump("ov_eigs.json", compute_ov_eigs(m))
+    dump("comp.json", compute_comp(m))
     dump("attrib.json", compute_logit_attrib(m, prompts=prompts))
     # SAE decoder constellation — only where an open SAE release exists for the
     # model (res-jb covers gpt2-small). External download; skip loudly if absent.
