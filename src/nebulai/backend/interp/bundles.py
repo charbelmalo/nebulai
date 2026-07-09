@@ -13,6 +13,7 @@ Bundles written by `write_bundles`:
   heads.json      — per-head OV/QK circuit stats + behavior      (#2  Head Fingerprints)
   ov_eigs.json    — every head's full complex OV spectrum        (#2b OV Eigenvalue Constellation)
   sae_acts.json   — SAE encoder activations on the bundled prompts (#5 Firing Piano-Roll)
+  attrib.json     — direct logit attribution of the final margin (#13 Logit Attribution)
   trace_<slug>.json — one real forward pass per curated prompt   (#3/7/8/18/23 …)
 
 The trace bundle deliberately does NOT store full logits (T×50257 is ~26 MB);
@@ -29,7 +30,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .gpt2_numpy import GPT2Numpy, Trace
+from .gpt2_numpy import GPT2Numpy, Trace, _gelu_new, _layernorm
 
 # Curated prompts chosen for legible circuits, not cherry-picked outputs:
 #  - factual recall (capital / landmark)
@@ -681,6 +682,145 @@ def compute_ov_eigs(m: GPT2Numpy) -> dict:
     }
 
 
+def compute_logit_attrib(m: GPT2Numpy, prompts: list[str] | None = None) -> dict:
+    """Direct logit attribution: which components wrote the final prediction?
+
+    The final residual at the last position decomposes exactly into everything
+    ever added to the stream:
+      x = emb + Σ_L ( Σ_h head_out_{L,h} + b_o^L + mlp_out_L )
+    Per-head attention outputs and per-layer MLP outputs are recomputed from
+    the same weights and (unrounded) attention patterns the forward pass used;
+    the attention out-projection bias b_o belongs to no head, so it is exported
+    as its own per-layer bucket rather than smeared across heads.
+
+    Each component v is projected into the margin between the model's top-1
+    and runner-up next-token logits through the final LayerNorm with its
+    normalizer FROZEN at the actual value from this forward pass (standard DLA
+    linearization — the one thing not attributed is how a component shifts the
+    normalizer itself):
+      contrib(v) = ((v − mean(v)) ⊙ γ_f) · (W_U[c1] − W_U[c2]) / σ(x)
+    Frozen σ makes the decomposition exact and additive: the exported pieces
+    sum to the true margin up to float32 forward accumulation, which is
+    measured and exported per trace (`sum_check` next to `margin`) — never
+    hidden. The ln_f bias β contributes β·(W_U[c1]−W_U[c2]) once (`lnf_bias`).
+
+    Per head, the argmax-attended token at the final query row (and its
+    weight) is exported for hover context: it is what the head read, not a
+    causal claim about why it wrote what it wrote."""
+    prompts = prompts or DEFAULT_PROMPTS
+    nL, H, dh, d = m.n_layer, m.n_head, m.d_head, m.d
+    g_f = m._g("ln_f.weight").astype(np.float64)
+    b_f = m._g("ln_f.bias").astype(np.float64)
+
+    traces = []
+    for prompt in prompts:
+        tr = m.forward(prompt)
+        T = len(tr.tokens)
+        tau = T - 1
+        lg = tr.logits[tau].astype(np.float64)  # ground truth for this prompt
+        order = np.argsort(-lg)
+        c1, c2 = int(order[0]), int(order[1])
+        pr = np.exp(lg - lg.max())
+        pr /= pr.sum()
+        margin = float(lg[c1] - lg[c2])
+        dirv = (m.wte[c1] - m.wte[c2]).astype(np.float64)  # tied unembedding
+
+        x_final = tr.resid[nL, tau].astype(np.float64)
+        sigma = float(np.sqrt(((x_final - x_final.mean()) ** 2).mean() + 1e-5))
+
+        def contrib(v: np.ndarray) -> float:
+            return float(((v - v.mean()) * g_f) @ dirv / sigma)
+
+        emb_v = (m.wte[tr.tokens[tau]] + m.wpe[tau]).astype(np.float64)
+        heads = np.zeros((nL, H))
+        mlps = np.zeros(nL)
+        biases = np.zeros(nL)
+        attend_tok: list[str] = []
+        attend_w: list[float] = []
+        recon = emb_v.copy()  # rebuilt stream — checked against resid[-1]
+
+        for L in range(nL):
+            p = f"h.{L}."
+            x = tr.resid[L].astype(np.float64)  # (T, d) block input
+            ln1, _ = _layernorm(x, m._g(p + "ln_1.weight").astype(np.float64),
+                                m._g(p + "ln_1.bias").astype(np.float64))
+            W = m._g(p + "attn.c_attn.weight").astype(np.float64)
+            bqkv = m._g(p + "attn.c_attn.bias").astype(np.float64)
+            v_all = ln1 @ W[:, 2 * d :] + bqkv[2 * d :]  # (T, d) value vectors
+            Wo = m._g(p + "attn.c_proj.weight").astype(np.float64)
+            bo = m._g(p + "attn.c_proj.bias").astype(np.float64)
+            a = tr.attn[L].astype(np.float64)  # (H, T, T) unrounded
+            attn_out_tau = bo.copy()
+            for h in range(H):
+                s = slice(h * dh, (h + 1) * dh)
+                ho = (a[h, tau] @ v_all[:, s]) @ Wo[s, :]  # (d,) head write
+                heads[L, h] = contrib(ho)
+                attn_out_tau += ho
+                recon += ho
+                j = int(np.argmax(a[h, tau]))
+                attend_tok.append(tr.token_strs[j])
+                attend_w.append(float(a[h, tau, j]))
+            biases[L] = contrib(bo)
+            recon += bo
+            # MLP is position-wise: only the final row is needed
+            x_mid = x[tau] + attn_out_tau
+            ln2, _ = _layernorm(x_mid[None, :], m._g(p + "ln_2.weight").astype(np.float64),
+                                m._g(p + "ln_2.bias").astype(np.float64))
+            hid = _gelu_new(ln2[0] @ m._g(p + "mlp.c_fc.weight").astype(np.float64)
+                            + m._g(p + "mlp.c_fc.bias").astype(np.float64))
+            mo = hid.astype(np.float64) @ m._g(p + "mlp.c_proj.weight").astype(np.float64) \
+                + m._g(p + "mlp.c_proj.bias").astype(np.float64)
+            mlps[L] = contrib(mo)
+            recon += mo
+
+        # honesty checks, exported: stream reconstruction + margin additivity
+        recon_rel = float(np.linalg.norm(recon - x_final) / np.linalg.norm(x_final))
+        emb_c = contrib(emb_v)
+        lnf_bias = float(b_f @ dirv)
+        total = emb_c + lnf_bias + float(heads.sum() + mlps.sum() + biases.sum())
+
+        traces.append({
+            "slug": _slug(prompt),
+            "prompt": prompt,
+            "token_strs": tr.token_strs,
+            "T": T,
+            "top1": [m.decode1(c1), round(float(lg[c1]), 4), round(float(pr[c1]), 4)],
+            "top2": [m.decode1(c2), round(float(lg[c2]), 4), round(float(pr[c2]), 4)],
+            "margin": round(margin, 4),
+            "sum_check": round(total, 4),
+            "recon_rel": round(recon_rel, 6),
+            "emb": round(emb_c, 4),
+            "lnf_bias": round(lnf_bias, 4),
+            "heads": [round(float(v), 4) for v in heads.reshape(-1)],  # layer-major
+            "mlp": [round(float(v), 4) for v in mlps],
+            "bias": [round(float(v), 4) for v in biases],
+            "attend_tok": attend_tok,  # flat n_layer·n_head, layer-major
+            "attend_w": [round(float(v), 3) for v in attend_w],
+        })
+
+    return {
+        "meta": {
+            "model": m.model_id,
+            "created": _now(),
+            "quantity": "direct logit attribution: every component's exact "
+            "contribution to the top-1 vs runner-up next-token logit margin "
+            "at the final position",
+            "formula": "x_final = emb + Σ_L(Σ_h head_out + b_o + mlp_out); "
+            "contrib(v) = ((v − mean(v)) ⊙ γ_f)·(W_U[c1] − W_U[c2]) / σ(x_final) "
+            "with σ frozen at the forward pass's actual final-LN normalizer",
+            "note": "frozen-σ linearization (standard DLA): contributions are "
+            "exact and additive given this forward's normalizer; what is NOT "
+            "attributed is each component's effect on σ itself. sum_check vs "
+            "margin exposes the float32 accumulation error per trace. "
+            "attend_tok/attend_w = argmax attention at the final query row — "
+            "what the head read, not a causal claim. Rounded to 4 dp.",
+            "n_layer": nL,
+            "n_head": H,
+        },
+        "traces": traces,
+    }
+
+
 def _logit_lens_topk(m: GPT2Numpy, resid_row: np.ndarray, k: int = 6) -> list:
     lg = m.logit_lens(resid_row)
     lg = lg - lg.max()
@@ -766,6 +906,7 @@ def write_bundles(
     dump("neurons.json", compute_neurons(m))
     dump("heads.json", compute_heads(m, prompts=prompts or DEFAULT_PROMPTS))
     dump("ov_eigs.json", compute_ov_eigs(m))
+    dump("attrib.json", compute_logit_attrib(m, prompts=prompts))
     # SAE decoder constellation — only where an open SAE release exists for the
     # model (res-jb covers gpt2-small). External download; skip loudly if absent.
     if model_id == "gpt2":

@@ -228,6 +228,45 @@ export interface OVEigsBundle {
   copying: number[]; // per head, Σ Re λ / Σ |λ|
 }
 
+/** One prompt's direct logit attribution (#13). `heads` is flat
+ *  n_layer·n_head layer-major; `mlp`/`bias` are per layer (bias = the attention
+ *  out-projection b_o — it belongs to no head, so it's its own bucket).
+ *  Contributions are to the top-1 vs runner-up logit margin through the final
+ *  LayerNorm with σ frozen at the forward's actual value, so they are additive:
+ *  emb + lnf_bias + Σheads + Σmlp + Σbias = sum_check ≈ margin (the difference
+ *  is the measured float32 accumulation error — displayed, never hidden). */
+export interface AttribTrace {
+  slug: string;
+  prompt: string;
+  token_strs: string[];
+  T: number;
+  top1: [string, number, number]; // token, logit, probability
+  top2: [string, number, number];
+  margin: number; // top1 logit − top2 logit, from the model's real logits
+  sum_check: number; // Σ of all exported contributions
+  recon_rel: number; // ‖rebuilt stream − resid[-1]‖ / ‖resid[-1]‖
+  emb: number;
+  lnf_bias: number; // β_f·(W_U[c1]−W_U[c2]) — the final-LN bias term
+  heads: number[]; // flat n_layer·n_head, layer-major
+  mlp: number[]; // per layer
+  bias: number[]; // per layer (attn out-proj b_o)
+  attend_tok: string[]; // per head: argmax-attended token at the final row
+  attend_w: number[]; // per head: that attention weight
+}
+
+export interface AttribBundle {
+  meta: {
+    model: string;
+    created: string;
+    quantity: string;
+    formula: string;
+    note: string;
+    n_layer: number;
+    n_head: number;
+  };
+  traces: AttribTrace[];
+}
+
 /** [token string, probability] — the honest readout unit for lens/next-token. */
 export type LensTopk = [string, number][];
 
@@ -303,6 +342,9 @@ export const loadSAEActs = (model: string, base = "/out") =>
 
 export const loadOVEigs = (model: string, base = "/out") =>
   fetchJSON<OVEigsBundle>(`${interpBase(model, base)}/ov_eigs.json`);
+
+export const loadAttrib = (model: string, base = "/out") =>
+  fetchJSON<AttribBundle>(`${interpBase(model, base)}/attrib.json`);
 
 export const loadHeads = (model: string, base = "/out") =>
   fetchJSON<HeadsBundle>(`${interpBase(model, base)}/heads.json`);

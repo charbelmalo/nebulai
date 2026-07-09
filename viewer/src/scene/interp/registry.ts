@@ -20,6 +20,7 @@ import { EmbeddingConstellationDriver } from "./EmbeddingConstellationDriver";
 import { FourierAtlasDriver } from "./FourierAtlasDriver";
 import { HeadFingerprintDriver } from "./HeadFingerprintDriver";
 import type { InterpFeature } from "./InterpDriver";
+import { LogitAttribDriver } from "./LogitAttribDriver";
 import { LogitLensTunnelDriver } from "./LogitLensTunnelDriver";
 import { NeuronFieldDriver } from "./NeuronFieldDriver";
 import { OVEigenDriver } from "./OVEigenDriver";
@@ -348,6 +349,44 @@ export const INTERP_FEATURES: InterpFeature[] = [
     note: "no renormalization — position IS the true probability · switch prompts to compare",
     legendCorner: "br",
     create: () => new ProbabilitySimplexDriver(),
+  },
+  {
+    id: "logit-attrib",
+    n: 13,
+    label: "Logit Attribution",
+    group: "forward",
+    blurb:
+      "Who wrote the answer? The final residual decomposes exactly into " +
+      "everything ever added to it — the embedding, every attention head's " +
+      "write, every MLP block, every bias. Each piece is projected into the " +
+      "margin between the model's top-1 and runner-up next-token logits, so " +
+      "the cells are additive: they sum to the real margin (the float32 drift " +
+      "between Σ and the true margin is printed in the header). Amber pushed " +
+      "the prediction, blue pushed the runner-up. The right gutter accumulates " +
+      "the margin layer by layer — watch the decision form. On the IOI prompt " +
+      "this recovers the published circuit: name-movers L9H6/L9H9 dominate " +
+      "(reading “ Mary”), negative mover L10H7 fights them.",
+    math:
+      "x_final = emb + Σ_L(Σ_h head_out + b_o + mlp_out), recomputed per head " +
+      "from the unrounded forward. contrib(v) = ((v − mean(v)) ⊙ γ_f)·" +
+      "(W_U[top1] − W_U[top2]) / σ, with σ FROZEN at this forward's actual " +
+      "final-LN normalizer (standard DLA linearization — the one thing not " +
+      "attributed is each piece's effect on σ itself).",
+    source:
+      "attrib.json — per-head/MLP/bias margin contributions on the bundled " +
+      "prompts, additivity verified per trace (|Σ − margin| ≤ 0.0006) and the " +
+      "rebuilt stream checked against resid[-1] (rel err < 1e-6). Per head, " +
+      "the argmax-attended token at the final row is what the head READ — " +
+      "shown on hover, not a causal claim.",
+    legend: [
+      { label: "pushes the prediction (+, at color clamp)", rgb: "245,195,59" },
+      { label: "pushes the runner-up (−, at color clamp)", rgb: "96,150,255" },
+      { label: "≈0 — below 4dp export floor", rgb: "118,126,158" },
+    ],
+    note: "additive by construction · b_o column = bias no head owns · frozen-σ DLA",
+    legendCorner: "br",
+    legendCollapsed: true,
+    create: () => new LogitAttribDriver(),
   },
   {
     id: "sae-decoder",
