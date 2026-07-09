@@ -18,6 +18,7 @@ import { AttentionFlowDriver } from "./AttentionFlowDriver";
 import { AttentionRolloutDriver } from "./AttentionRolloutDriver";
 import { EmbeddingConstellationDriver } from "./EmbeddingConstellationDriver";
 import { FourierAtlasDriver } from "./FourierAtlasDriver";
+import { HeadFingerprintDriver } from "./HeadFingerprintDriver";
 import type { InterpFeature } from "./InterpDriver";
 import { LogitLensTunnelDriver } from "./LogitLensTunnelDriver";
 import { NeuronFieldDriver } from "./NeuronFieldDriver";
@@ -139,6 +140,43 @@ export const INTERP_FEATURES: InterpFeature[] = [
     note: "direct-path readout only · PC1+PC2 ≈ 3.3% var · click a chip to isolate a layer",
     legendCorner: "tr",
     create: () => new NeuronFieldDriver(),
+  },
+  {
+    id: "head-fingerprints",
+    n: 2,
+    label: "Head Fingerprints",
+    group: "weights",
+    blurb:
+      "All 144 attention heads (12 layers × 12 heads) on two honest, bounded " +
+      "axes. y — the OV copying score: eigenvalues of the head's residual-space " +
+      "OV map say whether it writes back the directions it reads with positive " +
+      "sign (+1, a copying head) or inverts them (−1). x — how much of its " +
+      "attention actually goes to the previous token, measured over real forward " +
+      "passes of the 5 bundled prompts. Textbook GPT-2-small structure falls out " +
+      "of the raw numbers: L4H11 is THE previous-token head (≈100% prev-token " +
+      "attention, copying +0.96) and near-pure copying heads concentrate in " +
+      "layers 9–11. Dot size = ‖OV‖_F, how strongly the head writes. Hover any " +
+      "head for its exact circuit stats and measured attention shares.",
+    math:
+      "copying = Σ Re λ / Σ |λ| over eig(W_O·diag(γ₁)·W_V) (= nonzero eig of " +
+      "the d×d OV map, computed exactly at d_head×d_head); σ_qk = " +
+      "σ_max(diag(γ₁)·W_Q·W_Kᵀ·diag(γ₁))/√d_head; prev/first/self = mean of " +
+      "a[i,i−1] / a[i,0] / a[i,i] over all query rows i≥1; entropy = mean " +
+      "H(a[i,·])/ln(i+1) ∈ [0,1]. ln₁ gain folded; biases excluded.",
+    source:
+      "heads.json — OV/QK circuit stats from the weights (float64) + attention " +
+      "behavior measured over 5 real forward passes (40 query rows, unrounded " +
+      "attention — the trace bundles round to 4 dp, these stats don't). Both " +
+      "axes are independent scales; no distance claims across them.",
+    legend: [
+      { label: "layer 0 head", rgb: "59,82,138" },
+      { label: "layer 6", rgb: "54,181,120" },
+      { label: "layer 11", rgb: "253,231,37" },
+      { label: "dot size = OV write strength ‖OV‖_F", rgb: "205,210,224" },
+    ],
+    note: "x is a measured sample (5 prompts, 40 rows — stated) · y is pure weights",
+    legendCorner: "br",
+    create: () => new HeadFingerprintDriver(),
   },
   {
     id: "logit-lens-tunnel",

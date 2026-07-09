@@ -33,7 +33,7 @@ const FIT = 0.94;
 /** Viridis sampled at t = 0.25 + 0.75·L/11 (low end clipped so layer 0 stays
  *  legible on the dark stage). Luminance is strictly increasing with layer, so
  *  "brighter = deeper" reads truthfully; hover always gives the exact layer. */
-const LAYER_COLORS: [number, number, number][] = [
+export const LAYER_COLORS: [number, number, number][] = [
   [59, 82, 138],
   [51, 100, 141],
   [44, 117, 142],

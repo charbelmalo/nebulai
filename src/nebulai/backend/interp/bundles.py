@@ -10,6 +10,7 @@ Bundles written by `write_bundles`:
   fourier.json    — DFT of positional embeddings W_pe            (#1  Fourier Atlas)
   embed.json      — PCA projection of the token embedding W_E    (#15 Embedding Constellation)
   neurons.json    — PCA of MLP-neuron write directions W_out     (#6  Neuron Write-Direction Field)
+  heads.json      — per-head OV/QK circuit stats + behavior      (#2  Head Fingerprints)
   trace_<slug>.json — one real forward pass per curated prompt   (#3/7/8/18/23 …)
 
 The trace bundle deliberately does NOT store full logits (T×50257 is ~26 MB);
@@ -377,6 +378,123 @@ def compute_sae(m: GPT2Numpy, repo: str = SAE_REPO, hook: str = SAE_HOOK, dims: 
     }
 
 
+def compute_heads(m: GPT2Numpy, prompts: list[str] | None = None) -> dict:
+    """Per-attention-head fingerprints: weight-circuit stats + measured behavior.
+
+    Weight circuits (per head h of layer L, ln_1 gain folded, biases excluded —
+    they don't depend on the input):
+      OV map  A_ov = diag(γ₁)·W_V^h·W_O^h  (d×d, rank ≤ d_head) — the linear map
+        from a (normalized) residual direction the head reads to the direction
+        it writes back. Its nonzero eigenvalues equal eig(W_O^h·diag(γ₁)·W_V^h)
+        (d_head×d_head — exact, cheap). copying = Σ Re λᵢ / Σ |λᵢ| ∈ [−1, 1]:
+        +1 means every direction is written back with positive sign (a copying
+        head), negative means the head systematically inverts what it reads.
+        (Eigenvalue copying analysis after Elhage et al. 2021, applied in
+        residual space rather than the full vocab circuit.)
+      QK map  A_qk = diag(γ₁)·W_Q^h·W_K^hᵀ·diag(γ₁)/√d_head — the bilinear form
+        that scores key against query directions; σ_max bounds how sharp the
+        head's attention logits can get per unit of (normalized) residual.
+    Behavior (measured, NOT derived from weights): real forward passes over the
+    bundled prompts, unrounded post-softmax attention. Per head, averaged over
+    every query position i ≥ 1 of every prompt: attention to the previous token
+    a[i,i−1], to the first token a[i,0] (the "sink"), to itself a[i,i], and the
+    normalized entropy H(a[i,:i+1])/ln(i+1) ∈ [0,1]."""
+    prompts = prompts or DEFAULT_PROMPTS
+    H, dh, nL = m.n_head, m.d_head, m.n_layer
+    n = nL * H
+
+    copying = np.zeros(n)
+    eig1_re = np.zeros(n)
+    eig1_im = np.zeros(n)
+    fro_ov = np.zeros(n)
+    sigma_qk = np.zeros(n)
+
+    for L in range(nL):
+        p = f"h.{L}."
+        g1 = m._g(p + "ln_1.weight").astype(np.float64)  # (d,)
+        W = m._g(p + "attn.c_attn.weight").astype(np.float64)  # (d, 3d), x@W
+        Wq, Wk, Wv = np.split(W, 3, axis=1)  # each (d, d)
+        Wo = m._g(p + "attn.c_proj.weight").astype(np.float64)  # (d, d), rows=head slices
+        for h in range(H):
+            i = L * H + h
+            s = slice(h * dh, (h + 1) * dh)
+            A = g1[:, None] * Wv[:, s]  # (d, dh) — read map, γ₁ folded
+            B = Wo[s, :]  # (dh, d) — write map
+            # nonzero eig(A·B) = eig(B·A): d_head×d_head, exact
+            lam = np.linalg.eigvals(B @ A)
+            denom = float(np.abs(lam).sum())
+            copying[i] = float(lam.real.sum()) / denom if denom > 0 else 0.0
+            k = int(np.argmax(np.abs(lam)))
+            eig1_re[i], eig1_im[i] = float(lam[k].real), float(lam[k].imag)
+            # ‖A·B‖_F² = tr((AᵀA)(BBᵀ)) — no d×d intermediate needed
+            fro_ov[i] = float(np.sqrt(np.trace((A.T @ A) @ (B @ B.T))))
+            # σ(Q̃K̃ᵀ)² = nonzero eig((K̃ᵀK̃)(Q̃ᵀQ̃)); real ≥ 0 up to roundoff
+            Q = g1[:, None] * Wq[:, s]
+            K = g1[:, None] * Wk[:, s]
+            ev = np.linalg.eigvals((K.T @ K) @ (Q.T @ Q))
+            sigma_qk[i] = float(np.sqrt(max(ev.real.max(), 0.0)) / np.sqrt(dh))
+
+    # measured behavior: fresh unrounded forward passes (trace bundles round
+    # attention to 4 dp for transport; these stats come from the raw values)
+    prev_s = np.zeros(n)
+    sink_s = np.zeros(n)
+    self_s = np.zeros(n)
+    ent_s = np.zeros(n)
+    n_rows = 0
+    for prompt in prompts:
+        a = m.forward(prompt).attn.astype(np.float64)  # (nL, H, T, T)
+        T = a.shape[-1]
+        if T < 2:
+            continue
+        rows = a[:, :, 1:, :]  # query positions i ≥ 1 (row 0 is trivially 1.0)
+        idx = np.arange(1, T)
+        prev_s += rows[:, :, idx - 1, idx - 1].sum(axis=2).reshape(-1)
+        sink_s += rows[:, :, :, 0].sum(axis=2).reshape(-1)
+        self_s += rows[:, :, idx - 1, idx].sum(axis=2).reshape(-1)
+        plogp = rows * np.log(np.where(rows > 0, rows, 1.0))  # 0·log0 → 0
+        ent = -plogp.sum(axis=3) / np.log(idx + 1)[None, None, :]  # ∈ [0,1]
+        ent_s += ent.sum(axis=2).reshape(-1)
+        n_rows += T - 1
+
+    prev_s /= n_rows
+    sink_s /= n_rows
+    self_s /= n_rows
+    ent_s /= n_rows
+
+    return {
+        "meta": {
+            "model": m.model_id,
+            "created": _now(),
+            "quantity": "per-head OV/QK circuit stats (weights, ln_1 gain "
+            "folded, biases excluded) + attention behavior measured over the "
+            "bundled prompts (unrounded forward passes)",
+            "formula": "copying = Σ Re λ / Σ |λ| over eig(W_O^h·diag(γ₁)·W_V^h); "
+            "σ_qk = σ_max(diag(γ₁)·W_Q^h·W_K^hᵀ·diag(γ₁))/√d_head; "
+            "prev/sink/self = mean over query rows i≥1 of a[i,i−1] / a[i,0] / "
+            "a[i,i]; entropy = mean H(a[i,·])/ln(i+1)",
+            "note": "behavior is a sample: "
+            f"{len(prompts)} prompts, {n_rows} query rows total — stated, not "
+            "hidden. copying is the residual-space OV eigenvalue score "
+            "(Elhage et al. 2021), not the full vocab circuit.",
+            "n_layer": nL,
+            "n_head": H,
+            "d_head": dh,
+            "prompts": prompts,
+            "n_rows": n_rows,
+        },
+        "n": n,
+        "copying": [round(float(x), 4) for x in copying],
+        "eig1_re": [round(float(x), 3) for x in eig1_re],
+        "eig1_im": [round(float(x), 3) for x in eig1_im],
+        "fro_ov": [round(float(x), 3) for x in fro_ov],
+        "sigma_qk": [round(float(x), 3) for x in sigma_qk],
+        "prev": [round(float(x), 4) for x in prev_s],
+        "sink": [round(float(x), 4) for x in sink_s],
+        "self": [round(float(x), 4) for x in self_s],
+        "entropy": [round(float(x), 4) for x in ent_s],
+    }
+
+
 def _logit_lens_topk(m: GPT2Numpy, resid_row: np.ndarray, k: int = 6) -> list:
     lg = m.logit_lens(resid_row)
     lg = lg - lg.max()
@@ -460,6 +578,7 @@ def write_bundles(
     dump("fourier.json", compute_fourier(m))
     dump("embed.json", compute_embed(m))
     dump("neurons.json", compute_neurons(m))
+    dump("heads.json", compute_heads(m, prompts=prompts or DEFAULT_PROMPTS))
     # SAE decoder constellation — only where an open SAE release exists for the
     # model (res-jb covers gpt2-small). External download; skip loudly if absent.
     if model_id == "gpt2":

@@ -130,6 +130,37 @@ export interface SAEBundle {
   bot_val: number[];
 }
 
+/** Per-attention-head fingerprints (#2 Head Fingerprints). All arrays are
+ *  length n = n_layer·n_head, layer-major (index = layer·n_head + head).
+ *  `copying`/`eig1_*`/`fro_ov`/`sigma_qk` are weight-circuit quantities
+ *  (ln_1 gain folded, biases excluded); `prev`/`sink`/`self`/`entropy` are
+ *  MEASURED means over the real forward passes named in meta.prompts —
+ *  a stated sample (meta.n_rows query rows), not a property of the weights. */
+export interface HeadsBundle {
+  meta: {
+    model: string;
+    created: string;
+    quantity: string;
+    formula: string;
+    note: string;
+    n_layer: number;
+    n_head: number;
+    d_head: number;
+    prompts: string[];
+    n_rows: number;
+  };
+  n: number;
+  copying: number[]; // Σ Re λ / Σ |λ| of the OV map, ∈ [−1, 1]
+  eig1_re: number[]; // largest-|λ| OV eigenvalue, real part
+  eig1_im: number[]; // … imaginary part
+  fro_ov: number[]; // ‖diag(γ₁)·W_V·W_O‖_F
+  sigma_qk: number[]; // σ_max of the (scaled) QK bilinear form
+  prev: number[]; // mean attention to previous token
+  sink: number[]; // mean attention to first token
+  self: number[]; // mean attention to self
+  entropy: number[]; // mean normalized attention entropy ∈ [0, 1]
+}
+
 /** [token string, probability] — the honest readout unit for lens/next-token. */
 export type LensTopk = [string, number][];
 
@@ -199,6 +230,9 @@ export const loadNeurons = (model: string, base = "/out") =>
 
 export const loadSAE = (model: string, base = "/out") =>
   fetchJSON<SAEBundle>(`${interpBase(model, base)}/sae.json`);
+
+export const loadHeads = (model: string, base = "/out") =>
+  fetchJSON<HeadsBundle>(`${interpBase(model, base)}/heads.json`);
 
 export const loadTrace = (model: string, slug: string, base = "/out") =>
   fetchJSON<TraceBundle>(`${interpBase(model, base)}/trace_${slug}.json`);
