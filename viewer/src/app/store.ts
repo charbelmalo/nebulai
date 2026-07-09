@@ -8,6 +8,7 @@ import type { Capabilities } from "./capabilities";
 import type { CompareData } from "../data/compare";
 import type { Dataset } from "../data/loader";
 import type { DatasetEntry } from "../data/schema";
+import type { SessionAnalysis } from "../chrome/sessionlog";
 
 export type ViewMode = "atlas" | "chord" | "hierarchy" | "compare";
 
@@ -16,7 +17,7 @@ export type ViewMode = "atlas" | "chord" | "hierarchy" | "compare";
  *  `interp` is the Internals gallery (mechanistic-interpretability drivers, each
  *  rendering one real computed quantity from an interp bundle); `guide`
  *  documents the exact math + source data behind every live feature. */
-export type Page = "map" | "snapshot" | "interp" | "guide";
+export type Page = "map" | "snapshot" | "interp" | "guide" | "sessions";
 
 /** Internals-page UI state. `featureId` selects which InterpDriver owns the
  *  interp canvas (must match a registered feature id in scene/interp/registry).
@@ -60,6 +61,17 @@ export interface SnapshotState {
   activeTopicId: string;
   turnIndex: number; // 0 = first turn, logs.turns.length-1 = last
   playing: boolean;
+}
+
+/** Sessions-page state — analysed agent-mode session transcripts (rich, real
+ *  quantities), which the 3-D plotter renders as trajectories. `analyses` are
+ *  DERIVED summaries (never raw text); they persist to IndexedDB across app
+ *  sessions via `chrome/sessionStore.ts` and rehydrate on boot. `activeIds`
+ *  selects which sessions are overlaid on the plot. */
+export interface SessionsState {
+  analyses: SessionAnalysis[];
+  activeIds: string[];
+  hydrated: boolean; // true once the IndexedDB rehydrate pass has run
 }
 
 export interface Selection {
@@ -185,6 +197,7 @@ export interface AppState {
   settingsOpen: boolean; // Settings page overlay visibility
   page: Page;
   snapshot: SnapshotState;
+  sessions: SessionsState;
   interp: InterpUI;
 
   setCapabilities(c: Capabilities): void;
@@ -224,6 +237,12 @@ export interface AppState {
   addTopicPreset(t: TopicPreset): void;
   updateTopicPreset(id: string, patch: Partial<TopicPreset>): void;
   removeTopicPreset(id: string): void;
+  setSessionAnalyses(list: SessionAnalysis[]): void;
+  addSessionAnalysis(a: SessionAnalysis): void;
+  removeSessionAnalysis(id: string): void;
+  toggleSessionActive(id: string): void;
+  clearSessionAnalyses(): void;
+  setSessionsHydrated(v: boolean): void;
 }
 
 /** Preset topic filters shipped by default. Users can add more from the
@@ -370,6 +389,7 @@ export const appStore = createStore<AppState>()((set) => ({
     turnIndex: 0,
     playing: false,
   },
+  sessions: { analyses: [], activeIds: [], hydrated: false },
   interp: { featureId: "weight-spectrum", traceSlug: "" },
 
   setCapabilities: (capabilities) => set({ capabilities }),
@@ -473,4 +493,54 @@ export const appStore = createStore<AppState>()((set) => ({
           : s.snapshot.activeTopicId;
       return { snapshot: { ...s.snapshot, topics, activeTopicId } };
     }),
+  // ── sessions (3-D plotter) ───────────────────────────────────────────────
+  setSessionAnalyses: (list) =>
+    set((s) => ({
+      sessions: {
+        ...s.sessions,
+        analyses: list,
+        // keep any still-present active ids; default to showing the newest one
+        activeIds: (() => {
+          const ids = new Set(list.map((a) => a.id));
+          const kept = s.sessions.activeIds.filter((id) => ids.has(id));
+          if (kept.length) return kept;
+          const first = list[0]?.id;
+          return first ? [first] : [];
+        })(),
+        hydrated: true,
+      },
+    })),
+  addSessionAnalysis: (a) =>
+    set((s) => {
+      // de-dup by id; newest first so the list reads most-recent-on-top
+      const analyses = [a, ...s.sessions.analyses.filter((x) => x.id !== a.id)];
+      return {
+        sessions: {
+          ...s.sessions,
+          analyses,
+          activeIds: [a.id, ...s.sessions.activeIds.filter((id) => id !== a.id)],
+        },
+      };
+    }),
+  removeSessionAnalysis: (id) =>
+    set((s) => ({
+      sessions: {
+        ...s.sessions,
+        analyses: s.sessions.analyses.filter((a) => a.id !== id),
+        activeIds: s.sessions.activeIds.filter((x) => x !== id),
+      },
+    })),
+  toggleSessionActive: (id) =>
+    set((s) => ({
+      sessions: {
+        ...s.sessions,
+        activeIds: s.sessions.activeIds.includes(id)
+          ? s.sessions.activeIds.filter((x) => x !== id)
+          : [...s.sessions.activeIds, id],
+      },
+    })),
+  clearSessionAnalyses: () =>
+    set((s) => ({ sessions: { ...s.sessions, analyses: [], activeIds: [] } })),
+  setSessionsHydrated: (hydrated) =>
+    set((s) => ({ sessions: { ...s.sessions, hydrated } })),
 }));

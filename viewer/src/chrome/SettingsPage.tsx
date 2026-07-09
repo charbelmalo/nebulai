@@ -19,14 +19,19 @@ import {
   $loading,
   $probing,
   $progress,
+  $sessions,
   $settings,
   $settingsOpen,
   $snapshot,
   $viewMode,
 } from "./state";
+import {
+  clearSessionAnalyses as clearPersistedSessions,
+  deleteSessionAnalysis,
+} from "./sessionStore";
 import { SelectRow, SliderRow, Tabs, TextRow, ToggleRow } from "./controls";
 
-const TABS = ["General", "Appearance", "Model Probing", "Snapshot", "Data", "About"];
+const TABS = ["General", "Appearance", "Model Probing", "Snapshot", "Sessions", "Data", "About"];
 
 const STAGE_ORDER: readonly string[] = [
   "probing",
@@ -90,6 +95,7 @@ export function SettingsPage() {
           {tab.value === "Appearance" && <AppearanceTab />}
           {tab.value === "Model Probing" && <ProbingTab />}
           {tab.value === "Snapshot" && <SnapshotTab />}
+          {tab.value === "Sessions" && <SessionsTab />}
           {tab.value === "Data" && <DataTab />}
           {tab.value === "About" && <AboutTab />}
         </div>
@@ -601,6 +607,83 @@ function SnapshotTab() {
             }}
           >
             Add preset
+          </button>
+        </div>
+      </SettingsSection>
+    </>
+  );
+}
+
+// ── Sessions ─────────────────────────────────────────────────────────────────
+
+function SessionsTab() {
+  const sess = $sessions.value;
+  const bytes = sess.analyses.reduce((n, a) => n + JSON.stringify(a).length, 0);
+  const kb = (bytes / 1024).toFixed(bytes >= 10240 ? 0 : 1);
+  return (
+    <>
+      <SettingsSection
+        title="Persisted analyses"
+        hint="Analysed sessions are saved in this browser (IndexedDB) and restored on your next visit — this is what carries analysis from session to session. Only the DERIVED summary is stored (token totals, the per-turn trajectory, tool histogram, file paths); raw transcript text is never saved or transmitted."
+      >
+        <div class="settings-kv">
+          <div class="settings-kv-row">
+            <span>Stored sessions</span>
+            <b>{sess.analyses.length}</b>
+          </div>
+          <div class="settings-kv-row">
+            <span>Shown on plot</span>
+            <b>{sess.activeIds.length}</b>
+          </div>
+          <div class="settings-kv-row">
+            <span>Approx. size</span>
+            <b>{kb} KB</b>
+          </div>
+        </div>
+        {sess.analyses.length > 0 && (
+          <ul class="settings-preset-list">
+            {sess.analyses.map((a) => (
+              <li key={a.id} class="settings-preset">
+                <div class="settings-preset-head">
+                  <span class="settings-session-name">{a.name}</span>
+                  <label class="settings-session-toggle">
+                    <input
+                      type="checkbox"
+                      checked={sess.activeIds.includes(a.id)}
+                      onChange={() => appStore.getState().toggleSessionActive(a.id)}
+                    />
+                    show
+                  </label>
+                  <button
+                    type="button"
+                    class="btn-ghost"
+                    onClick={() => {
+                      appStore.getState().removeSessionAnalysis(a.id);
+                      deleteSessionAnalysis(a.id).catch(() => {});
+                    }}
+                  >
+                    remove
+                  </button>
+                </div>
+                <span class="settings-session-meta">
+                  {a.model ?? "—"} · {a.nAssistant} turns · {a.toolTotal} tools ·{" "}
+                  {a.errorCount} errors
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div class="settings-actions">
+          <button
+            type="button"
+            class="btn-ghost"
+            disabled={sess.analyses.length === 0}
+            onClick={() => {
+              appStore.getState().clearSessionAnalyses();
+              clearPersistedSessions().catch(() => {});
+            }}
+          >
+            Clear all persisted sessions
           </button>
         </div>
       </SettingsSection>

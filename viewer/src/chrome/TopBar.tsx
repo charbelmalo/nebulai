@@ -25,6 +25,7 @@ export function TopBar() {
         <NavPill label="Internals" pageId="interp" active={page} />
         <NavPill label="Guide" pageId="guide" active={page} />
         <NavPill label="Snapshot Map" pageId="snapshot" active={page} />
+        <NavPill label="Sessions" pageId="sessions" active={page} />
       </nav>
       <button
         type="button"

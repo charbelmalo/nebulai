@@ -8,6 +8,7 @@ import { ComparePanel } from "./ComparePanel";
 import { GuidePage } from "./GuidePage";
 import { InterpPage } from "./InterpPage";
 import { LegendCard } from "./LegendCard";
+import { SessionsPage } from "./SessionsPage";
 import { SettingsPage } from "./SettingsPage";
 import { SnapshotMap } from "./SnapshotMap";
 import { TopBar } from "./TopBar";
@@ -20,6 +21,7 @@ effect(() => {
   document.body.classList.toggle("page-snapshot", page === "snapshot");
   document.body.classList.toggle("page-interp", page === "interp");
   document.body.classList.toggle("page-guide", page === "guide");
+  document.body.classList.toggle("page-sessions", page === "sessions");
 });
 
 function Chrome() {
@@ -33,6 +35,7 @@ function Chrome() {
       {page === "snapshot" && <SnapshotMap />}
       {page === "interp" && <InterpPage />}
       {page === "guide" && <GuidePage />}
+      {page === "sessions" && <SessionsPage />}
       <SettingsPage />
     </>
   );

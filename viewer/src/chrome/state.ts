@@ -12,6 +12,7 @@ import {
   type Probing,
   type Progress,
   type Selection,
+  type SessionsState,
   type Settings,
   type SnapshotState,
   type Toggles,
@@ -40,6 +41,7 @@ export const $progress = signal<Progress>(s.progress);
 export const $settingsOpen = signal<boolean>(s.settingsOpen);
 export const $page = signal<Page>(s.page);
 export const $snapshot = signal<SnapshotState>(s.snapshot);
+export const $sessions = signal<SessionsState>(s.sessions);
 export const $interp = signal<InterpUI>(s.interp);
 export const $compareData = signal<CompareData | null>(s.compareData);
 export const $compare = signal<CompareUI>(s.compare);
@@ -61,6 +63,7 @@ appStore.subscribe((st) => {
   if (st.settingsOpen !== $settingsOpen.value) $settingsOpen.value = st.settingsOpen;
   if (st.page !== $page.value) $page.value = st.page;
   if (st.snapshot !== $snapshot.value) $snapshot.value = st.snapshot;
+  if (st.sessions !== $sessions.value) $sessions.value = st.sessions;
   if (st.interp !== $interp.value) $interp.value = st.interp;
   if (st.compareData !== $compareData.value) $compareData.value = st.compareData;
   if (st.compare !== $compare.value) $compare.value = st.compare;
