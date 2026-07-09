@@ -11,6 +11,7 @@ Bundles written by `write_bundles`:
   embed.json      — PCA projection of the token embedding W_E    (#15 Embedding Constellation)
   neurons.json    — PCA of MLP-neuron write directions W_out     (#6  Neuron Write-Direction Field)
   heads.json      — per-head OV/QK circuit stats + behavior      (#2  Head Fingerprints)
+  sae_acts.json   — SAE encoder activations on the bundled prompts (#5 Firing Piano-Roll)
   trace_<slug>.json — one real forward pass per curated prompt   (#3/7/8/18/23 …)
 
 The trace bundle deliberately does NOT store full logits (T×50257 is ~26 MB);
@@ -378,6 +379,131 @@ def compute_sae(m: GPT2Numpy, repo: str = SAE_REPO, hook: str = SAE_HOOK, dims: 
     }
 
 
+def compute_sae_acts(
+    m: GPT2Numpy,
+    prompts: list[str] | None = None,
+    repo: str = SAE_REPO,
+    hook: str = SAE_HOOK,
+    top_k: int = 32,
+) -> dict:
+    """#5 SAE Firing Piano-Roll — the res-jb encoder run on real residuals.
+
+    The behavioral counterpart of compute_sae: instead of where a feature's
+    decoder direction POINTS, this measures which features FIRE on each token
+    of the bundled prompts, with exact activation values.
+
+    Basis correction (exact, not a heuristic): the SAE was trained on
+    TransformerLens activations with center_writing_weights, which centers
+    every matrix writing to the residual stream (W_E, W_pos, every c_proj).
+    LayerNorm is invariant to the mean component, so the model function is
+    unchanged, and the TL residual equals our HF-basis residual minus its
+    per-position mean: x̄ = x − mean(x). Feeding uncentered x gives garbage
+    (L0 ≈ 2700, cos ≈ 0.76); centered gives the published regime
+    (L0 ≈ 30–100, cos ≈ 0.93–0.9999) — verified empirically both ways.
+
+    Encoder/decoder are the original mats_sae_training architecture (cfg has
+    no apply_b_dec_to_input flag; subtraction confirmed by reconstruction
+    quality): acts = ReLU((x̄ − b_dec)·W_enc + b_enc), recon = acts·W_dec + b_dec.
+
+    Per prompt: per-position L0 and reconstruction cosine (the honesty metric —
+    how much of the stream the SAE actually explains), plus the top_k features
+    by peak activation with their FULL activation rows, each labeled with its
+    direct-path top token and the release's measured global log-sparsity."""
+    from huggingface_hub import hf_hub_download
+    from safetensors.numpy import load_file
+
+    prompts = prompts or DEFAULT_PROMPTS
+    cfg = json.loads(open(hf_hub_download(repo, f"{hook}/cfg.json")).read())
+    t = load_file(hf_hub_download(repo, f"{hook}/sae_weights.safetensors"))
+    sp = load_file(hf_hub_download(repo, f"{hook}/sparsity.safetensors"))
+    W_enc, b_enc = t["W_enc"], t["b_enc"]
+    W_dec, b_dec = t["W_dec"], t["b_dec"]
+    d_sae, d_in = int(cfg["d_sae"]), int(cfg["d_in"])
+    layer = int(cfg["hook_point_layer"])
+    assert W_enc.shape == (d_in, d_sae), f"W_enc shape {W_enc.shape}"
+    assert d_in == m.d, f"SAE d_in {d_in} != model d {m.d}"
+    sparsity = sp["sparsity"].astype(np.float64)
+
+    traces = []
+    for prompt in prompts:
+        tr: Trace = m.forward(prompt)
+        x = tr.resid[layer].astype(np.float32)  # (T, d) = blocks.L.hook_resid_pre
+        xc = x - x.mean(axis=1, keepdims=True)  # TL center_writing_weights basis
+        acts = np.maximum((xc - b_dec) @ W_enc + b_enc, 0.0)  # (T, d_sae)
+        recon = acts @ W_dec + b_dec
+        cos = (recon * xc).sum(axis=1) / (
+            np.linalg.norm(recon, axis=1) * np.linalg.norm(xc, axis=1) + 1e-12
+        )
+        l0 = (acts > 0).sum(axis=1)
+
+        def rows_for(ids: np.ndarray) -> list[dict]:
+            top_tok, top_val, _, _ = _unembed_readout(W_dec[ids].astype(np.float32), m)
+            return [
+                {
+                    "id": int(fid),
+                    "log_sparsity": round(float(sparsity[fid]), 3),
+                    "top_tok": top_tok[k],
+                    "top_val": top_val[k],
+                    "max": round(float(acts[:, fid].max()), 3),
+                    "acts": [round(float(a), 3) for a in acts[:, fid]],
+                }
+                for k, fid in enumerate(ids)
+            ]
+
+        # Main board: ranked by peak over positions ≥ 1. The first position
+        # carries GPT-2's massive-activation outlier (‖x‖ ≈ 3000 vs ~100) and a
+        # handful of SAE features fire 60–100× everything else there and ~0
+        # elsewhere; ranked raw they'd fill the board with redundant rows.
+        # They're real, so they ship too — as a separate labeled band.
+        peak = acts[1:].max(axis=0) if acts.shape[0] > 1 else acts.max(axis=0)
+        ids = np.argsort(-peak)[:top_k]
+        ids = ids[peak[ids] > 0]
+        sink_ids = np.argsort(-acts[0])[:4]
+        sink_ids = sink_ids[acts[0][sink_ids] > 0]
+        sink_ids = sink_ids[~np.isin(sink_ids, ids)]
+
+        traces.append(
+            {
+                "slug": _slug(prompt),
+                "prompt": prompt,
+                "token_strs": tr.token_strs,
+                "T": len(tr.tokens),
+                "l0": [int(v) for v in l0],
+                "cos": [round(float(v), 4) for v in cos],
+                "features": rows_for(ids),
+                "sink_features": rows_for(sink_ids),
+            }
+        )
+
+    return {
+        "meta": {
+            "model": m.model_id,
+            "created": _now(),
+            "sae_repo": repo,
+            "hook_point": hook,
+            "quantity": "SAE encoder activations on real forward passes: which "
+            "features fire on which tokens, per-position L0, and reconstruction "
+            "cosine",
+            "formula": "x̄ = x − mean(x) per position (TransformerLens "
+            "center_writing_weights basis — LayerNorm-invariant, exact); "
+            "acts = ReLU((x̄ − b_dec)·W_enc + b_enc); recon = acts·W_dec + b_dec; "
+            "cos = cosine(recon, x̄) per position.",
+            "note": f"top {top_k} features per prompt by peak activation over "
+            "positions ≥ 1; the first position's massive-activation outlier "
+            "(‖x‖≈3000) drives a few features 60–100× everything else, exported "
+            "separately as sink_features. Rows rounded to 3 dp. Activations are "
+            "for these bundled prompts only — not a global feature ranking. "
+            "log_sparsity is the release's measured global firing fraction; "
+            "top_tok is the direct-path readout (skips blocks 8–11).",
+            "d_sae": d_sae,
+            "d_in": d_in,
+            "hook_layer": layer,
+            "top_k": top_k,
+        },
+        "traces": traces,
+    }
+
+
 def compute_heads(m: GPT2Numpy, prompts: list[str] | None = None) -> dict:
     """Per-attention-head fingerprints: weight-circuit stats + measured behavior.
 
@@ -586,6 +712,10 @@ def write_bundles(
             dump("sae.json", compute_sae(m))
         except Exception as e:  # noqa: BLE001 — report and continue, never fake
             print(f"[interp] sae.json skipped: {e}")
+        try:
+            dump("sae_acts.json", compute_sae_acts(m, prompts=prompts))
+        except Exception as e:  # noqa: BLE001
+            print(f"[interp] sae_acts.json skipped: {e}")
 
     traces_index = []
     for prompt in prompts or DEFAULT_PROMPTS:

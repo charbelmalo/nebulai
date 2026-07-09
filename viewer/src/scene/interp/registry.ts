@@ -25,6 +25,7 @@ import { NeuronFieldDriver } from "./NeuronFieldDriver";
 import { ProbabilitySimplexDriver } from "./ProbabilitySimplexDriver";
 import { ResidualRibbonDriver } from "./ResidualRibbonDriver";
 import { SAEConstellationDriver } from "./SAEConstellationDriver";
+import { SAEPianoRollDriver } from "./SAEPianoRollDriver";
 import { WeightSpectrumDriver } from "./WeightSpectrumDriver";
 
 export const INTERP_FEATURES: InterpFeature[] = [
@@ -343,6 +344,44 @@ export const INTERP_FEATURES: InterpFeature[] = [
     note: "color/size span firing fraction 10⁻⁶–10⁻¹ (clamped) · direct path skips blocks 8–11",
     legendCorner: "tr",
     create: () => new SAEConstellationDriver(),
+  },
+  {
+    id: "sae-piano-roll",
+    n: 4,
+    label: "SAE Firing Piano-Roll",
+    group: "sae",
+    perTrace: true,
+    blurb:
+      "The same SAE's ENCODER run on a real forward pass: which features fire " +
+      "on which tokens of the prompt, with exact activation values. Rows are " +
+      "the top features by peak activation, ordered by where they peak; each " +
+      "row is scaled to its own peak, printed at the right edge. GPT-2's " +
+      "first-token massive-activation outlier drives a few features 60–100× " +
+      "everything else — those sit in a separate labeled band instead of " +
+      "silently flooding the board. The strip below prints the exact " +
+      "per-position L0 and reconstruction cosine: how much of the residual " +
+      "stream the SAE actually explains at each token.",
+    math:
+      "x̄ = x − mean(x) per position (the SAE's training basis — TransformerLens " +
+      "center_writing_weights; LayerNorm-invariant, exact). acts = " +
+      "ReLU((x̄ − b_dec)·W_enc + b_enc); recon = acts·W_dec + b_dec; " +
+      "cos = cosine(recon, x̄); L0 = #{acts > 0}. Cell brightness = act / row " +
+      "peak (or board peak via the toggle).",
+    source:
+      "sae_acts.json — the res-jb encoder (jbloom/GPT2-Small-SAEs-Reformatted, " +
+      "blocks.8.hook_resid_pre) applied to the real layer-8 residuals of the " +
+      "bundled prompts. Feeding the uncentered HF-basis residual gives L0≈2700 " +
+      "and cos≈0.76; the exact re-centering restores the published regime " +
+      "(L0≈30–100, cos≈0.93–0.9999) — verified both ways.",
+    legend: [
+      { label: "act = row peak (printed at right)", rgb: "245,195,59" },
+      { label: "act = ½ row peak", rgb: "155,131,78" },
+      { label: "act = 0 — never smoothed", rgb: "118,126,158" },
+    ],
+    note: "per-row scale (toggle for board scale) · outlier band always own scale · L0/cos printed exactly",
+    legendCorner: "br",
+    legendCollapsed: true,
+    create: () => new SAEPianoRollDriver(),
   },
 ];
 

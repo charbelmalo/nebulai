@@ -62,5 +62,14 @@ export interface InterpFeature {
    *  set "bl", and the two-column attention view sets "br" (a narrower card that
    *  tucks into the reserved right gutter) so it never covers the data. */
   legendCorner?: "tr" | "bl" | "br";
+  /** True when the view renders one bundled prompt at a time and should get the
+   *  prompt selector, even outside the "forward" group (e.g. the SAE piano-roll
+   *  renders per-prompt encoder activations but belongs to the sae group). All
+   *  forward-group features are implicitly per-trace. */
+  perTrace?: boolean;
+  /** True for full-bleed boards where the open legend card would sit on top of
+   *  data in every corner — the legend then defaults to its collapsed pill
+   *  (the user's toggle still overrides, sticky for the session). */
+  legendCollapsed?: boolean;
   create: () => InterpDriver;
 }

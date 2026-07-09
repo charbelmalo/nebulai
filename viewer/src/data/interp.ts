@@ -130,6 +130,51 @@ export interface SAEBundle {
   bot_val: number[];
 }
 
+/** One feature row of the SAE piano-roll: its full activation vector over the
+ *  prompt's positions, plus identity (release's measured global log-sparsity,
+ *  direct-path top token). `max` is the row's own peak — the driver's per-row
+ *  scale, always displayed. */
+export interface SAEActsFeature {
+  id: number;
+  log_sparsity: number;
+  top_tok: string;
+  top_val: number;
+  max: number;
+  acts: number[]; // length T, exact encoder activations (3 dp)
+}
+
+export interface SAEActsTrace {
+  slug: string;
+  prompt: string;
+  token_strs: string[];
+  T: number;
+  l0: number[]; // features active per position
+  cos: number[]; // reconstruction cosine per position (honesty metric)
+  features: SAEActsFeature[]; // top-k by peak over positions ≥ 1
+  sink_features: SAEActsFeature[]; // position-0 massive-activation band
+}
+
+/** SAE encoder activations on the bundled prompts (#5 Firing Piano-Roll).
+ *  acts = ReLU((x̄ − b_dec)·W_enc + b_enc) where x̄ is the residual at
+ *  meta.hook_point re-centered per position (TransformerLens
+ *  center_writing_weights basis — exact; see meta.formula). */
+export interface SAEActsBundle {
+  meta: {
+    model: string;
+    created: string;
+    sae_repo: string;
+    hook_point: string;
+    quantity: string;
+    formula: string;
+    note: string;
+    d_sae: number;
+    d_in: number;
+    hook_layer: number;
+    top_k: number;
+  };
+  traces: SAEActsTrace[];
+}
+
 /** Per-attention-head fingerprints (#2 Head Fingerprints). All arrays are
  *  length n = n_layer·n_head, layer-major (index = layer·n_head + head).
  *  `copying`/`eig1_*`/`fro_ov`/`sigma_qk` are weight-circuit quantities
@@ -230,6 +275,9 @@ export const loadNeurons = (model: string, base = "/out") =>
 
 export const loadSAE = (model: string, base = "/out") =>
   fetchJSON<SAEBundle>(`${interpBase(model, base)}/sae.json`);
+
+export const loadSAEActs = (model: string, base = "/out") =>
+  fetchJSON<SAEActsBundle>(`${interpBase(model, base)}/sae_acts.json`);
 
 export const loadHeads = (model: string, base = "/out") =>
   fetchJSON<HeadsBundle>(`${interpBase(model, base)}/heads.json`);

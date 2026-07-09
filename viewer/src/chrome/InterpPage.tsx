@@ -50,11 +50,13 @@ export function InterpPage() {
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
   }, []);
-  const legendIsOpen = legendOpen.value ?? !narrow.value;
+  const legendIsOpen =
+    legendOpen.value ?? (!narrow.value && feature?.legendCollapsed !== true);
 
-  // Forward-group features render one per-prompt trace. Load the trace list for
-  // the model so the selector can offer them; resolve "" to the first slug.
-  const isForward = feature?.group === "forward";
+  // Per-trace features render one bundled prompt at a time (all of the forward
+  // group, plus anything flagged perTrace). Load the trace list for the model
+  // so the selector can offer them; resolve "" to the first slug.
+  const isForward = feature?.group === "forward" || feature?.perTrace === true;
   useEffect(() => {
     if (!model) return;
     let ok = true;
