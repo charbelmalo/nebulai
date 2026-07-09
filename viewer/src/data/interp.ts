@@ -206,6 +206,28 @@ export interface HeadsBundle {
   entropy: number[]; // mean normalized attention entropy ∈ [0, 1]
 }
 
+/** Every head's full complex OV spectrum (#2b OV Eigenvalue Constellation).
+ *  `re`/`im` are flat n·d_head, head-major (layer-major head index), sorted by
+ *  descending |λ| within each head. Conjugate-symmetric per head (real matrix);
+ *  `copying` re-exported per head so the bundle is self-contained. */
+export interface OVEigsBundle {
+  meta: {
+    model: string;
+    created: string;
+    quantity: string;
+    formula: string;
+    note: string;
+    n_layer: number;
+    n_head: number;
+    d_head: number;
+  };
+  n: number; // heads = n_layer·n_head
+  d_head: number;
+  re: number[]; // flat n·d_head
+  im: number[]; // flat n·d_head
+  copying: number[]; // per head, Σ Re λ / Σ |λ|
+}
+
 /** [token string, probability] — the honest readout unit for lens/next-token. */
 export type LensTopk = [string, number][];
 
@@ -278,6 +300,9 @@ export const loadSAE = (model: string, base = "/out") =>
 
 export const loadSAEActs = (model: string, base = "/out") =>
   fetchJSON<SAEActsBundle>(`${interpBase(model, base)}/sae_acts.json`);
+
+export const loadOVEigs = (model: string, base = "/out") =>
+  fetchJSON<OVEigsBundle>(`${interpBase(model, base)}/ov_eigs.json`);
 
 export const loadHeads = (model: string, base = "/out") =>
   fetchJSON<HeadsBundle>(`${interpBase(model, base)}/heads.json`);

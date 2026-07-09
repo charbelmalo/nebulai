@@ -22,6 +22,7 @@ import { HeadFingerprintDriver } from "./HeadFingerprintDriver";
 import type { InterpFeature } from "./InterpDriver";
 import { LogitLensTunnelDriver } from "./LogitLensTunnelDriver";
 import { NeuronFieldDriver } from "./NeuronFieldDriver";
+import { OVEigenDriver } from "./OVEigenDriver";
 import { ProbabilitySimplexDriver } from "./ProbabilitySimplexDriver";
 import { ResidualRibbonDriver } from "./ResidualRibbonDriver";
 import { SAEConstellationDriver } from "./SAEConstellationDriver";
@@ -178,6 +179,44 @@ export const INTERP_FEATURES: InterpFeature[] = [
     note: "x is a measured sample (5 prompts, 40 rows — stated) · y is pure weights",
     legendCorner: "br",
     create: () => new HeadFingerprintDriver(),
+  },
+  {
+    id: "ov-eigen",
+    n: 2,
+    label: "OV Eigenvalue Constellation",
+    group: "weights",
+    blurb:
+      "Every complex eigenvalue of every head's residual-space OV map — all " +
+      "144 heads × 64 eigenvalues in ℂ. Along its eigendirection a head " +
+      "writes back λ× what it reads: positive real copies, negative real " +
+      "inverts, |λ| > 1 amplifies (the emphasized ring is |λ| = 1). This is " +
+      "the full spectrum behind the fingerprints' copying scalar, and it " +
+      "shows what the scalar hides: L11H8 scores a mild +0.29 yet contains a " +
+      "single λ = −87.5 — one massively inverted direction canceled by an " +
+      "otherwise-positive spectrum — while L11H3's entire spectrum sits in " +
+      "[+3.3, +9.6], a uniform copying amplifier. Hover brightens the whole " +
+      "spectrum of a head; click isolates it.",
+    math:
+      "λ = eig(W_O·diag(γ₁)·W_V) per head — the nonzero eigenvalues of the " +
+      "d×d OV map diag(γ₁)·W_V·W_O, computed exactly at d_head×d_head since " +
+      "eig(AB) = eig(BA). Real matrix → conjugate-symmetric spectrum (the " +
+      "mirror across the real axis is the math, not decoration). Plot is " +
+      "log-polar: angle = arg λ exactly; radius = log₁₀|λ| clamped to " +
+      "[−2, +2] (stated window; 0.2% of points clamp at the center).",
+    source:
+      "ov_eigs.json — float64 eigendecomposition of every head's OV circuit " +
+      "(ln_1 gain folded, biases excluded), verified identical to the full " +
+      "768×768 eigendecomposition. copying re-exported per head; cross-checked " +
+      "against heads.json to 4 dp.",
+    legend: [
+      { label: "layer 0 eigenvalue", rgb: "59,82,138" },
+      { label: "layer 6", rgb: "54,181,120" },
+      { label: "layer 11", rgb: "253,231,37" },
+      { label: "|λ| = 1 ring — amplify/attenuate boundary", rgb: "166,173,200" },
+    ],
+    note: "log-polar: angle = arg λ · radius = log₁₀|λ| ∈ [−2,2] clamped · conjugate symmetry is the math",
+    legendCorner: "bl",
+    create: () => new OVEigenDriver(),
   },
   {
     id: "logit-lens-tunnel",

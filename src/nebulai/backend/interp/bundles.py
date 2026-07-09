@@ -11,6 +11,7 @@ Bundles written by `write_bundles`:
   embed.json      — PCA projection of the token embedding W_E    (#15 Embedding Constellation)
   neurons.json    — PCA of MLP-neuron write directions W_out     (#6  Neuron Write-Direction Field)
   heads.json      — per-head OV/QK circuit stats + behavior      (#2  Head Fingerprints)
+  ov_eigs.json    — every head's full complex OV spectrum        (#2b OV Eigenvalue Constellation)
   sae_acts.json   — SAE encoder activations on the bundled prompts (#5 Firing Piano-Roll)
   trace_<slug>.json — one real forward pass per curated prompt   (#3/7/8/18/23 …)
 
@@ -621,6 +622,65 @@ def compute_heads(m: GPT2Numpy, prompts: list[str] | None = None) -> dict:
     }
 
 
+def compute_ov_eigs(m: GPT2Numpy) -> dict:
+    """The FULL OV spectra behind compute_heads' copying scores: every complex
+    eigenvalue of every head's residual-space OV map, d_head per head.
+
+    A_ov = diag(γ₁)·W_V^h·W_O^h (d×d, rank ≤ d_head); its nonzero eigenvalues
+    equal eig(W_O^h·diag(γ₁)·W_V^h) at d_head×d_head — exact (verified against
+    the full d×d eigendecomposition when compute_heads was built). The matrix
+    is real, so the spectrum is conjugate-symmetric; both halves are exported
+    (the symmetry in the plot is a property of the math, not decoration).
+    An eigenvalue λ means: along its eigendirection, the head writes back λ×
+    what it reads — |λ|>1 amplifies, positive real copies, negative inverts.
+    copying (Σ Re λ / Σ |λ|) is re-exported per head so the bundle is
+    self-contained."""
+    H, dh, nL = m.n_head, m.d_head, m.n_layer
+    n = nL * H
+    re = np.zeros((n, dh))
+    im = np.zeros((n, dh))
+    copying = np.zeros(n)
+    for L in range(nL):
+        p = f"h.{L}."
+        g1 = m._g(p + "ln_1.weight").astype(np.float64)
+        Wv = np.split(m._g(p + "attn.c_attn.weight").astype(np.float64), 3, axis=1)[2]
+        Wo = m._g(p + "attn.c_proj.weight").astype(np.float64)
+        for h in range(H):
+            i = L * H + h
+            s = slice(h * dh, (h + 1) * dh)
+            A = g1[:, None] * Wv[:, s]
+            B = Wo[s, :]
+            lam = np.linalg.eigvals(B @ A)
+            lam = lam[np.argsort(-np.abs(lam))]  # descending |λ| within a head
+            re[i] = lam.real
+            im[i] = lam.imag
+            denom = float(np.abs(lam).sum())
+            copying[i] = float(lam.real.sum()) / denom if denom > 0 else 0.0
+
+    return {
+        "meta": {
+            "model": m.model_id,
+            "created": _now(),
+            "quantity": "all complex eigenvalues of every attention head's "
+            "residual-space OV map (d_head per head)",
+            "formula": "λ = eig(W_O^h·diag(γ₁)·W_V^h) — the nonzero eigenvalues "
+            "of A_ov = diag(γ₁)·W_V^h·W_O^h since eig(AB) = eig(BA). ln_1 gain "
+            "folded, biases excluded. copying = Σ Re λ / Σ |λ| per head.",
+            "note": "real matrix → conjugate-symmetric spectrum (both halves "
+            "exported). λ within each head sorted by descending |λ|. Rounded "
+            "to 4 dp for transport.",
+            "n_layer": nL,
+            "n_head": H,
+            "d_head": dh,
+        },
+        "n": n,
+        "d_head": dh,
+        "re": [round(float(x), 4) for x in re.reshape(-1)],  # flat n·d_head
+        "im": [round(float(x), 4) for x in im.reshape(-1)],
+        "copying": [round(float(x), 4) for x in copying],
+    }
+
+
 def _logit_lens_topk(m: GPT2Numpy, resid_row: np.ndarray, k: int = 6) -> list:
     lg = m.logit_lens(resid_row)
     lg = lg - lg.max()
@@ -705,6 +765,7 @@ def write_bundles(
     dump("embed.json", compute_embed(m))
     dump("neurons.json", compute_neurons(m))
     dump("heads.json", compute_heads(m, prompts=prompts or DEFAULT_PROMPTS))
+    dump("ov_eigs.json", compute_ov_eigs(m))
     # SAE decoder constellation — only where an open SAE release exists for the
     # model (res-jb covers gpt2-small). External download; skip loudly if absent.
     if model_id == "gpt2":
