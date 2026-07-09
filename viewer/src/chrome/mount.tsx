@@ -5,25 +5,34 @@ import { effect } from "@preact/signals";
 import { render } from "preact";
 import { Sidebar } from "./Sidebar";
 import { ComparePanel } from "./ComparePanel";
+import { GuidePage } from "./GuidePage";
+import { InterpPage } from "./InterpPage";
 import { LegendCard } from "./LegendCard";
 import { SettingsPage } from "./SettingsPage";
 import { SnapshotMap } from "./SnapshotMap";
 import { TopBar } from "./TopBar";
 import { $page, $viewMode } from "./state";
 
-// Toggle a body class so main.ts's #stage can be hidden on the snapshot page.
+// Toggle body classes so main.ts's #stage is hidden on the non-map pages (each
+// non-map page owns its own canvas/DOM and the driver stage must not show through).
 effect(() => {
-  document.body.classList.toggle("page-snapshot", $page.value === "snapshot");
+  const page = $page.value;
+  document.body.classList.toggle("page-snapshot", page === "snapshot");
+  document.body.classList.toggle("page-interp", page === "interp");
+  document.body.classList.toggle("page-guide", page === "guide");
 });
 
 function Chrome() {
-  const onMap = $page.value === "map";
+  const page = $page.value;
+  const onMap = page === "map";
   return (
     <>
       <TopBar />
       {onMap && <Sidebar />}
       {onMap && ($viewMode.value === "compare" ? <ComparePanel /> : <LegendCard />)}
-      {!onMap && <SnapshotMap />}
+      {page === "snapshot" && <SnapshotMap />}
+      {page === "interp" && <InterpPage />}
+      {page === "guide" && <GuidePage />}
       <SettingsPage />
     </>
   );

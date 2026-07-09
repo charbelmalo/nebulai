@@ -22,6 +22,8 @@ export function TopBar() {
       </header>
       <nav class="topnav" aria-label="Primary">
         <NavPill label="Semantic map" pageId="map" active={page} />
+        <NavPill label="Internals" pageId="interp" active={page} />
+        <NavPill label="Guide" pageId="guide" active={page} />
         <NavPill label="Snapshot Map" pageId="snapshot" active={page} />
       </nav>
       <button

@@ -67,6 +67,10 @@ export function startBuildProbe(): void {
       return;
     }
     const step = BUILD_SCHEDULE[idx];
+    if (!step) {
+      buildTimer = null;
+      return;
+    }
     appStore.getState().setProgress({
       stage: step.stage,
       message: step.msg,

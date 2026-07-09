@@ -198,6 +198,33 @@ def _run_edges(args: argparse.Namespace) -> None:
     print(f"  {index}")
 
 
+def _run_interp(args: argparse.Namespace) -> None:
+    """Compute real interp bundles (weight spectra, positional DFT, forward
+    traces) for the Phase-2 viewer's mechanistic-interpretability features.
+
+    Pure numpy from the model's safetensors — no torch. See
+    docs/INTERP_FEATURES.md for the feature → bundle map.
+    """
+    from .backend.interp.bundles import DEFAULT_PROMPTS, write_bundles
+
+    prompts = None
+    if args.prompts_file:
+        prompts = [
+            ln.strip()
+            for ln in Path(args.prompts_file).read_text().splitlines()
+            if ln.strip()
+        ]
+
+    t = _timer()
+    written = write_bundles(args.model, Path(args.out), prompts)
+    print(
+        f"interp bundles for {args.model}: {len(written)} files "
+        f"({len(prompts or DEFAULT_PROMPTS)} traces) [{t()}]"
+    )
+    for p in written:
+        print(f"  {p}")
+
+
 def _run_compare(args: argparse.Namespace) -> None:
     from .backend.compare import build_comparison, export_comparison
     from .backend.viewer import write_viewer
@@ -339,6 +366,20 @@ def main() -> None:
         help="knn = cluster edges + per-point kNN; cluster = cluster edges only",
     )
     e.set_defaults(fn=_run_edges)
+
+    ip = sub.add_parser(
+        "interp",
+        help="compute real interp bundles (weight spectra, positional DFT, "
+        "forward traces) for the viewer's mechanistic-interpretability features",
+    )
+    ip.add_argument("--model", default="gpt2", help="HF model id (GPT-2 family)")
+    ip.add_argument("--out", default="out", help="output directory root")
+    ip.add_argument(
+        "--prompts-file",
+        default=None,
+        help="text file, one prompt per line (default: curated circuit prompts)",
+    )
+    ip.set_defaults(fn=_run_interp)
 
     c = sub.add_parser(
         "compare",

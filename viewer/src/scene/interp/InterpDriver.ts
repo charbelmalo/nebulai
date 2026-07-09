@@ -1,0 +1,66 @@
+/** InterpDriver — the contract for the mechanistic-interpretability features
+ *  (the "Internals" page). Same spirit as SceneDriver: one driver owns the
+ *  interp canvas at a time; drivers coordinate only through the store and the
+ *  shared canvas/overlay they're handed. Each driver renders exactly ONE real
+ *  computed quantity from an interp bundle and exposes exact hover values.
+ *
+ *  Kept separate from SceneDriver because interp drivers take an overlay host
+ *  for their tooltip/labels and are keyed to a model id (not a Dataset). */
+
+import type { GpuTier } from "../../app/capabilities";
+
+export interface InterpDriver {
+  /** When false, the host skips the per-frame RAF entirely — the view is static
+   *  (deck redraws on demand) so there's nothing to animate and no reason to
+   *  spin the main thread at 60fps. Defaults to animated when omitted. */
+  readonly animated?: boolean;
+  /** Init GPU/deck against the shared interp canvas. `overlay` is an absolutely
+   *  positioned host for HTML tooltips/labels (HTML-first law). */
+  init(canvas: HTMLCanvasElement, tier: GpuTier, overlay: HTMLElement): Promise<void>;
+  /** Load + render the bundle for this model id (e.g. "gpt2"). Forward-group
+   *  features also receive the selected `trace` slug (which per-prompt forward
+   *  pass to render); weight-group features ignore it. May reject if the model
+   *  has no bundle for this feature — the host surfaces that honestly. */
+  setModel(model: string, trace?: string): Promise<void>;
+  /** dt ms, t elapsed seconds (pinned at 0 under ?frozen for goldens). */
+  frame(dt: number, t: number): void;
+  resize(width: number, height: number, dpr: number): void;
+  dispose(): void;
+}
+
+export type InterpGroup = "weights" | "forward" | "sae" | "trained" | "live";
+
+/** A single colored key in a feature's legend — `rgb` is a bare "r,g,b" string
+ *  so it can drop straight into `rgb(...)` and MUST match the exact color the
+ *  driver renders (the legend is a contract, not decoration). */
+export interface LegendKey {
+  label: string;
+  rgb: string;
+}
+
+/** One entry in the Internals feature rail. `n` is the feature's number in the
+ *  25-feature spec; `blurb` states the exact real quantity (shown as the
+ *  legend subtitle and on /guide). Only IMPLEMENTED features are registered —
+ *  the rail never lists a view that isn't backed by real data yet. `legend`
+ *  and `note` are the encoding key shown in the on-canvas legend card. */
+export interface InterpFeature {
+  id: string;
+  n: number;
+  label: string;
+  group: InterpGroup;
+  blurb: string;
+  /** The exact quantity/formula the view renders, in one plain-text line (kept
+   *  ASCII-mathy, not LaTeX — it drops straight into /guide). REQUIRED so a live
+   *  feature can never ship without stating its math. */
+  math: string;
+  /** Which bundle field(s) the numbers come from, and how they were computed
+   *  offline (the provenance line on /guide). REQUIRED for the same reason. */
+  source: string;
+  legend?: LegendKey[];
+  note?: string;
+  /** Which corner the legend card docks to. Defaults to top-right; radial views
+   *  set "bl", and the two-column attention view sets "br" (a narrower card that
+   *  tucks into the reserved right gutter) so it never covers the data. */
+  legendCorner?: "tr" | "bl" | "br";
+  create: () => InterpDriver;
+}

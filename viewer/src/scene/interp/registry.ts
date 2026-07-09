@@ -1,0 +1,250 @@
+/** The Internals feature rail — the single source of truth for which
+ *  mechanistic-interpretability features are LIVE. A feature appears here only
+ *  once its driver renders a real computed quantity end-to-end and has passed
+ *  the three review passes (numerical correctness, visual truthfulness,
+ *  performance/interaction). The 25-feature spec is the roadmap; this list is
+ *  the honest subset that actually works. `/guide` reads the same registry so
+ *  documentation can never drift from what's shipped.
+ *
+ *  Groups map to data source, which keeps the honesty contract legible:
+ *    weights  — raw weight tensors only (no forward pass)
+ *    forward  — a real forward pass on a curated prompt (trace bundle)
+ *    sae      — sparse-autoencoder features (downloaded SAE weights)
+ *    trained  — a small model trained offline (e.g. grokking toy model)
+ *    live     — in-browser forward pass on user text (capstone)
+ */
+
+import { AttentionFlowDriver } from "./AttentionFlowDriver";
+import { AttentionRolloutDriver } from "./AttentionRolloutDriver";
+import { EmbeddingConstellationDriver } from "./EmbeddingConstellationDriver";
+import { FourierAtlasDriver } from "./FourierAtlasDriver";
+import type { InterpFeature } from "./InterpDriver";
+import { LogitLensTunnelDriver } from "./LogitLensTunnelDriver";
+import { ProbabilitySimplexDriver } from "./ProbabilitySimplexDriver";
+import { ResidualRibbonDriver } from "./ResidualRibbonDriver";
+import { WeightSpectrumDriver } from "./WeightSpectrumDriver";
+
+export const INTERP_FEATURES: InterpFeature[] = [
+  {
+    id: "fourier-atlas",
+    n: 1,
+    label: "Fourier Atlas",
+    group: "weights",
+    blurb:
+      "DFT of GPT-2's learned positional embeddings W_pos along the position axis. " +
+      "Angle = log frequency (cycles per 1024-token window); gold radius = log mean " +
+      "power P(f); cyan = how many of the 768 dims peak at that frequency.",
+    math:
+      "X[d,f] = Σ_p W_pos[p,d]·exp(−2πi·f·p/n_ctx); P(f) = mean_d |X[d,f]|². " +
+      "Angle θ(f) = π·log₂(f)/log₂(n_ctx/2); radius = normalized log P(f).",
+    source:
+      "fourier.json — real DFT of W_pos (n_ctx×768) computed offline in float64 " +
+      "(numpy.fft.rfft along the position axis). No windowing, no smoothing.",
+    legend: [
+      { label: "mean power P(f) — log radius, outward", rgb: "245,195,59" },
+      { label: "dims dominant at f — count, inward", rgb: "70,200,235" },
+    ],
+    note: "angle = log frequency, f=1 at top → f=512 clockwise",
+    legendCorner: "bl",
+    create: () => new FourierAtlasDriver(),
+  },
+  {
+    id: "weight-spectrum",
+    n: 21,
+    label: "Weight Spectrum",
+    group: "weights",
+    blurb:
+      "Singular-value spectra of every weight matrix (float64 SVD). x = index, " +
+      "y = log₁₀σ; hover reads exact σ, stable rank, effective rank, condition κ.",
+    math:
+      "σ = svd(W) (descending). stable rank = ‖W‖_F²/σ₁²; effective rank = " +
+      "exp(−Σ pₖ ln pₖ) with pₖ = σₖ/Σσ; condition κ = σ₁/σ_min.",
+    source:
+      "weights.json — float64 SVD of every weight matrix (W_E, W_pos, per-layer " +
+      "attn QKV/out, MLP in/out), top ≤256 σ stored. Raw rows are NOT exported.",
+    legend: [
+      { label: "W_E (token embed)", rgb: "234,79,134" },
+      { label: "W_pos (positional)", rgb: "245,195,59" },
+      { label: "attn QKV", rgb: "70,200,235" },
+      { label: "attn out", rgb: "90,230,180" },
+      { label: "MLP in", rgb: "150,130,240" },
+      { label: "MLP out", rgb: "139,59,240" },
+    ],
+    note: "brightness ↑ with layer depth",
+    create: () => new WeightSpectrumDriver(),
+  },
+  {
+    id: "embedding-constellation",
+    n: 15,
+    label: "Embedding Constellation",
+    group: "weights",
+    blurb:
+      "Every one of GPT-2's 50,257 token embeddings W_E[i], placed at its exact " +
+      "score on the top two principal axes of the mean-centered embedding matrix. " +
+      "Star size = the real row norm ‖W_E[i]‖₂; color = a real orthographic " +
+      "property (does the token begin with a space). The leading axes organize " +
+      "tokens by SURFACE FORM — leading space, case, digits, the commonest " +
+      "function words at the PC1 extreme — far more than by meaning. PC1+PC2 " +
+      "explain only ~2.6% of the variance, so this is honestly a low-dimensional " +
+      "shadow of a 768-D space; hover any star for its exact PC1/PC2/PC3 and norm.",
+    math:
+      "Wc = W_E − mean_row(W_E); eigendecompose the 768×768 covariance WcᵀWc for " +
+      "its top axes V; coords = Wc·V (exact PC scores). size ∝ ‖W_E[i]‖₂. " +
+      "Axes drawn to one isometric scale, so on-screen distance is faithful.",
+    source:
+      "embed.json — PCA of the token embedding matrix W_E (50257×768) computed " +
+      "offline in float64 (covariance eigendecomposition). Coords rounded to 3 dp; " +
+      "leading-space and norm are exact per-token quantities. No layout synthesis.",
+    legend: [
+      { label: "token with leading space · ␣word", rgb: "245,190,92" },
+      { label: "token with no leading space · word", rgb: "92,198,236" },
+      { label: "star size = embedding norm ‖W_E‖₂", rgb: "205,210,224" },
+    ],
+    note: "PC1+PC2 ≈ 2.6% of variance — a shadow, not the whole space",
+    legendCorner: "tr",
+    create: () => new EmbeddingConstellationDriver(),
+  },
+  {
+    id: "logit-lens-tunnel",
+    n: 3,
+    label: "Logit-Lens Tunnel",
+    group: "forward",
+    blurb:
+      "The logit lens: decode the last-position residual stream through the " +
+      "model's own unembedding at every layer. Each row is one layer's real " +
+      "next-token distribution (layer 0 = raw embedding, bottom → final layer, " +
+      "top); every cell's width is that token's probability. The faint track is " +
+      "the full 0..1 scale, so the unfilled part is the tail mass beyond the " +
+      "top-k. The final answer is traced in gold as it sharpens up the stack.",
+    math:
+      "For each layer ℓ, logits_ℓ = LayerNorm_f(x_ℓ[last])·W_U; P_ℓ = softmax(logits_ℓ). " +
+      "Row ℓ shows top-6 of P_ℓ; cell width = P. Layer 0 lenses the raw embedding.",
+    source:
+      "trace_*.json → logit_lens_last: the last-position residual at every layer " +
+      "(0=embed…12) decoded through the model's own final LN + unembedding W_U.",
+    legend: [
+      { label: "final-layer top-1 token (the answer)", rgb: "245,195,59" },
+      { label: "any other top-k token · width = P", rgb: "96,165,224" },
+    ],
+    note: "layer 0 (embed) at bottom → final layer at top",
+    legendCorner: "br",
+    create: () => new LogitLensTunnelDriver(),
+  },
+  {
+    id: "attention-flow",
+    n: 7,
+    label: "Attention-Head Flow",
+    group: "forward",
+    blurb:
+      "Post-softmax attention of one head from a real forward pass. Left = query " +
+      "tokens, right = key tokens; each line's width & opacity scale with the " +
+      "attention probability attn[i][j] (rows are a causal softmax → sum to 1, " +
+      "j ≤ i). Pick any of the 12×12 heads — cells are tinted by attention focus " +
+      "(1 − mean normalized row entropy).",
+    math:
+      "attn[l,h,i,j] = softmax_j(QKᵀ/√d_head + causal mask)[i,j], Σ_j attn = 1, j ≤ i. " +
+      "Head focus = 1 − mean_i H(attn[l,h,i,:])/log(i+1) (normalized row entropy).",
+    source:
+      "trace_*.json → attn (n_layer×n_head×T×T), the actual post-softmax attention " +
+      "probabilities captured on the forward pass (rounded for transport, not smoothed).",
+    legend: [
+      { label: "query→key · width+opacity ∝ attn", rgb: "245,195,59" },
+      { label: "key column", rgb: "70,200,235" },
+    ],
+    note: "hover a line for the exact weight · hover a token to isolate it",
+    legendCorner: "br",
+    create: () => new AttentionFlowDriver(),
+  },
+  {
+    id: "attention-rollout",
+    n: 23,
+    label: "Attention-Rollout Waterfall",
+    group: "forward",
+    blurb:
+      "Attention rollout (Abnar & Zuidema 2020): the cumulative product of the " +
+      "residual-augmented, head-averaged attention maps, Ã_l = ½·mean_h A_l + ½·I, " +
+      "R_d = Ã_d···Ã_0. Cell (i,j) = how much source token j reaches destination " +
+      "token i after layers 0..d — each row is a distribution (sums to 1), strictly " +
+      "causal (j ≤ i). Scrub or play the depth to watch mixing cascade onto the " +
+      "first-token sink. Color is log₁₀ (values span orders of magnitude).",
+    math:
+      "A_l = mean_h attn[l]; Ã_l = row_normalize(½·A_l + ½·I); R_d = Ã_d·Ã_{d−1}···Ã_0. " +
+      "Each R_d row sums to 1 and is causal; R_d[i,j] = j's contribution to i thru layer d.",
+    source:
+      "trace_*.json → attn, head-averaged then rolled out in-browser (float64). " +
+      "Method: Abnar & Zuidema, “Quantifying Attention Flow in Transformers” (2020).",
+    legend: [
+      { label: "high rollout weight (log₁₀ color)", rgb: "245,205,90" },
+      { label: "low / zero", rgb: "46,52,96" },
+    ],
+    note: "click a row to isolate one token's provenance · hover for exact value",
+    legendCorner: "br",
+    create: () => new AttentionRolloutDriver(),
+  },
+  {
+    id: "residual-ribbon",
+    n: 8,
+    label: "Residual-Stream Ribbon",
+    group: "forward",
+    blurb:
+      "The L2 norm ‖x‖₂ of every token's residual-stream vector at each layer of a " +
+      "real forward pass (resid_norm[layer][token]; layer 0 = token+position " +
+      "embedding, 1..12 = after each block). One ribbon per token, left→right " +
+      "across depth. y is log₁₀‖x‖₂ — the norm grows geometrically with depth and " +
+      "one token usually balloons into a massive activation that dwarfs the rest, " +
+      "so log-y keeps every trajectory legible while preserving order.",
+    math:
+      "y = log₁₀‖x_ℓ(t)‖₂ where x_ℓ(t) is token t's residual vector at layer ℓ " +
+      "(ℓ=0 embedding, 1..12 after each block). Growth factor = ‖x_final‖/‖x_embed‖.",
+    source:
+      "trace_*.json → resid_norm ((n_layer+1)×T), the exact Euclidean norm of the " +
+      "residual stream captured per token per layer on the forward pass.",
+    legend: [
+      { label: "one ribbon per token · hue = position", rgb: "245,195,59" },
+      { label: "decade gridline ‖x‖ = 10ᵏ", rgb: "148,140,165" },
+    ],
+    note: "log₁₀ y · hover a node for the exact norm + embed→final growth",
+    legendCorner: "tr",
+    create: () => new ResidualRibbonDriver(),
+  },
+  {
+    id: "probability-simplex",
+    n: 18,
+    label: "Probability Simplex",
+    group: "forward",
+    blurb:
+      "The final next-token distribution on a true 2-simplex (ternary plot). " +
+      "Corners are the top-1 token, the top-2 token, and “all other tokens”; the " +
+      "point's barycentric coordinates are the EXACT probabilities (p₁, p₂, p_rest) " +
+      "with no renormalization — so a confident prediction sits in a corner and an " +
+      "unconfident one sits toward “other”. GPT-2 is often unconfident: on the " +
+      "Eiffel prompt the top-3 hold only ~14% of the mass, so the point sits near " +
+      "“other”, not near “ Paris”. The bars give the full top-12 + the ranks-13+ tail.",
+    math:
+      "P = softmax(final logits); p₁,p₂ = its two largest, p_rest = 1−p₁−p₂. " +
+      "Barycentric point = p₁·A + p₂·B + p_rest·C on triangle A,B,C — no renormalization.",
+    source:
+      "trace_*.json → final_topk (top-12 (token,prob) at the last position). The " +
+      "tail (ranks 13+) = 1 − Σ top-12 is shown explicitly; nothing is hidden.",
+    legend: [
+      { label: "top-1 token corner · p₁", rgb: "245,195,59" },
+      { label: "top-2 token corner · p₂", rgb: "96,165,224" },
+      { label: "all other tokens (rank ≥3) · p_rest", rgb: "123,130,156" },
+    ],
+    note: "no renormalization — position IS the true probability · switch prompts to compare",
+    legendCorner: "br",
+    create: () => new ProbabilitySimplexDriver(),
+  },
+];
+
+export function findFeature(id: string): InterpFeature | undefined {
+  return INTERP_FEATURES.find((f) => f.id === id);
+}
+
+export const GROUP_LABEL: Record<InterpFeature["group"], string> = {
+  weights: "Weights",
+  forward: "Forward pass",
+  sae: "SAE features",
+  trained: "Trained probe",
+  live: "Live prompt",
+};

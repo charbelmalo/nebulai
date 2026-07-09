@@ -12,8 +12,21 @@ import type { DatasetEntry } from "../data/schema";
 export type ViewMode = "atlas" | "chord" | "hierarchy" | "compare";
 
 /** Top-level page — nav-bar controlled. `map` is the semantic cloud (all the
- *  driver-backed views); `snapshot` is the per-topic conversation-log map. */
-export type Page = "map" | "snapshot";
+ *  driver-backed views); `snapshot` is the per-topic conversation-log map;
+ *  `interp` is the Internals gallery (mechanistic-interpretability drivers, each
+ *  rendering one real computed quantity from an interp bundle); `guide`
+ *  documents the exact math + source data behind every live feature. */
+export type Page = "map" | "snapshot" | "interp" | "guide";
+
+/** Internals-page UI state. `featureId` selects which InterpDriver owns the
+ *  interp canvas (must match a registered feature id in scene/interp/registry).
+ *  The active model is read from `datasetId` — the bundles live per-model.
+ *  `traceSlug` selects which per-prompt forward trace the forward-group features
+ *  render (weight-group features ignore it). "" means "use the first trace". */
+export interface InterpUI {
+  featureId: string;
+  traceSlug: string;
+}
 
 /** One saved topic filter — a named bag of keywords the snapshot map watches
  *  for in conversation logs. Ships with a couple of defaults (design,
@@ -172,6 +185,7 @@ export interface AppState {
   settingsOpen: boolean; // Settings page overlay visibility
   page: Page;
   snapshot: SnapshotState;
+  interp: InterpUI;
 
   setCapabilities(c: Capabilities): void;
   setDatasets(d: DatasetEntry[]): void;
@@ -199,6 +213,8 @@ export interface AppState {
   resetProgress(): void;
   setSettingsOpen(open: boolean): void;
   setPage(p: Page): void;
+  setInterpFeature(id: string): void;
+  setInterpTrace(slug: string): void;
   addSnapshotLog(log: SnapshotLog): void;
   removeSnapshotLog(id: string): void;
   setActiveLog(id: string | null): void;
@@ -350,10 +366,11 @@ export const appStore = createStore<AppState>()((set) => ({
     logs: [],
     activeLogId: null,
     topics: DEFAULT_TOPICS,
-    activeTopicId: DEFAULT_TOPICS[0].id,
+    activeTopicId: DEFAULT_TOPICS[0]?.id ?? "",
     turnIndex: 0,
     playing: false,
   },
+  interp: { featureId: "weight-spectrum", traceSlug: "" },
 
   setCapabilities: (capabilities) => set({ capabilities }),
   setDatasets: (datasets) => set({ datasets }),
@@ -411,6 +428,10 @@ export const appStore = createStore<AppState>()((set) => ({
     }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
   setPage: (page) => set({ page }),
+  setInterpFeature: (featureId) =>
+    set((s) => ({ interp: { ...s.interp, featureId } })),
+  setInterpTrace: (traceSlug) =>
+    set((s) => ({ interp: { ...s.interp, traceSlug } })),
   addSnapshotLog: (log) =>
     set((s) => ({
       snapshot: {

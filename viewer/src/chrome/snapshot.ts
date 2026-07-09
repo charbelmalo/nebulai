@@ -170,6 +170,7 @@ export function analyzeSnapshot(
   const cap = Math.min(turnIndex, log.turns.length - 1);
   for (let i = 0; i <= cap; i++) {
     const turn = log.turns[i];
+    if (!turn) continue;
     const matched = new Set<string>();
     for (const { k, re } of patterns) {
       re.lastIndex = 0;
@@ -190,13 +191,16 @@ export function analyzeSnapshot(
     const arr = [...set].sort();
     for (let a = 0; a < arr.length; a++) {
       for (let b = a + 1; b < arr.length; b++) {
-        const key = `${arr[a]}::${arr[b]}`;
+        const ka = arr[a];
+        const kb = arr[b];
+        if (ka === undefined || kb === undefined) continue;
+        const key = `${ka}::${kb}`;
         const existing = edgeMap.get(key);
         if (existing) {
           existing.weight++;
           existing.lastTurn = Math.max(existing.lastTurn, i);
         } else {
-          edgeMap.set(key, { a: arr[a], b: arr[b], weight: 1, lastTurn: i });
+          edgeMap.set(key, { a: ka, b: kb, weight: 1, lastTurn: i });
         }
       }
     }
@@ -225,8 +229,10 @@ export function layoutRadial(
   if (keywords.length === 0) return out;
   const step = (Math.PI * 2) / keywords.length;
   for (let i = 0; i < keywords.length; i++) {
+    const kw = keywords[i];
+    if (kw === undefined) continue;
     const theta = -Math.PI / 2 + i * step;
-    out.set(keywords[i], {
+    out.set(kw, {
       x: cx + Math.cos(theta) * radius,
       y: cy + Math.sin(theta) * radius,
     });
