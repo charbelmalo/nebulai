@@ -33,6 +33,7 @@ export interface SessionTurn {
   tMs: number | null; // wall-clock epoch ms, null if the line lacked a timestamp
   tSec: number; // seconds since the first timestamped event (0 if unknown)
   isSidechain: boolean; // true when emitted by a spawned sub-agent
+  agentId: string; // "main" or the spawning tool_use id — the agent's own context
   model: string | null;
 
   // real token accounting (counted ONCE per requestId)
@@ -96,6 +97,7 @@ export interface SessionAnalysis {
   filesTouched: [string, number][]; // path → touch count, descending
   errorCount: number; // tool_result blocks flagged is_error
   sidechainTurns: number; // assistant turns from sub-agents
+  subAgentCount: number; // distinct sub-agent spawns (parent_tool_use_id values)
   categoryTotals: Record<ToolCategory, number>; // turns per dominant category
 
   authoritative: SessionAuthoritative | null; // result-line ground truth, if any
@@ -194,6 +196,7 @@ interface Acc {
   requestId: string;
   tMs: number | null;
   isSidechain: boolean;
+  parentToolUseId: string | null; // spawning tool_use id for sub-agent turns
   model: string | null;
   usage: Record<string, number>; // per-field MAX across the group's streamed lines
   tools: string[];
@@ -333,6 +336,7 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
           requestId: rid,
           tMs: ts,
           isSidechain: !!o.isSidechain || o.parent_tool_use_id != null,
+          parentToolUseId: o.parent_tool_use_id ?? null,
           model: o.message?.model ?? null,
           usage: {},
           tools: [],
@@ -348,7 +352,10 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
       if (acc.tMs === null && ts !== null) acc.tMs = ts;
       else if (ts !== null && ts > (acc.tMs ?? 0)) acc.tMs = ts; // last line = response end
       mergeUsageMax(acc.usage, o.message?.usage);
-      if (o.parent_tool_use_id != null) acc.isSidechain = true;
+      if (o.parent_tool_use_id != null) {
+        acc.isSidechain = true;
+        if (acc.parentToolUseId == null) acc.parentToolUseId = o.parent_tool_use_id;
+      }
       if (!acc.model && o.message?.model) acc.model = o.message.model;
       if (!model && o.message?.model && o.parent_tool_use_id == null) model = o.message.model;
 
@@ -394,6 +401,7 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
   let contextPeak = 0;
   let cacheWritePeak = 0;
   let sidechainTurns = 0;
+  const subAgents = new Set<string>();
 
   reqOrder.forEach((rid, i) => {
     const acc = byReq.get(rid);
@@ -409,6 +417,7 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
     if (cr > contextPeak) contextPeak = cr;
     if (cw > cacheWritePeak) cacheWritePeak = cw;
     if (acc.isSidechain) sidechainTurns++;
+    if (acc.parentToolUseId) subAgents.add(acc.parentToolUseId);
     const category = dominantCategory(acc.tools);
     categoryTotals[category]++;
     for (const t of acc.tools) toolCounts.set(t, (toolCounts.get(t) ?? 0) + 1);
@@ -420,6 +429,7 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
       tMs: acc.tMs,
       tSec: acc.tMs !== null && t0 !== null ? (acc.tMs - t0) / 1000 : 0,
       isSidechain: acc.isSidechain,
+      agentId: acc.parentToolUseId ?? "main",
       model: acc.model,
       inputTokens: inp,
       outputTokens: out,
@@ -495,6 +505,7 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
     filesTouched,
     errorCount,
     sidechainTurns,
+    subAgentCount: subAgents.size,
     categoryTotals,
     authoritative,
     loadedAt: Date.now(),

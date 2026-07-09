@@ -70,6 +70,12 @@ interface TickLabel {
   anchor: "start" | "middle" | "end";
 }
 
+interface PathEntry {
+  path: [number, number, number][];
+  color: [number, number, number];
+  isSub: boolean; // sub-agent excursion (own context window) vs main spine
+}
+
 /** golden-angle hue → rgb, for per-session path tinting. */
 function sessionHue(i: number): [number, number, number] {
   const h = (i * 137.508) % 360;
@@ -313,14 +319,16 @@ export class SessionPlotDriver {
       new PathLayer({
         id: "session-paths",
         data: this.pathData(),
-        getPath: (d: { path: [number, number, number][]; color: [number, number, number] }) => d.path,
-        getColor: (d: { color: [number, number, number] }) =>
-          [...d.color, 150] as [number, number, number, number],
-        getWidth: 2,
+        getPath: (d: PathEntry) => d.path,
+        // sub-agent excursions get a dimmer, thinner line so the main trajectory
+        // reads as the session's real context spine (each agent is its own window)
+        getColor: (d: PathEntry) => [...d.color, d.isSub ? 70 : 165] as [number, number, number, number],
+        getWidth: (d: PathEntry) => (d.isSub ? 1.2 : 2),
         widthUnits: "pixels",
         capRounded: true,
         jointRounded: true,
         billboard: true,
+        updateTriggers: { getColor: this.nodes.length, getWidth: this.nodes.length },
       }),
       new ScatterplotLayer({
         id: "session-nodes",
@@ -356,25 +364,33 @@ export class SessionPlotDriver {
     this.deck.setProps({ layers, viewState: { orbit: this.viewState } });
   }
 
-  private pathData(): { path: [number, number, number][]; color: [number, number, number] }[] {
-    const bySession = new Map<string, { path: [number, number, number][]; color: [number, number, number] }>();
-    // rebuild per-session ordered paths from segments would lose order; use nodes
-    const order: string[] = [];
+  /** One polyline PER AGENT, not per session. A session's main agent and each
+   *  spawned sub-agent have SEPARATE context windows; connecting them with one
+   *  line would draw a false sawtooth (main context "collapsing" to a sub-agent's
+   *  fresh window and back). We split by (sessionId, agentId) so each agent's
+   *  turns are joined only to its own, in time order. Hue is per session so all
+   *  its agents share a colour; sub-agent lines are flagged for dimmer styling. */
+  private pathData(): PathEntry[] {
+    const byAgent = new Map<string, PathEntry>();
+    const sessionHueIdx = new Map<string, number>();
+    const agentOrder: string[] = [];
     for (const n of this.nodes) {
-      let e = bySession.get(n.sessionId);
+      if (!sessionHueIdx.has(n.sessionId)) sessionHueIdx.set(n.sessionId, sessionHueIdx.size);
+      const agentId = n.turn.agentId ?? "main"; // tolerate pre-agentId persisted records
+      const key = `${n.sessionId}::${agentId}`;
+      let e = byAgent.get(key);
       if (!e) {
-        e = { path: [], color: [200, 200, 210] };
-        bySession.set(n.sessionId, e);
-        order.push(n.sessionId);
+        e = {
+          path: [],
+          color: sessionHue(sessionHueIdx.get(n.sessionId) ?? 0),
+          isSub: agentId !== "main",
+        };
+        byAgent.set(key, e);
+        agentOrder.push(key);
       }
       e.path.push(n.position);
     }
-    // colour each session path by its hue (index in first-seen order)
-    order.forEach((id, i) => {
-      const e = bySession.get(id);
-      if (e) e.color = sessionHue(i);
-    });
-    return [...bySession.values()].filter((e) => e.path.length >= 2);
+    return agentOrder.map((k) => byAgent.get(k)!).filter((e) => e.path.length >= 2);
   }
 
   private onHover(info: PickingInfo): void {

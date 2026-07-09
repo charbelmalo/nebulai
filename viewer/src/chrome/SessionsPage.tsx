@@ -316,8 +316,11 @@ function SessionsStats(props: { sessions: SessionAnalysis[] }) {
           <div class="sessions-stat-row">
             <Stat label="tools" value={`${a.toolTotal}`} />
             <Stat label="files" value={`${a.filesTouched.length}`} />
-            <Stat label={a.sidechainTurns > 0 ? "sub-agent" : "errors"}
-              value={a.sidechainTurns > 0 ? `${a.sidechainTurns}` : `${a.errorCount}`} />
+            {a.subAgentCount > 0 ? (
+              <Stat label="sub-agents" value={`${a.subAgentCount} · ${a.sidechainTurns}t`} />
+            ) : (
+              <Stat label="errors" value={`${a.errorCount}`} />
+            )}
           </div>
           {a.toolHistogram.length > 0 && (
             <div class="sessions-stat-tools">
