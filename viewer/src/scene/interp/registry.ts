@@ -20,6 +20,7 @@ import { EmbeddingConstellationDriver } from "./EmbeddingConstellationDriver";
 import { FourierAtlasDriver } from "./FourierAtlasDriver";
 import type { InterpFeature } from "./InterpDriver";
 import { LogitLensTunnelDriver } from "./LogitLensTunnelDriver";
+import { NeuronFieldDriver } from "./NeuronFieldDriver";
 import { ProbabilitySimplexDriver } from "./ProbabilitySimplexDriver";
 import { ResidualRibbonDriver } from "./ResidualRibbonDriver";
 import { WeightSpectrumDriver } from "./WeightSpectrumDriver";
@@ -103,6 +104,40 @@ export const INTERP_FEATURES: InterpFeature[] = [
     note: "PC1+PC2 ≈ 2.6% of variance — a shadow, not the whole space",
     legendCorner: "tr",
     create: () => new EmbeddingConstellationDriver(),
+  },
+  {
+    id: "neuron-field",
+    n: 6,
+    label: "Neuron Write-Direction Field",
+    group: "weights",
+    blurb:
+      "All 36,864 MLP neurons (12 layers × 3072), each placed at the exact PCA " +
+      "score of its write direction — the row of mlp.c_proj the neuron adds to " +
+      "the residual stream, scaled by its activation. Dot size = the real write " +
+      "norm ‖w_out‖₂; the median norm grows monotonically with depth (≈2.2 at " +
+      "layer 0 → ≈5.2 at layer 11 — late layers write hardest). Hover any neuron " +
+      "for its exact PCs, norm, and direct-path logit readout: the token its " +
+      "direction most promotes and most suppresses through the tied unembedding. " +
+      "PC1+PC2 explain only ~3.3% of variance — a low-D shadow, not the space.",
+    math:
+      "rows = stack_L(W_out^L) ((n_layer·d_mlp)×d); Rc = rows − mean_row; " +
+      "eig(RcᵀRc) → top axes V; coords = Rc·V (exact PC scores). readout " +
+      "ℓ = ((w − mean(w)) ⊙ γ_f)·W_Eᵀ — final-LN centering + gain, dropping only " +
+      "the positive 1/σ scalar (rank-preserving). size = ‖w_out‖₂.",
+    source:
+      "neurons.json — PCA of all MLP write directions (rows of mlp.c_proj, " +
+      "36864×768) computed offline in float64 (covariance eigendecomposition), " +
+      "plus each neuron's most-promoted/suppressed token through the tied W_E. " +
+      "Direct path only — no downstream-layer effects, positive activation assumed.",
+    legend: [
+      { label: "layer 0 neuron", rgb: "59,82,138" },
+      { label: "layer 6", rgb: "54,181,120" },
+      { label: "layer 11", rgb: "253,231,37" },
+      { label: "dot size = write norm ‖w_out‖₂", rgb: "205,210,224" },
+    ],
+    note: "direct-path readout only · PC1+PC2 ≈ 3.3% var · click a chip to isolate a layer",
+    legendCorner: "tr",
+    create: () => new NeuronFieldDriver(),
   },
   {
     id: "logit-lens-tunnel",

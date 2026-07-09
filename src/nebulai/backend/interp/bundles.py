@@ -9,6 +9,7 @@ Bundles written by `write_bundles`:
   weights.json    — SVD spectra of every weight matrix           (#21 Weight Spectrum)
   fourier.json    — DFT of positional embeddings W_pe            (#1  Fourier Atlas)
   embed.json      — PCA projection of the token embedding W_E    (#15 Embedding Constellation)
+  neurons.json    — PCA of MLP-neuron write directions W_out     (#6  Neuron Write-Direction Field)
   trace_<slug>.json — one real forward pass per curated prompt   (#3/7/8/18/23 …)
 
 The trace bundle deliberately does NOT store full logits (T×50257 is ~26 MB);
@@ -192,6 +193,105 @@ def compute_embed(m: GPT2Numpy, dims: int = 3) -> dict:
     }
 
 
+def compute_neurons(m: GPT2Numpy, dims: int = 3) -> dict:
+    """#6 Neuron Write-Direction Field — PCA of every MLP neuron's write direction.
+
+    MLP neuron i of layer L contributes h_i · W_out[i] to the residual stream,
+    where W_out = mlp.c_proj.weight (HF Conv1D: shape (d_mlp, d), applied as
+    h @ W — so ROW i is neuron i's write direction). We stack all
+    n_layer × d_mlp rows, mean-center, and project onto the top principal axes
+    of the 768×768 covariance (exact PC scores, float64, no layout synthesis).
+    Neurons are stored in layer order, so layer = floor(i / d_mlp) — the layer
+    array is implicit, not shipped.
+
+    Per neuron we also ship a direct-path logit readout: the token its write
+    direction most promotes and most suppresses through the tied unembedding,
+        ℓ = ((w − mean(w)) ⊙ γ_f) · W_Eᵀ
+    This folds in ln_f's centering (the LN Jacobian projects out the mean) and
+    its gain γ_f, and drops only the per-input 1/σ — a positive scalar, so token
+    RANKING is preserved. Values are logit deltas per unit of (positive) neuron
+    activation via the direct path only (no downstream-layer effects). That
+    caveat is stated in meta and in the viewer.
+    """
+    d, d_mlp = m.d, 4 * m.d
+    blocks = []
+    for L in range(m.n_layer):
+        W = m._g(f"h.{L}.mlp.c_proj.weight")
+        assert W.shape == (d_mlp, d), f"c_proj L{L} shape {W.shape} != ({d_mlp},{d})"
+        blocks.append(W)
+    rows32 = np.concatenate(blocks, axis=0)  # (n_layer*d_mlp, d) float32
+    n = rows32.shape[0]
+
+    # --- exact PCA of the write directions (float64) ---
+    rows = rows32.astype(np.float64)
+    mu = rows.mean(axis=0)
+    Rc = rows - mu
+    cov = Rc.T @ Rc  # (d, d)
+    evals, evecs = np.linalg.eigh(cov)
+    order = np.argsort(evals)[::-1]
+    evals = evals[order]
+    evecs = evecs[:, order]
+    axes = evecs[:, :dims]
+    # deterministic sign per axis (same convention as compute_embed)
+    for j in range(dims):
+        k = int(np.argmax(np.abs(axes[:, j])))
+        if axes[k, j] < 0:
+            axes[:, j] = -axes[:, j]
+    coords = Rc @ axes  # (n, dims)
+    evr = evals[:dims] / evals.sum()
+    norms = np.linalg.norm(rows, axis=1)  # exact ‖w_out‖₂ per neuron
+
+    # --- direct-path logit readout through the tied unembedding (float32) ---
+    g_f = m._g("ln_f.weight")  # (d,)
+    v = (rows32 - rows32.mean(axis=1, keepdims=True)) * g_f  # LN-centered ⊙ gain
+    top_tok: list[str] = []
+    top_val: list[float] = []
+    bot_tok: list[str] = []
+    bot_val: list[float] = []
+    chunk = 2048
+    for s in range(0, n, chunk):
+        lg = v[s : s + chunk] @ m.wte.T  # (chunk, V) logit deltas
+        hi = np.argmax(lg, axis=1)
+        lo = np.argmin(lg, axis=1)
+        r = np.arange(lg.shape[0])
+        top_tok += [m.decode1(int(t)) for t in hi]
+        top_val += [round(float(x), 2) for x in lg[r, hi]]
+        bot_tok += [m.decode1(int(t)) for t in lo]
+        bot_val += [round(float(x), 2) for x in lg[r, lo]]
+
+    xy = coords[:, :2].reshape(-1)
+    z = coords[:, 2] if dims >= 3 else np.zeros(n)
+    return {
+        "meta": {
+            "model": m.model_id,
+            "created": _now(),
+            "quantity": "PCA of MLP-neuron write directions (rows of mlp.c_proj) "
+            "+ direct-path logit readout per neuron",
+            "formula": "rows = stack_L(c_proj_L) (n_layer·d_mlp × d); "
+            "Rc = rows − mean_row; eig(RcᵀRc) → top-k axes V; coords = Rc·V. "
+            "readout ℓ = ((w − mean(w)) ⊙ γ_f)·W_Eᵀ (drops only the positive "
+            "1/σ scalar — rank-preserving); size = ‖w_out‖₂.",
+            "note": "layer implicit: layer = floor(i/d_mlp), neurons stored in "
+            "layer order. readout = direct path only, assumes positive "
+            "activation. coords rounded to 3 dp for transport.",
+            "n_layer": m.n_layer,
+            "d_mlp": d_mlp,
+            "d": m.d,
+        },
+        "n": int(n),
+        "dims": dims,
+        "explained_variance_ratio": [round(float(x), 5) for x in evr],
+        "total_variance": round(float(evals.sum()), 3),
+        "coords": [round(float(x), 3) for x in xy],  # flat 2n (PC1, PC2)
+        "z": [round(float(x), 3) for x in z],  # PC3 (hover only)
+        "norm": [round(float(x), 3) for x in norms],
+        "top_tok": top_tok,
+        "top_val": top_val,
+        "bot_tok": bot_tok,
+        "bot_val": bot_val,
+    }
+
+
 def _logit_lens_topk(m: GPT2Numpy, resid_row: np.ndarray, k: int = 6) -> list:
     lg = m.logit_lens(resid_row)
     lg = lg - lg.max()
@@ -274,6 +374,7 @@ def write_bundles(
     dump("weights.json", compute_weights(m))
     dump("fourier.json", compute_fourier(m))
     dump("embed.json", compute_embed(m))
+    dump("neurons.json", compute_neurons(m))
 
     traces_index = []
     for prompt in prompts or DEFAULT_PROMPTS:

@@ -65,6 +65,36 @@ export interface EmbedBundle {
   strs: string[]; // length n
 }
 
+/** PCA of every MLP neuron's write direction (#6 Neuron Write-Direction Field).
+ *  Neurons are stored in layer order — layer = floor(i / meta.d_mlp), neuron
+ *  index within the layer = i % meta.d_mlp. `coords` is flat [PC1₀, PC2₀, …];
+ *  `norm` is the exact ‖w_out‖₂ per neuron; `top_*`/`bot_*` are the direct-path
+ *  logit readout through the tied unembedding (the token each write direction
+ *  most promotes / most suppresses — no downstream-layer effects). */
+export interface NeuronsBundle {
+  meta: {
+    model: string;
+    created: string;
+    quantity: string;
+    formula: string;
+    note: string;
+    n_layer: number;
+    d_mlp: number;
+    d: number;
+  };
+  n: number;
+  dims: number;
+  explained_variance_ratio: number[]; // per PC
+  total_variance: number;
+  coords: number[]; // flat 2·n (PC1, PC2)
+  z: number[]; // PC3, length n
+  norm: number[]; // ‖w_out‖₂, length n
+  top_tok: string[]; // most-promoted token per neuron
+  top_val: number[]; // its Δlogit per unit activation (direct path)
+  bot_tok: string[]; // most-suppressed token per neuron
+  bot_val: number[]; // its Δlogit (negative)
+}
+
 /** [token string, probability] — the honest readout unit for lens/next-token. */
 export type LensTopk = [string, number][];
 
@@ -128,6 +158,9 @@ export const loadFourier = (model: string, base = "/out") =>
 
 export const loadEmbed = (model: string, base = "/out") =>
   fetchJSON<EmbedBundle>(`${interpBase(model, base)}/embed.json`);
+
+export const loadNeurons = (model: string, base = "/out") =>
+  fetchJSON<NeuronsBundle>(`${interpBase(model, base)}/neurons.json`);
 
 export const loadTrace = (model: string, slug: string, base = "/out") =>
   fetchJSON<TraceBundle>(`${interpBase(model, base)}/trace_${slug}.json`);
