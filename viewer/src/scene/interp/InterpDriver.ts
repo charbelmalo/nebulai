@@ -67,6 +67,10 @@ export interface InterpFeature {
    *  renders per-prompt encoder activations but belongs to the sae group). All
    *  forward-group features are implicitly per-trace. */
   perTrace?: boolean;
+  /** True for forward-group features that carry their OWN prompt set (e.g. the
+   *  patching pairs) — suppresses the shared trace selector, which would
+   *  otherwise imply it filters a view it doesn't affect. */
+  ownPrompts?: boolean;
   /** True for full-bleed boards where the open legend card would sit on top of
    *  data in every corner — the legend then defaults to its collapsed pill
    *  (the user's toggle still overrides, sticky for the session). */

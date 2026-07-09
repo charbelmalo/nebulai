@@ -25,6 +25,7 @@ import { LogitAttribDriver } from "./LogitAttribDriver";
 import { LogitLensTunnelDriver } from "./LogitLensTunnelDriver";
 import { NeuronFieldDriver } from "./NeuronFieldDriver";
 import { OVEigenDriver } from "./OVEigenDriver";
+import { PatchingMapDriver } from "./PatchingMapDriver";
 import { ProbabilitySimplexDriver } from "./ProbabilitySimplexDriver";
 import { ResidualRibbonDriver } from "./ResidualRibbonDriver";
 import { SAEConstellationDriver } from "./SAEConstellationDriver";
@@ -428,6 +429,48 @@ export const INTERP_FEATURES: InterpFeature[] = [
     legendCorner: "br",
     legendCollapsed: true,
     create: () => new LogitAttribDriver(),
+  },
+  {
+    id: "causal-patching",
+    n: 14,
+    label: "Causal Patching Map",
+    group: "forward",
+    blurb:
+      "Where does the answer causally live? Run a matched clean/corrupt " +
+      "prompt pair (swap one name, one country, one word), then for every " +
+      "(layer, position) copy a single clean residual row into the corrupt " +
+      "forward and let it finish — every cell is a real intervention, a full " +
+      "patched forward pass. Color = how much of the clean-vs-corrupt answer " +
+      "logit gap that one patch recovers. Unlike attribution (#13), this is " +
+      "causal: r = 1 means that row alone flips the run. The IOI pair " +
+      "reproduces the published circuit shape by intervention — the swapped " +
+      "name position carries everything through L8, then the signal hands " +
+      "off to the final position at L9, exactly where #13's name-mover heads " +
+      "write the margin. Fact recall (Paris/Rome) hands off later, at L10.",
+    math:
+      "r[i,p] = (LD_patched − LD_corrupt) / (LD_clean − LD_corrupt), where " +
+      "LD = logit(ans_clean) − logit(ans_corrupt) at the final position and " +
+      "the patch copies resid_i[p] (the residual entering block i) from the " +
+      "clean forward into the corrupt one, resuming blocks i…11 + ln_f in " +
+      "the model's own float32. Answers are designated single-token " +
+      "contrasts (published convention); each answer's rank in its own run " +
+      "is printed in the header.",
+    source:
+      "patch.json — 312 real patched forward resumes over 3 matched pairs. " +
+      "Resume path verified: unpatched resume from every layer reproduces " +
+      "the corrupt logits (worst |Δ| 3e-5); full patch at layer 0 reproduces " +
+      "the clean logits; patching an identical token's row is a no-op. Raw " +
+      "patched LDs exported next to r — nothing hides in normalization.",
+    legend: [
+      { label: "recovers the clean answer (r → 1)", rgb: "245,195,59" },
+      { label: "pushes further corrupt (r < 0)", rgb: "96,150,255" },
+      { label: "≈0 — the patch did nothing", rgb: "118,126,158" },
+    ],
+    note: "true interventions, not attribution · color clamps |r| ≤ 1, exact value in hover · single-site patches can understate redundant circuits",
+    legendCorner: "br",
+    legendCollapsed: true,
+    ownPrompts: true,
+    create: () => new PatchingMapDriver(),
   },
   {
     id: "sae-decoder",

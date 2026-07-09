@@ -294,6 +294,39 @@ export interface AttribBundle {
   traces: AttribTrace[];
 }
 
+/** One matched clean/corrupt prompt pair with its full patching grid. */
+export interface PatchPair {
+  slug: string;
+  clean: string;
+  corrupt: string;
+  clean_strs: string[];
+  corrupt_strs: string[];
+  T: number;
+  /** positions where the two prompts' tokens differ */
+  diff_pos: number[];
+  /** [token str, logit in its own run, p in its own run, rank in its own run] */
+  ans_clean: [string, number, number, number];
+  ans_corrupt: [string, number, number, number];
+  ld_clean: number;
+  ld_corrupt: number;
+  /** raw patched logit-diffs, flat (n_layer+1)·T row-major (layer, pos) */
+  ld: number[];
+  /** normalized recovery r = (ld − ld_corrupt)/(ld_clean − ld_corrupt), same shape */
+  r: number[];
+}
+
+export interface PatchBundle {
+  meta: {
+    model: string;
+    created: string;
+    quantity: string;
+    formula: string;
+    note: string;
+    n_layer: number;
+  };
+  pairs: PatchPair[];
+}
+
 /** [token string, probability] — the honest readout unit for lens/next-token. */
 export type LensTopk = [string, number][];
 
@@ -375,6 +408,9 @@ export const loadAttrib = (model: string, base = "/out") =>
 
 export const loadComp = (model: string, base = "/out") =>
   fetchJSON<CompBundle>(`${interpBase(model, base)}/comp.json`);
+
+export const loadPatch = (model: string, base = "/out") =>
+  fetchJSON<PatchBundle>(`${interpBase(model, base)}/patch.json`);
 
 export const loadHeads = (model: string, base = "/out") =>
   fetchJSON<HeadsBundle>(`${interpBase(model, base)}/heads.json`);

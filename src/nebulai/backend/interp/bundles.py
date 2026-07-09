@@ -15,6 +15,7 @@ Bundles written by `write_bundles`:
   comp.json       — Q/K/V composition between cross-layer heads  (#2c Composition Web)
   sae_acts.json   — SAE encoder activations on the bundled prompts (#5 Firing Piano-Roll)
   attrib.json     — direct logit attribution of the final margin (#13 Logit Attribution)
+  patch.json      — residual-stream activation patching grids    (#14 Causal Patching Map)
   trace_<slug>.json — one real forward pass per curated prompt   (#3/7/8/18/23 …)
 
 The trace bundle deliberately does NOT store full logits (T×50257 is ~26 MB);
@@ -31,7 +32,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .gpt2_numpy import GPT2Numpy, Trace, _gelu_new, _layernorm
+from .gpt2_numpy import GPT2Numpy, Trace, _gelu_new, _layernorm, _softmax
 
 # Curated prompts chosen for legible circuits, not cherry-picked outputs:
 #  - factual recall (capital / landmark)
@@ -946,6 +947,151 @@ def compute_logit_attrib(m: GPT2Numpy, prompts: list[str] | None = None) -> dict
     }
 
 
+# Matched clean/corrupt prompt pairs for activation patching, with designated
+# single-token answers (the published convention: the metric contrasts the two
+# candidate answers, whether or not either is the run's argmax — each answer's
+# rank in its own run is exported so nothing is overstated). Each pair must
+# tokenize to the same length so residual rows align position-for-position.
+PATCH_PAIRS: list[tuple[str, str, str, str]] = [
+    (
+        "When Mary and John went to the store, John gave a drink to",
+        "When Mary and John went to the store, Mary gave a drink to",
+        " Mary",
+        " John",
+    ),
+    ("The capital of France is", "The capital of Italy is", " Paris", " Rome"),
+    ("The opposite of hot is", "The opposite of cold is", " cold", " hot"),
+]
+
+
+def _forward_from(m: GPT2Numpy, x: np.ndarray, layer_start: int) -> np.ndarray:
+    """Resume the forward pass from a (possibly patched) residual state.
+
+    `x` is the residual stream entering block `layer_start` (i.e. resid[i]
+    from a Trace); runs blocks layer_start..n_layer-1 then final LN + tied
+    unembedding, replicating GPT2Numpy.forward's float32 op order exactly so
+    an unpatched resume reproduces the original logits bit-for-bit. Returns
+    final-position logits (V,)."""
+    T, d, H, dh = x.shape[0], m.d, m.n_head, m.d_head
+    cmask = np.triu(np.full((T, T), -np.inf, dtype=np.float32), k=1)
+    for L in range(layer_start, m.n_layer):
+        p = f"h.{L}."
+        xn, _ = _layernorm(x, m._g(p + "ln_1.weight"), m._g(p + "ln_1.bias"))
+        qkv = xn @ m._g(p + "attn.c_attn.weight") + m._g(p + "attn.c_attn.bias")
+        q, k, v = np.split(qkv, 3, axis=-1)
+        q = q.reshape(T, H, dh).transpose(1, 0, 2)
+        k = k.reshape(T, H, dh).transpose(1, 0, 2)
+        v = v.reshape(T, H, dh).transpose(1, 0, 2)
+        a = _softmax((q @ k.transpose(0, 2, 1)) / np.sqrt(dh) + cmask, axis=-1)
+        ctx = (a @ v).transpose(1, 0, 2).reshape(T, d)
+        x = x + (ctx @ m._g(p + "attn.c_proj.weight") + m._g(p + "attn.c_proj.bias"))
+        xn2, _ = _layernorm(x, m._g(p + "ln_2.weight"), m._g(p + "ln_2.bias"))
+        h = _gelu_new(xn2 @ m._g(p + "mlp.c_fc.weight") + m._g(p + "mlp.c_fc.bias"))
+        x = x + (h @ m._g(p + "mlp.c_proj.weight") + m._g(p + "mlp.c_proj.bias"))
+    xf, _ = _layernorm(x, m._g("ln_f.weight"), m._g("ln_f.bias"))
+    return xf[-1] @ m.wte.T
+
+
+def compute_patching(m: GPT2Numpy, pairs: list[tuple[str, str]] | None = None) -> dict:
+    """Activation patching (causal tracing) over the residual stream.
+
+    For each matched (clean, corrupt) prompt pair: run both forwards, then for
+    every (layer i, position p) copy the CLEAN residual row resid[i][p] into
+    the corrupt forward's state and resume the corrupt forward from block i.
+    The effect is measured as the logit difference between the clean answer
+    and the corrupt answer at the final position, normalized:
+
+        r = (LD_patched − LD_corrupt) / (LD_clean − LD_corrupt)
+
+    r = 0 means the patch did nothing; r = 1 means that single residual row
+    carries everything needed to flip the corrupt run to the clean answer.
+    Unlike attribution, this IS an intervention — r is a causal quantity
+    (with the usual caveat that single-site patches can miss redundancy).
+
+    Row i = the residual stream entering block i (i = 0 is token+position
+    embeddings; i = n_layer is the final residual, where only the last
+    position can still matter — kept, honestly showing exactly that). Raw
+    patched LDs are exported alongside r so nothing hides in normalization."""
+    pairs = pairs or PATCH_PAIRS
+    nL = m.n_layer
+    out_pairs = []
+    for clean, corrupt, ans_c_str, ans_r_str in pairs:
+        tr_c = m.forward(clean)
+        tr_r = m.forward(corrupt)
+        T = len(tr_c.tokens)
+        if len(tr_r.tokens) != T:
+            raise ValueError(f"pair tokenizes to different lengths: {clean!r} / {corrupt!r}")
+        tau = T - 1
+        (a_c,) = m.encode(ans_c_str)  # designated answers must be single tokens
+        (a_r,) = m.encode(ans_r_str)
+        if a_c == a_r:
+            raise ValueError(f"pair has identical answers ({ans_c_str!r}): not a contrast")
+
+        def ld(logits_row: np.ndarray) -> float:
+            return float(logits_row[a_c]) - float(logits_row[a_r])
+
+        ld_clean = ld(tr_c.logits[tau])
+        ld_corrupt = ld(tr_r.logits[tau])
+        denom = ld_clean - ld_corrupt
+
+        grid_ld = np.zeros((nL + 1, T))
+        for i in range(nL + 1):
+            for p_pos in range(T):
+                x = tr_r.resid[i].copy()
+                x[p_pos] = tr_c.resid[i, p_pos]
+                grid_ld[i, p_pos] = ld(_forward_from(m, x, i))
+
+        pr_c = np.exp(tr_c.logits[tau] - tr_c.logits[tau].max())
+        pr_c /= pr_c.sum()
+        pr_r = np.exp(tr_r.logits[tau] - tr_r.logits[tau].max())
+        pr_r /= pr_r.sum()
+        rank_c = int(np.sum(tr_c.logits[tau] > tr_c.logits[tau, a_c])) + 1
+        rank_r = int(np.sum(tr_r.logits[tau] > tr_r.logits[tau, a_r])) + 1
+        grid_r = (grid_ld - ld_corrupt) / denom
+        out_pairs.append({
+            "slug": _slug(clean),
+            "clean": clean,
+            "corrupt": corrupt,
+            "clean_strs": tr_c.token_strs,
+            "corrupt_strs": tr_r.token_strs,
+            "T": T,
+            "diff_pos": [p for p in range(T) if tr_c.tokens[p] != tr_r.tokens[p]],
+            # [str, logit in own run, p in own run, rank in own run]
+            "ans_clean": [ans_c_str, round(float(tr_c.logits[tau, a_c]), 4),
+                          round(float(pr_c[a_c]), 4), rank_c],
+            "ans_corrupt": [ans_r_str, round(float(tr_r.logits[tau, a_r]), 4),
+                            round(float(pr_r[a_r]), 4), rank_r],
+            "ld_clean": round(ld_clean, 4),
+            "ld_corrupt": round(ld_corrupt, 4),
+            "ld": [round(float(v), 4) for v in grid_ld.reshape(-1)],  # row-major (layer, pos)
+            "r": [round(float(v), 4) for v in grid_r.reshape(-1)],
+        })
+
+    return {
+        "meta": {
+            "model": m.model_id,
+            "created": _now(),
+            "quantity": "residual-stream activation patching: normalized recovery "
+            "of the clean-vs-corrupt answer logit difference when one clean "
+            "residual row is patched into the corrupt forward",
+            "formula": "r[i,p] = (LD(patch resid_i[p]←clean, resume corrupt fwd) "
+            "− LD_corrupt) / (LD_clean − LD_corrupt); LD = logit(ans_clean) − "
+            "logit(ans_corrupt) at the final position",
+            "note": "a true intervention (causal), not attribution: each cell is "
+            "one full patched forward resume in the model's own float32. Row i "
+            "is the residual entering block i (row 0 = embeddings; the last row "
+            "is the final residual, where only the last position can matter). "
+            "Answers are designated single-token contrasts (published "
+            "convention), not necessarily the run's argmax — each answer's "
+            "rank in its own run is exported. Single-site patches can "
+            "understate redundant circuits; r can exceed [0,1] and is shown "
+            "as computed. Raw patched LDs exported alongside. Rounded to 4 dp.",
+            "n_layer": nL,
+        },
+        "pairs": out_pairs,
+    }
+
+
 def _logit_lens_topk(m: GPT2Numpy, resid_row: np.ndarray, k: int = 6) -> list:
     lg = m.logit_lens(resid_row)
     lg = lg - lg.max()
@@ -1033,6 +1179,7 @@ def write_bundles(
     dump("ov_eigs.json", compute_ov_eigs(m))
     dump("comp.json", compute_comp(m))
     dump("attrib.json", compute_logit_attrib(m, prompts=prompts))
+    dump("patch.json", compute_patching(m))
     # SAE decoder constellation — only where an open SAE release exists for the
     # model (res-jb covers gpt2-small). External download; skip loudly if absent.
     if model_id == "gpt2":

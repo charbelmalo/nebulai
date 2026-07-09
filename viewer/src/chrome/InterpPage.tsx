@@ -56,7 +56,8 @@ export function InterpPage() {
   // Per-trace features render one bundled prompt at a time (all of the forward
   // group, plus anything flagged perTrace). Load the trace list for the model
   // so the selector can offer them; resolve "" to the first slug.
-  const isForward = feature?.group === "forward" || feature?.perTrace === true;
+  const isForward =
+    (feature?.group === "forward" || feature?.perTrace === true) && feature?.ownPrompts !== true;
   useEffect(() => {
     if (!model) return;
     let ok = true;
