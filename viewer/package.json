@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "report": "node --experimental-strip-types scripts/session-report.ts",
     "e2e": "playwright test",
     "e2e:update": "playwright test --update-snapshots",
     "typecheck": "tsc --noEmit"

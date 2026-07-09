@@ -7,3 +7,4 @@ uv.lock
 viewer/node_modules/
 viewer/dist/
 viewer/tests/e2e/.artifacts/
+viewer/local-sessions/
