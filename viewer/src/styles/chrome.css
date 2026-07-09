@@ -2159,10 +2159,54 @@ body.page-sessions #stage {
   width: 224px;
 }
 
+.interp-legend.is-collapsed {
+  width: auto;
+  max-width: calc(100% - 36px);
+  padding: 8px 12px;
+}
+
+/* collapsed pills in the bottom corners clear the driver chip row */
+.interp-legend.is-collapsed.corner-br,
+.interp-legend.is-collapsed.corner-bl {
+  bottom: 58px;
+}
+
 .interp-legend-head {
   display: flex;
   align-items: baseline;
   gap: 8px;
+}
+
+/* the one interactive element on the card — the card itself stays
+   pointer-events:none so hover picking works through it */
+.interp-legend-toggle {
+  pointer-events: auto;
+  flex: none;
+  align-self: center;
+  width: 26px;
+  height: 26px;
+  margin-left: 8px;
+  padding: 0;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font: 600 13px/1 var(--font-mono, ui-monospace, monospace);
+  cursor: pointer;
+}
+
+.interp-legend.is-collapsed .interp-legend-toggle {
+  margin-left: 10px;
+}
+
+.interp-legend-toggle:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--hairline) 40%, var(--text-dim));
+}
+
+.interp-legend-toggle:focus-visible {
+  outline: 2px solid var(--ramp-2, #f5c33b);
+  outline-offset: 1px;
 }
 
 .interp-legend-n {

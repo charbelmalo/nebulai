@@ -35,6 +35,23 @@ export function InterpPage() {
   const overlayRef = useRef<HTMLDivElement>(null);
   const driverRef = useRef<InterpDriver | null>(null);
 
+  // Legend disclosure: null = auto (open on wide stages, collapsed at the
+  // narrow breakpoint where the card would occlude the plot). A user toggle
+  // overrides auto and stays sticky for the session — transient view chrome,
+  // not a persisted setting.
+  const narrow = useSignal(false);
+  const legendOpen = useSignal<boolean | null>(null);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 900px)");
+    narrow.value = mq.matches;
+    const onChange = (e: MediaQueryListEvent) => {
+      narrow.value = e.matches;
+    };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  const legendIsOpen = legendOpen.value ?? !narrow.value;
+
   // Forward-group features render one per-prompt trace. Load the trace list for
   // the model so the selector can offer them; resolve "" to the first slug.
   const isForward = feature?.group === "forward";
@@ -197,14 +214,27 @@ export function InterpPage() {
         )}
 
         {feature && (
-          <div class={`interp-legend corner-${feature.legendCorner ?? "tr"}`}>
+          <div
+            class={`interp-legend corner-${feature.legendCorner ?? "tr"}${legendIsOpen ? "" : " is-collapsed"}`}
+          >
             <div class="interp-legend-head">
               <span class="interp-legend-n">#{feature.n}</span>
               <h3 class="interp-legend-title">{feature.label}</h3>
-              <span class="interp-legend-model">{model ?? "—"}</span>
+              {legendIsOpen && <span class="interp-legend-model">{model ?? "—"}</span>}
+              <button
+                type="button"
+                class="interp-legend-toggle"
+                aria-expanded={legendIsOpen}
+                title={legendIsOpen ? "Collapse legend" : "Expand legend"}
+                onClick={() => {
+                  legendOpen.value = !legendIsOpen;
+                }}
+              >
+                {legendIsOpen ? "−" : "+"}
+              </button>
             </div>
-            <p class="interp-legend-blurb">{feature.blurb}</p>
-            {feature.legend && (
+            {legendIsOpen && <p class="interp-legend-blurb">{feature.blurb}</p>}
+            {legendIsOpen && feature.legend && (
               <ul class="interp-legend-keys">
                 {feature.legend.map((k) => (
                   <li key={k.label}>
