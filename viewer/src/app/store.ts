@@ -11,6 +11,44 @@ import type { DatasetEntry } from "../data/schema";
 
 export type ViewMode = "atlas" | "chord" | "hierarchy" | "compare";
 
+/** Top-level page — nav-bar controlled. `map` is the semantic cloud (all the
+ *  driver-backed views); `snapshot` is the per-topic conversation-log map. */
+export type Page = "map" | "snapshot";
+
+/** One saved topic filter — a named bag of keywords the snapshot map watches
+ *  for in conversation logs. Ships with a couple of defaults (design,
+ *  shaders). Users add more from either the Snapshot Map page or Settings. */
+export interface TopicPreset {
+  id: string;
+  name: string;
+  keywords: string[];
+}
+
+/** A parsed conversation log — a sequence of turns with role + text. The
+ *  snapshot pipeline runs entirely client-side; the raw log is kept in memory
+ *  only. */
+export interface ConversationTurn {
+  role: string;
+  text: string;
+  ts?: number;
+}
+
+export interface SnapshotLog {
+  id: string;
+  name: string;
+  turns: ConversationTurn[];
+  loadedAt: number;
+}
+
+export interface SnapshotState {
+  logs: SnapshotLog[];
+  activeLogId: string | null;
+  topics: TopicPreset[];
+  activeTopicId: string;
+  turnIndex: number; // 0 = first turn, logs.turns.length-1 = last
+  playing: boolean;
+}
+
 export interface Selection {
   kind: "cluster" | "point";
   id: number;
@@ -132,6 +170,8 @@ export interface AppState {
   probing: Probing;
   progress: Progress;
   settingsOpen: boolean; // Settings page overlay visibility
+  page: Page;
+  snapshot: SnapshotState;
 
   setCapabilities(c: Capabilities): void;
   setDatasets(d: DatasetEntry[]): void;
@@ -158,7 +198,84 @@ export interface AppState {
   pushProgressEvent(stage: ProbeStage, message: string): void;
   resetProgress(): void;
   setSettingsOpen(open: boolean): void;
+  setPage(p: Page): void;
+  addSnapshotLog(log: SnapshotLog): void;
+  removeSnapshotLog(id: string): void;
+  setActiveLog(id: string | null): void;
+  setActiveTopic(id: string): void;
+  setTurnIndex(i: number): void;
+  setPlaying(v: boolean): void;
+  addTopicPreset(t: TopicPreset): void;
+  updateTopicPreset(id: string, patch: Partial<TopicPreset>): void;
+  removeTopicPreset(id: string): void;
 }
+
+/** Preset topic filters shipped by default. Users can add more from the
+ *  Snapshot Map page or the Settings → Snapshot tab. Keep lists tight — the
+ *  match is case-insensitive substring; long lists dilute the signal. */
+export const DEFAULT_TOPICS: TopicPreset[] = [
+  {
+    id: "design",
+    name: "Design keywords",
+    keywords: [
+      "typography",
+      "spacing",
+      "radius",
+      "grid",
+      "tokens",
+      "layout",
+      "hover",
+      "focus",
+      "empty state",
+      "component",
+      "hierarchy",
+      "affordance",
+      "accessibility",
+      "contrast",
+      "keyboard",
+    ],
+  },
+  {
+    id: "shaders",
+    name: "Shader effects",
+    keywords: [
+      "bloom",
+      "vignette",
+      "chromatic aberration",
+      "SSAO",
+      "godrays",
+      "fresnel",
+      "raymarch",
+      "SDF",
+      "post-processing",
+      "TSL",
+      "WGSL",
+      "GLSL",
+      "compute",
+      "uniform",
+      "vertex",
+      "fragment",
+    ],
+  },
+  {
+    id: "interaction",
+    name: "Interaction craft",
+    keywords: [
+      "hit target",
+      "safe triangle",
+      "aria-activedescendant",
+      "focus trap",
+      "escape",
+      "arrow keys",
+      "roving tabindex",
+      "scroll padding",
+      "submenu",
+      "combobox",
+      "tooltip",
+      "dropdown",
+    ],
+  },
+];
 
 export const appStore = createStore<AppState>()((set) => ({
   capabilities: null,
@@ -228,6 +345,15 @@ export const appStore = createStore<AppState>()((set) => ({
     error: null,
   },
   settingsOpen: false,
+  page: "map",
+  snapshot: {
+    logs: [],
+    activeLogId: null,
+    topics: DEFAULT_TOPICS,
+    activeTopicId: DEFAULT_TOPICS[0].id,
+    turnIndex: 0,
+    playing: false,
+  },
 
   setCapabilities: (capabilities) => set({ capabilities }),
   setDatasets: (datasets) => set({ datasets }),
@@ -284,4 +410,46 @@ export const appStore = createStore<AppState>()((set) => ({
       progress: { stage: "idle", pct: 0, message: "", latencyMs: null, history: [], error: null },
     }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+  setPage: (page) => set({ page }),
+  addSnapshotLog: (log) =>
+    set((s) => ({
+      snapshot: {
+        ...s.snapshot,
+        logs: [...s.snapshot.logs, log],
+        activeLogId: log.id,
+        turnIndex: Math.max(0, log.turns.length - 1),
+      },
+    })),
+  removeSnapshotLog: (id) =>
+    set((s) => {
+      const logs = s.snapshot.logs.filter((l) => l.id !== id);
+      const activeLogId =
+        s.snapshot.activeLogId === id ? (logs[0]?.id ?? null) : s.snapshot.activeLogId;
+      return { snapshot: { ...s.snapshot, logs, activeLogId, turnIndex: 0 } };
+    }),
+  setActiveLog: (id) =>
+    set((s) => ({ snapshot: { ...s.snapshot, activeLogId: id, turnIndex: 0 } })),
+  setActiveTopic: (activeTopicId) =>
+    set((s) => ({ snapshot: { ...s.snapshot, activeTopicId } })),
+  setTurnIndex: (turnIndex) =>
+    set((s) => ({ snapshot: { ...s.snapshot, turnIndex: Math.max(0, turnIndex) } })),
+  setPlaying: (playing) => set((s) => ({ snapshot: { ...s.snapshot, playing } })),
+  addTopicPreset: (t) =>
+    set((s) => ({ snapshot: { ...s.snapshot, topics: [...s.snapshot.topics, t] } })),
+  updateTopicPreset: (id, patch) =>
+    set((s) => ({
+      snapshot: {
+        ...s.snapshot,
+        topics: s.snapshot.topics.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+      },
+    })),
+  removeTopicPreset: (id) =>
+    set((s) => {
+      const topics = s.snapshot.topics.filter((t) => t.id !== id);
+      const activeTopicId =
+        s.snapshot.activeTopicId === id
+          ? (topics[0]?.id ?? "")
+          : s.snapshot.activeTopicId;
+      return { snapshot: { ...s.snapshot, topics, activeTopicId } };
+    }),
 }));

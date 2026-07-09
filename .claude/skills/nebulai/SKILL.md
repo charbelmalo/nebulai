@@ -148,7 +148,29 @@ If a knob affects only one graph, put it under Appearance → that graph's
 sub-tab. If it affects all rendering, put it under General → Rendering. If
 it affects the pipeline itself (endpoints, live probing, auto-rebuild),
 put it under Model Probing and wire progress events through
-`chrome/probe.ts` so the progress strip animates.
+`chrome/probe.ts` so the progress strip animates. If it belongs to a
+specific *page* (e.g. Snapshot Map topic presets), give it its own tab
+alongside the existing ones — the `TABS` array in `SettingsPage.tsx` is
+authoritative.
+
+## Pages (viewer navigation)
+
+The viewer has more than one page. Pages are chosen by the top-center
+segmented nav (`chrome/TopBar.tsx`); which one is active lives in
+`appStore.page` (`"map" | "snapshot"`). Add a new page by (1) extending
+`Page`, (2) adding a `NavPill` in `TopBar`, (3) mounting the page's root
+component conditionally in `chrome/mount.tsx`, and (4) toggling any
+`body.page-<id>` class the driver stage needs to hide.
+
+Current pages:
+- **`map`** — the semantic-cloud viewer (Atlas / Chord / Hierarchy /
+  Compare). Owns `#stage` and all driver-backed views.
+- **`snapshot`** — the Snapshot Map: JSON conversation-log ingest, per-topic
+  keyword extraction, timeline scrubber, co-occurrence graph. Data flows
+  through `chrome/snapshot.ts` (parser + analyzer) into
+  `appStore.snapshot`. New topic presets belong in `DEFAULT_TOPICS` in
+  `app/store.ts`, and the Settings → Snapshot tab must always surface the
+  same preset editor.
 
 ## Bundled scripts
 

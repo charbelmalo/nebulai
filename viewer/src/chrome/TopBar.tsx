@@ -1,10 +1,13 @@
 /** Top-left brand mark, matching the video's logo + wordmark anatomy. The
- *  mark is a tiny nebula: three ramp-colored dots in orbit. Top-right hosts
- *  the global gear that opens the full Settings page. */
+ *  mark is a tiny nebula: three ramp-colored dots in orbit. A center nav
+ *  switches between the semantic-cloud viewer and the Snapshot Map page.
+ *  Top-right hosts the global gear that opens the full Settings page. */
 
-import { appStore } from "../app/store";
+import { appStore, type Page } from "../app/store";
+import { $page } from "./state";
 
 export function TopBar() {
+  const page = $page.value;
   return (
     <>
       <header class="topbar">
@@ -17,6 +20,10 @@ export function TopBar() {
           nebul<span class="topbar-word-dim">.ai</span>
         </span>
       </header>
+      <nav class="topnav" aria-label="Primary">
+        <NavPill label="Semantic map" pageId="map" active={page} />
+        <NavPill label="Snapshot Map" pageId="snapshot" active={page} />
+      </nav>
       <button
         type="button"
         class="topbar-settings"
@@ -36,5 +43,19 @@ export function TopBar() {
         <span>Settings</span>
       </button>
     </>
+  );
+}
+
+function NavPill(props: { label: string; pageId: Page; active: Page }) {
+  const isActive = props.active === props.pageId;
+  return (
+    <button
+      type="button"
+      class={`topnav-pill${isActive ? " is-active" : ""}`}
+      aria-current={isActive}
+      onClick={() => appStore.getState().setPage(props.pageId)}
+    >
+      {props.label}
+    </button>
   );
 }

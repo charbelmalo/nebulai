@@ -7,10 +7,12 @@ import {
   appStore,
   type Appearance,
   type CompareUI,
+  type Page,
   type Probing,
   type Progress,
   type Selection,
   type Settings,
+  type SnapshotState,
   type Toggles,
   type ViewMode,
 } from "../app/store";
@@ -35,6 +37,8 @@ export const $appearance = signal<Appearance>(s.appearance);
 export const $probing = signal<Probing>(s.probing);
 export const $progress = signal<Progress>(s.progress);
 export const $settingsOpen = signal<boolean>(s.settingsOpen);
+export const $page = signal<Page>(s.page);
+export const $snapshot = signal<SnapshotState>(s.snapshot);
 export const $compareData = signal<CompareData | null>(s.compareData);
 export const $compare = signal<CompareUI>(s.compare);
 
@@ -53,6 +57,8 @@ appStore.subscribe((st) => {
   if (st.probing !== $probing.value) $probing.value = st.probing;
   if (st.progress !== $progress.value) $progress.value = st.progress;
   if (st.settingsOpen !== $settingsOpen.value) $settingsOpen.value = st.settingsOpen;
+  if (st.page !== $page.value) $page.value = st.page;
+  if (st.snapshot !== $snapshot.value) $snapshot.value = st.snapshot;
   if (st.compareData !== $compareData.value) $compareData.value = st.compareData;
   if (st.compare !== $compare.value) $compare.value = st.compare;
 });

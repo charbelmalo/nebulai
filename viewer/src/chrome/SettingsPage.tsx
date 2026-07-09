@@ -21,11 +21,12 @@ import {
   $progress,
   $settings,
   $settingsOpen,
+  $snapshot,
   $viewMode,
 } from "./state";
 import { SelectRow, SliderRow, Tabs, TextRow, ToggleRow } from "./controls";
 
-const TABS = ["General", "Appearance", "Model Probing", "Data", "About"];
+const TABS = ["General", "Appearance", "Model Probing", "Snapshot", "Data", "About"];
 
 const STAGE_ORDER: readonly string[] = [
   "probing",
@@ -88,6 +89,7 @@ export function SettingsPage() {
           {tab.value === "General" && <GeneralTab />}
           {tab.value === "Appearance" && <AppearanceTab />}
           {tab.value === "Model Probing" && <ProbingTab />}
+          {tab.value === "Snapshot" && <SnapshotTab />}
           {tab.value === "Data" && <DataTab />}
           {tab.value === "About" && <AboutTab />}
         </div>
@@ -520,6 +522,90 @@ function formatTime(t: number) {
     .getMinutes()
     .toString()
     .padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`;
+}
+
+// ── Snapshot ───────────────────────────────────────────────────────────────
+
+function SnapshotTab() {
+  const snap = $snapshot.value;
+  const newName = useSignal("");
+  return (
+    <>
+      <SettingsSection
+        title="Topic presets"
+        hint="Each preset is a case-insensitive keyword list the Snapshot Map watches for. Edit inline; changes apply immediately."
+      >
+        <ul class="settings-preset-list">
+          {snap.topics.map((t) => (
+            <li key={t.id} class="settings-preset">
+              <div class="settings-preset-head">
+                <input
+                  class="ctl-input"
+                  type="text"
+                  value={t.name}
+                  onInput={(e) =>
+                    appStore
+                      .getState()
+                      .updateTopicPreset(t.id, {
+                        name: (e.currentTarget as HTMLInputElement).value,
+                      })
+                  }
+                />
+                <button
+                  type="button"
+                  class="btn-ghost"
+                  onClick={() => appStore.getState().removeTopicPreset(t.id)}
+                >
+                  remove
+                </button>
+              </div>
+              <textarea
+                class="settings-preset-kws"
+                rows={3}
+                value={t.keywords.join(", ")}
+                onInput={(e) =>
+                  appStore
+                    .getState()
+                    .updateTopicPreset(t.id, {
+                      keywords: (e.currentTarget as HTMLTextAreaElement).value
+                        .split(",")
+                        .map((k) => k.trim())
+                        .filter(Boolean),
+                    })
+                }
+              />
+            </li>
+          ))}
+        </ul>
+        <div class="settings-actions">
+          <input
+            class="ctl-input"
+            type="text"
+            placeholder="new topic name"
+            value={newName.value}
+            onInput={(e) => (newName.value = (e.currentTarget as HTMLInputElement).value)}
+          />
+          <button
+            type="button"
+            class="btn-primary"
+            disabled={!newName.value.trim()}
+            onClick={() => {
+              const name = newName.value.trim();
+              if (!name) return;
+              appStore.getState().addTopicPreset({
+                id: `topic-${Date.now().toString(36)}`,
+                name,
+                keywords: [],
+              });
+              newName.value = "";
+            }}
+          >
+            Add preset
+          </button>
+        </div>
+      </SettingsSection>
+    </>
+  );
 }
 
 // ── Data ───────────────────────────────────────────────────────────────────
