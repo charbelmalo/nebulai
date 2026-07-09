@@ -16,6 +16,7 @@ Bundles written by `write_bundles`:
   sae_acts.json   — SAE encoder activations on the bundled prompts (#5 Firing Piano-Roll)
   attrib.json     — direct logit attribution of the final margin (#13 Logit Attribution)
   patch.json      — residual-stream activation patching grids    (#14 Causal Patching Map)
+  induction.json  — repeated-sequence induction-head diagnostic  (#2d Induction Microscope)
   trace_<slug>.json — one real forward pass per curated prompt   (#3/7/8/18/23 …)
 
 The trace bundle deliberately does NOT store full logits (T×50257 is ~26 MB);
@@ -1092,6 +1093,116 @@ def compute_patching(m: GPT2Numpy, pairs: list[tuple[str, str]] | None = None) -
     }
 
 
+def compute_induction(
+    m: GPT2Numpy, period: int = 48, seed: int = 0, n_patterns: int = 8
+) -> dict:
+    """The induction-head diagnostic (Olsson et al. 2022) on a repeated
+    random-token sequence — measured behavior, one real forward per seed.
+
+    Sequence: <|endoftext|> (BOS/attention-sink, published convention) followed
+    by `period` uniform-random tokens repeated twice. On the second repeat every
+    token has occurred exactly once before, so a head implementing induction
+    ("[A][B] … [A] → attend to [B]") must attend from position t to t−period+1.
+    Three structural targets are scored per head, averaged over the second
+    repeat only (first repeat has no previous occurrence to find):
+
+        induction[l,h] = mean_t attn[l,h][t, t−period+1]
+        duplicate[l,h] = mean_t attn[l,h][t, t−period]   (previous occurrence)
+        prev[l,h]      = mean_t attn[l,h][t, t−1]        (previous token)
+
+    Chance floor = what a uniform-attention head would score on any single
+    target: mean_t 1/(t+1). A second seed is run in full and both score sets
+    are exported, so score stability is data, not a promise. Full T×T patterns
+    (seed A) ship only for the top-scoring heads — 144 patterns would be ~8 MB.
+
+    Random tokens are drawn uniformly from the vocab excluding <|endoftext|>
+    (mostly rare tokens — that is the published convention; the test isolates
+    the copying mechanism from semantics)."""
+    eot = m.V - 1  # 50256 = <|endoftext|>, GPT-2's only special token
+    assert period * 2 + 1 <= m.n_ctx, "sequence must fit the context window"
+
+    def run(sd: int) -> Trace:
+        rng = np.random.default_rng(sd)
+        ids = rng.integers(0, eot, size=period).tolist()  # high excl. → no eot
+        return m.forward([eot] + ids + ids)
+
+    tr_a, tr_b = run(seed), run(seed + 1)
+    P = period
+    T = len(tr_a.tokens)
+    ts = np.arange(P + 1, 2 * P + 1)  # positions of the second repeat
+    for tr in (tr_a, tr_b):  # the whole test rides on the sequence repeating
+        assert all(tr.tokens[t] == tr.tokens[t - P] for t in ts)
+    rowsum_drift = float(np.abs(tr_a.attn.sum(axis=-1) - 1.0).max())
+    assert rowsum_drift < 1e-4, "attention rows must be a softmax"
+    floor = float((1.0 / (ts + 1.0)).mean())
+
+    def scores(tr: Trace) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        a = tr.attn  # (nL, H, T, T); paired index arrays pick (t, target) cells
+        ind = a[:, :, ts, ts - P + 1].mean(axis=-1)
+        dup = a[:, :, ts, ts - P].mean(axis=-1)
+        prev = a[:, :, ts, ts - 1].mean(axis=-1)
+        return ind, dup, prev
+
+    ind_a, dup_a, prev_a = scores(tr_a)
+    ind_b, dup_b, prev_b = scores(tr_b)
+
+    # patterns for the strongest heads only: top-4 induction ∪ top-2 duplicate
+    # ∪ top-2 prev (dedup, order kept) — the heads the grid will invite you to
+    # inspect. Anything else states "pattern not exported" on click.
+    picks: list[tuple[int, int]] = []
+    for arr, k in ((ind_a, 4), (dup_a, 2), (prev_a, 2)):
+        for flat in np.argsort(arr.reshape(-1))[::-1][:k]:
+            lh = (int(flat) // m.n_head, int(flat) % m.n_head)
+            if lh not in picks:
+                picks.append(lh)
+    picks = picks[:n_patterns]
+
+    def flat4(a: np.ndarray) -> list[float]:
+        return [round(float(v), 4) for v in a.reshape(-1)]
+
+    return {
+        "meta": {
+            "model": m.model_id,
+            "created": _now(),
+            "quantity": "per-head induction / duplicate-token / previous-token "
+            "attention scores on a repeated random-token sequence, plus full "
+            "attention patterns for the top-scoring heads",
+            "formula": "induction[l,h] = mean over second-repeat positions t of "
+            "attn[l,h][t, t−period+1]; duplicate: target t−period; prev: target "
+            "t−1. Chance floor = mean_t 1/(t+1) (uniform attention).",
+            "note": "measured behavior — one real forward per seed over "
+            "<|endoftext|> + 48 uniform-random tokens repeated twice (published "
+            "convention: random tokens isolate copying from semantics). Scores "
+            "averaged over the second repeat only. Both seeds exported in full; "
+            "patterns (seed A only) exported for the top heads by score — 144 "
+            "full patterns would be ~8 MB. Rounded to 4 dp.",
+            "n_layer": m.n_layer,
+            "n_head": m.n_head,
+            "period": P,
+            "T": T,
+            "seed_a": seed,
+            "seed_b": seed + 1,
+            "floor": round(floor, 4),
+            "attn_rowsum_drift": rowsum_drift,
+        },
+        "token_strs": tr_a.token_strs,
+        "ind": flat4(ind_a),
+        "dup": flat4(dup_a),
+        "prev": flat4(prev_a),
+        "ind_b": flat4(ind_b),
+        "dup_b": flat4(dup_b),
+        "prev_b": flat4(prev_b),
+        "patterns": [
+            {
+                "layer": layer,
+                "head": head,
+                "attn": flat4(tr_a.attn[layer, head]),  # row-major (from, to)
+            }
+            for layer, head in picks
+        ],
+    }
+
+
 def _logit_lens_topk(m: GPT2Numpy, resid_row: np.ndarray, k: int = 6) -> list:
     lg = m.logit_lens(resid_row)
     lg = lg - lg.max()
@@ -1180,6 +1291,7 @@ def write_bundles(
     dump("comp.json", compute_comp(m))
     dump("attrib.json", compute_logit_attrib(m, prompts=prompts))
     dump("patch.json", compute_patching(m))
+    dump("induction.json", compute_induction(m))
     # SAE decoder constellation — only where an open SAE release exists for the
     # model (res-jb covers gpt2-small). External download; skip loudly if absent.
     if model_id == "gpt2":

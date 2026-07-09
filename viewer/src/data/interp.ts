@@ -327,6 +327,43 @@ export interface PatchBundle {
   pairs: PatchPair[];
 }
 
+/** Full T×T attention pattern (seed A) for one top-scoring head. */
+export interface InductionPattern {
+  layer: number;
+  head: number;
+  /** flat T·T row-major (from, to), post-softmax, 4 dp */
+  attn: number[];
+}
+
+export interface InductionBundle {
+  meta: {
+    model: string;
+    created: string;
+    quantity: string;
+    formula: string;
+    note: string;
+    n_layer: number;
+    n_head: number;
+    period: number;
+    T: number;
+    seed_a: number;
+    seed_b: number;
+    /** chance floor: mean uniform attention 1/(t+1) over scored positions */
+    floor: number;
+    attn_rowsum_drift: number;
+  };
+  token_strs: string[];
+  /** per-head scores, flat n_layer·n_head row-major (layer, head), seed A */
+  ind: number[];
+  dup: number[];
+  prev: number[];
+  /** same three scores measured on seed B — stability is data, not a promise */
+  ind_b: number[];
+  dup_b: number[];
+  prev_b: number[];
+  patterns: InductionPattern[];
+}
+
 /** [token string, probability] — the honest readout unit for lens/next-token. */
 export type LensTopk = [string, number][];
 
@@ -411,6 +448,9 @@ export const loadComp = (model: string, base = "/out") =>
 
 export const loadPatch = (model: string, base = "/out") =>
   fetchJSON<PatchBundle>(`${interpBase(model, base)}/patch.json`);
+
+export const loadInduction = (model: string, base = "/out") =>
+  fetchJSON<InductionBundle>(`${interpBase(model, base)}/induction.json`);
 
 export const loadHeads = (model: string, base = "/out") =>
   fetchJSON<HeadsBundle>(`${interpBase(model, base)}/heads.json`);

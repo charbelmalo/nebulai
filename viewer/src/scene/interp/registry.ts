@@ -20,6 +20,7 @@ import { CompositionWebDriver } from "./CompositionWebDriver";
 import { EmbeddingConstellationDriver } from "./EmbeddingConstellationDriver";
 import { FourierAtlasDriver } from "./FourierAtlasDriver";
 import { HeadFingerprintDriver } from "./HeadFingerprintDriver";
+import { InductionDriver } from "./InductionDriver";
 import type { InterpFeature } from "./InterpDriver";
 import { LogitAttribDriver } from "./LogitAttribDriver";
 import { LogitLensTunnelDriver } from "./LogitLensTunnelDriver";
@@ -260,6 +261,48 @@ export const INTERP_FEATURES: InterpFeature[] = [
     legendCollapsed: true,
     legendCorner: "br",
     create: () => new CompositionWebDriver(),
+  },
+  {
+    id: "induction-microscope",
+    n: 2,
+    label: "Induction Microscope",
+    group: "forward",
+    blurb:
+      "Behavioral proof of the induction circuit the Composition Web predicted " +
+      "from weights alone. Feed 48 uniform-random tokens repeated twice: on " +
+      "the second repeat, a head doing induction ([A][B] … [A] → attend to " +
+      "[B]) must attend from each position t to t−47. L5H1 and L5H5 — the " +
+      "heads L4H11's K-composition pointed at — score ~0.90, about 64× the " +
+      "uniform-attention floor, alongside L7H10 and L6H9. L4H11 itself tops " +
+      "the prev-token score at 0.979. Click any head to see its real T×T " +
+      "attention pattern: induction is a literal stripe at offset −47. Which " +
+      "top head ranks first swaps between seeds — both seeds' scores ship, " +
+      "and hover shows them side by side.",
+    math:
+      "induction[l,h] = mean over second-repeat positions t of " +
+      "attn[l,h][t, t−period+1]; duplicate: target t−period; prev: target " +
+      "t−1. Chance floor = mean_t 1/(t+1) — what uniform attention would " +
+      "score. Sequence = <|endoftext|> + 48 uniform-random tokens ×2 " +
+      "(Olsson et al. 2022 diagnostic; random tokens isolate copying from " +
+      "semantics).",
+    source:
+      "induction.json — two real forwards (seeds 0 and 1) over the repeated " +
+      "sequence; all 144 heads' scores exported for BOTH seeds, full T×T " +
+      "post-softmax patterns for the top-8 heads (144 would be ~8 MB). " +
+      "Verified: sequence repeats exactly; attention rows sum to 1 (drift " +
+      "2.4e-7); scores recomputed from the exported patterns match at 4 dp; " +
+      "the pattern's upper triangle is exactly zero (causal mask).",
+    legend: [
+      { label: "high attention to the structural target", rgb: "245,195,59" },
+      { label: "≤ uniform-attention floor", rgb: "118,126,158" },
+    ],
+    note:
+      "grid ramp spans floor→max of the selected score (both stated in the " +
+      "header) · stripe alpha is linear in attention — no gamma, no smoothing",
+    legendCollapsed: true,
+    legendCorner: "br",
+    ownPrompts: true,
+    create: () => new InductionDriver(),
   },
   {
     id: "logit-lens-tunnel",
