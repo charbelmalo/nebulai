@@ -2200,6 +2200,252 @@ def compute_cofire(
     }
 
 
+def compute_tuned(
+    m: GPT2Numpy,
+    prompts: list[str] | None = None,
+    window: int = 128,
+    test_every: int = 4,
+    eval_windows: int = 24,
+    seed: int = 0,
+) -> dict:
+    """#20 Tuned-Lens Delta — a fitted affine translator per layer vs the raw
+    logit lens, on a real disclosed corpus.
+
+    The logit lens (#3) reads every layer's residual through the FINAL
+    layernorm + unembedding — it asks "what if the model stopped here?", and
+    at early layers that question is unfair: the residual basis drifts across
+    depth, so early readouts look worse than what the layer actually knows.
+    The tuned lens (Belrose et al. 2023) fixes this with a learned per-layer
+    translator before the shared readout.
+
+    CAVEAT (by design, stated everywhere): this is the LEAST-SQUARES affine
+    translator — per layer L, (A_L, b_L) minimizing ‖A_L·h_L + b_L − h_final‖²
+    over corpus positions, solved exactly from float64 normal equations. It is
+    NOT the KL-trained translator of the paper; the fit objective is residual
+    MSE, only the EVALUATION is distributional. Both lenses then share the
+    model's own ln_f + tied unembedding.
+
+    Fit/eval data: every token of the disclosed Alice corpus (sha256 in meta),
+    non-overlapping windows of `window` tokens, position 0 of each window
+    dropped (chunk boundary + GPT-2 massive-activation outlier — same rule as
+    #24). Deterministic split: windows with idx % test_every == 0 are held out;
+    translators are fit ONLY on the rest. Distributional metrics are computed
+    on `eval_windows` seeded held-out windows (full 50257-way softmax — exact,
+    no truncation):
+
+      kl[L]    = KL(p_final ‖ p_lens_L) in bits, mean/p25/p50/p75
+      agree[L] = fraction of positions where the lens top-1 == final top-1
+
+    Honesty checks baked in:
+    - layer 12 IS the final residual: the logit-lens KL there is asserted 0
+      and agreement 1 (identity of the computation path, not a rounding claim).
+    - the normal-equation solve residual ‖G·W − B‖/‖B‖ is asserted < 1e-8 and
+      train R² per layer is exported (computed exactly from the accumulators).
+    - the per-prompt grids (the 5 shared trace prompts) export BOTH lenses'
+      top-1 token and probability and the exact per-position KL, so the
+      "prediction emerges earlier under the tuned lens" claim is inspectable
+      token by token — including where it does NOT hold.
+    """
+    prompts = prompts or DEFAULT_PROMPTS
+    text = COFIRE_CORPUS.read_text(encoding="utf-8")
+    sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    ids = m.encode(text)
+    n_layer, d = m.n_layer, m.d
+
+    # ---- pass over the corpus: accumulate normal equations on train windows,
+    # stash residuals of the seeded eval subset of test windows ----
+    starts = [s for s in range(0, len(ids), window) if len(ids) - s >= 2]
+    test_idx = [w for w in range(len(starts)) if w % test_every == 0]
+    rng = np.random.default_rng(seed)
+    eval_pick = rng.choice(len(test_idx), size=min(eval_windows, len(test_idx)), replace=False)
+    eval_set = {test_idx[i] for i in sorted(eval_pick.tolist())}
+
+    G = np.zeros((n_layer, d + 1, d + 1), dtype=np.float64)
+    B = np.zeros((n_layer, d + 1, d), dtype=np.float64)
+    y_sumsq = 0.0
+    n_train = 0
+    eval_resid: list[np.ndarray] = []  # each (n_layer+1, P, d) float32
+    for w, s in enumerate(starts):
+        tr = m.forward(ids[s : s + window])
+        r = tr.resid[:, 1:, :]  # drop position 0 (chunk boundary / outlier)
+        if w in eval_set:
+            eval_resid.append(r.copy())
+        if w % test_every == 0:
+            continue  # held out — never enters the fit
+        P = r.shape[1]
+        y = r[n_layer].astype(np.float64)
+        y_sumsq += float((y * y).sum())
+        n_train += P
+        ones = np.ones((P, 1), dtype=np.float64)
+        for L in range(n_layer):
+            x = np.concatenate([r[L].astype(np.float64), ones], axis=1)
+            G[L] += x.T @ x
+            B[L] += x.T @ y
+    assert n_train > 8 * (d + 1), f"train positions {n_train} too few for {d + 1}-dim fit"
+
+    # ---- exact normal-equation solve (float64) + train R² from accumulators ----
+    W = np.empty((n_layer, d + 1, d), dtype=np.float64)
+    r2 = np.empty(n_layer)
+    y_sum = B[0][d]  # bias row of X̃ᵀY = Σy (identical for every L)
+    y_ss_centered = y_sumsq - float((y_sum * y_sum).sum()) / n_train
+    solve_resid = 0.0
+    for L in range(n_layer):
+        W[L] = np.linalg.solve(G[L], B[L])
+        solve_resid = max(solve_resid, float(np.linalg.norm(G[L] @ W[L] - B[L]) / np.linalg.norm(B[L])))
+        # ‖Y − X̃W‖² = tr(YᵀY) − 2·tr(WᵀB) + tr(Wᵀ G W)
+        sse = y_sumsq - 2.0 * float((W[L] * B[L]).sum()) + float((W[L] * (G[L] @ W[L])).sum())
+        r2[L] = 1.0 - sse / y_ss_centered
+    assert solve_resid < 1e-8, f"normal-equation solve residual {solve_resid:.2e}"
+    assert r2[n_layer - 1] > r2[0], "translator fit must improve with depth"
+
+    # ---- distributional eval on the seeded held-out windows ----
+    g_f, b_f = m._g("ln_f.weight"), m._g("ln_f.bias")
+
+    def lens_logits(h: np.ndarray) -> np.ndarray:
+        xf, _ = _layernorm(h.astype(np.float32), g_f, b_f)
+        return xf @ m.wte.T  # (P, V) float32
+
+    def logprobs(rows: np.ndarray) -> np.ndarray:
+        lp = rows.astype(np.float64)
+        lp -= lp.max(axis=1, keepdims=True)
+        lp -= np.log(np.exp(lp).sum(axis=1, keepdims=True))
+        return lp
+
+    def dist_stats(rows: np.ndarray, fin_lp: np.ndarray, fin_top: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        lp = logprobs(rows)
+        kl_nats = (np.exp(fin_lp) * (fin_lp - lp)).sum(axis=1)
+        return kl_nats / np.log(2.0), rows.argmax(axis=1) == fin_top
+
+    kl_all: list[list[np.ndarray]] = [[] for _ in range(2 * n_layer + 1)]
+    ag_all: list[list[np.ndarray]] = [[] for _ in range(2 * n_layer + 1)]
+    n_eval = 0
+    for r in eval_resid:
+        P = r.shape[1]
+        n_eval += P
+        fin_rows = lens_logits(r[n_layer])
+        fin_lp = logprobs(fin_rows)
+        fin_top = fin_rows.argmax(axis=1)
+        ones = np.ones((P, 1))
+        for L in range(n_layer):
+            kb, ok = dist_stats(lens_logits(r[L]), fin_lp, fin_top)
+            kl_all[L].append(kb)
+            ag_all[L].append(ok)
+            h_t = np.concatenate([r[L].astype(np.float64), ones], axis=1) @ W[L]
+            kb, ok = dist_stats(lens_logits(h_t), fin_lp, fin_top)
+            kl_all[n_layer + L].append(kb)
+            ag_all[n_layer + L].append(ok)
+        kb, ok = dist_stats(fin_rows, fin_lp, fin_top)
+        kl_all[2 * n_layer].append(kb)
+        ag_all[2 * n_layer].append(ok)
+
+    def curve(idx: int) -> dict:
+        kb = np.concatenate(kl_all[idx])
+        ok = np.concatenate(ag_all[idx])
+        q = np.percentile(kb, [25, 50, 75])
+        return {
+            "mean": round(float(kb.mean()), 4),
+            "p25": round(float(q[0]), 4),
+            "p50": round(float(q[1]), 4),
+            "p75": round(float(q[2]), 4),
+            "agree": round(float(ok.mean()), 4),
+        }
+
+    logit_curve = [curve(L) for L in range(n_layer)]
+    tuned_curve = [curve(n_layer + L) for L in range(n_layer)]
+    final_check = curve(2 * n_layer)
+    # layer 12 through the identical readout path: KL exactly 0, agreement 1
+    assert final_check["mean"] == 0.0 and final_check["agree"] == 1.0, final_check
+    logit_curve.append(final_check)
+    tuned_curve.append(final_check)  # translator at 12 is the identity by definition
+    assert tuned_curve[0]["mean"] < logit_curve[0]["mean"], "tuned lens must beat logit lens at layer 0"
+
+    # ---- per-prompt grids on the 5 shared trace prompts ----
+    tok_strs: list[str] = []
+    tok_of: dict[int, int] = {}
+
+    def sid(t: int) -> int:
+        if t not in tok_of:
+            tok_of[t] = len(tok_strs)
+            tok_strs.append(m.decode1(t))
+        return tok_of[t]
+
+    grids = []
+    for prompt in prompts:
+        tr = m.forward(prompt)
+        T = len(tr.tokens)
+        fin_rows = lens_logits(tr.resid[n_layer])
+        assert np.abs(fin_rows - tr.logits).max() < 1e-3, "lens path must reproduce the forward's logits"
+        fin_lp = logprobs(fin_rows)
+        fin_top = fin_rows.argmax(axis=1)
+        ones = np.ones((T, 1))
+        cells: dict[str, list] = {"logit": [], "tuned": []}
+        for L in range(n_layer + 1):
+            if L < n_layer:
+                rows_l = lens_logits(tr.resid[L])
+                rows_t = lens_logits(np.concatenate([tr.resid[L].astype(np.float64), ones], axis=1) @ W[L])
+            else:
+                rows_l = rows_t = fin_rows
+            for name, rows in (("logit", rows_l), ("tuned", rows_t)):
+                lp = logprobs(rows)
+                kl = (np.exp(fin_lp) * (fin_lp - lp)).sum(axis=1) / np.log(2.0)
+                top = rows.argmax(axis=1)
+                cells[name].append([
+                    [sid(int(top[t])), round(float(np.exp(lp[t, top[t]])), 3), round(float(kl[t]), 3)]
+                    for t in range(T)
+                ])
+        grids.append({
+            "slug": _slug(prompt),
+            "prompt": prompt,
+            "token_strs": tr.token_strs,
+            "T": T,
+            "final_top": [[sid(int(fin_top[t])), round(float(np.exp(fin_lp[t, fin_top[t]])), 3)] for t in range(T)],
+            "logit": cells["logit"],
+            "tuned": cells["tuned"],
+        })
+
+    return {
+        "meta": {
+            "model": m.model_id,
+            "created": _now(),
+            "quantity": "per-layer lens fidelity: KL(p_final ‖ p_lens) in bits and "
+            "top-1 agreement, for the raw logit lens vs a least-squares affine "
+            "translator, on held-out corpus windows",
+            "formula": "tuned_L(h) = ln_f(A_L·h + b_L)·W_Eᵀ with (A_L,b_L) = "
+            "argmin Σ‖A·h_L + b − h_final‖² over train positions (exact float64 "
+            "normal equations); logit_L(h) = ln_f(h)·W_Eᵀ; KL in bits over the "
+            "full 50,257-way softmax",
+            "note": "NOT the KL-trained tuned lens of Belrose et al. 2023 — the "
+            "translator is fit by residual least squares; only the evaluation is "
+            "distributional. Both lenses share the model's own ln_f + tied "
+            "unembedding. Position 0 of every window dropped (chunk boundary + "
+            "massive-activation outlier). resid[L] is the stream ENTERING block "
+            "L; layer 12 is the final residual, where both lenses are the "
+            "identity (asserted KL 0).",
+            "corpus": {
+                "title": "Alice's Adventures in Wonderland",
+                "source": "Project Gutenberg #11 (public domain)",
+                "sha256": sha,
+                "n_tokens": len(ids),
+                "window": window,
+                "n_windows": len(starts),
+            },
+            "split": f"window idx % {test_every} == 0 held out; fit on the rest",
+            "n_train_pos": int(n_train),
+            "n_eval_pos": int(n_eval),
+            "eval_windows": len(eval_resid),
+            "eval_seed": seed,
+            "solve_resid": float(solve_resid),
+            "r2_train": [round(float(v), 4) for v in r2],
+            "kl_direction": "KL(p_final ‖ p_lens), bits",
+        },
+        "n_layer": n_layer,
+        "logit": logit_curve,
+        "tuned": tuned_curve,
+        "tok_strs": tok_strs,
+        "grids": grids,
+    }
+
+
 def compute_grok(
     p: int = 97,
     n_hidden: int = 128,
@@ -2543,6 +2789,7 @@ def write_bundles(
     dump("induction.json", compute_induction(m))
     dump("ablation.json", compute_ablation(m))
     dump("occlusion.json", compute_occlusion(m, prompts=prompts or DEFAULT_PROMPTS))
+    dump("tuned.json", compute_tuned(m, prompts=prompts or DEFAULT_PROMPTS))
     # SAE decoder constellation — only where an open SAE release exists for the
     # model (res-jb covers gpt2-small). External download; skip loudly if absent.
     if model_id == "gpt2":

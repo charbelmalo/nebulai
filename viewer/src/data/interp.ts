@@ -674,6 +674,66 @@ export interface OcclusionBundle {
   prompts: OcclusionPrompt[];
 }
 
+/** One layer's lens-fidelity stats over the held-out eval positions. */
+export interface TunedCurvePoint {
+  /** mean KL(p_final ‖ p_lens), bits */
+  mean: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  /** fraction of eval positions where lens top-1 == final top-1 */
+  agree: number;
+}
+
+/** One grid cell: [tok_strs index of the lens top-1, its probability (3 dp),
+ *  KL(p_final ‖ p_lens) at this position in bits (3 dp)]. */
+export type TunedCell = [number, number, number];
+
+export interface TunedGrid {
+  slug: string;
+  prompt: string;
+  token_strs: string[];
+  T: number;
+  /** final top-1 per position: [tok_strs index, probability] */
+  final_top: [number, number][];
+  /** (n_layer+1, T) cells — row L = stream entering block L; row 12 = final */
+  logit: TunedCell[][];
+  tuned: TunedCell[][];
+}
+
+export interface TunedBundle {
+  meta: {
+    model: string;
+    created: string;
+    quantity: string;
+    formula: string;
+    note: string;
+    corpus: {
+      title: string;
+      source: string;
+      sha256: string;
+      n_tokens: number;
+      window: number;
+      n_windows: number;
+    };
+    split: string;
+    n_train_pos: number;
+    n_eval_pos: number;
+    eval_windows: number;
+    eval_seed: number;
+    solve_resid: number;
+    /** train R² of the affine translator per layer 0..11 */
+    r2_train: number[];
+    kl_direction: string;
+  };
+  n_layer: number;
+  /** curves indexed 0..n_layer (12 = final residual, KL exactly 0) */
+  logit: TunedCurvePoint[];
+  tuned: TunedCurvePoint[];
+  tok_strs: string[];
+  grids: TunedGrid[];
+}
+
 /** [token string, probability] — the honest readout unit for lens/next-token. */
 export type LensTopk = [string, number][];
 
@@ -767,6 +827,9 @@ export const loadAblation = (model: string, base = "/out") =>
 
 export const loadOcclusion = (model: string, base = "/out") =>
   fetchJSON<OcclusionBundle>(`${interpBase(model, base)}/occlusion.json`);
+
+export const loadTuned = (model: string, base = "/out") =>
+  fetchJSON<TunedBundle>(`${interpBase(model, base)}/tuned.json`);
 
 export const loadSAEWeb = (model: string, base = "/out") =>
   fetchJSON<SAEWebBundle>(`${interpBase(model, base)}/sae_web.json`);

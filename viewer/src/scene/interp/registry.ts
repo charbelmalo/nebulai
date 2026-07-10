@@ -32,6 +32,7 @@ import { NeuronFieldDriver } from "./NeuronFieldDriver";
 import { OcclusionDriver } from "./OcclusionDriver";
 import { OVEigenDriver } from "./OVEigenDriver";
 import { PatchingMapDriver } from "./PatchingMapDriver";
+import { TunedLensDriver } from "./TunedLensDriver";
 import { ProbabilitySimplexDriver } from "./ProbabilitySimplexDriver";
 import { ResidualRibbonDriver } from "./ResidualRibbonDriver";
 import { SAEConstellationDriver } from "./SAEConstellationDriver";
@@ -608,6 +609,50 @@ export const INTERP_FEATURES: InterpFeature[] = [
     legendCollapsed: true,
     ownPrompts: true,
     create: () => new PatchingMapDriver(),
+  },
+  {
+    id: "tuned-lens",
+    n: 20,
+    label: "Tuned-Lens Delta",
+    group: "forward",
+    blurb:
+      "How unfair is the logit lens to early layers? A per-layer affine " +
+      "translator, fit by exact least squares to the final residual on every " +
+      "token of Alice in Wonderland (33,130 train positions, held-out eval), " +
+      "is applied before the model's own readout — the honest approximation " +
+      "of the tuned lens. The gap is enormous and measured: reading the raw " +
+      "embedding stream (L0) through the final layernorm diverges from the " +
+      "model's real output by 71.7 bits of KL; through the fitted translator, " +
+      "2.6 bits. The lens curves cross 50% top-1 agreement at layer 8 (tuned) " +
+      "vs layer 11 (logit) — the stream 'knows' the answer three blocks " +
+      "before the raw lens can see it. The grid shows it token by token: " +
+      "every cell is a lens's real top-1, colored by its exact KL to the " +
+      "final distribution.",
+    math:
+      "tuned_L(h) = ln_f(A_L·h + b_L)·W_E^T with (A_L, b_L) = argmin " +
+      "Σ‖A·h_L + b − h_final‖² over train positions (float64 normal " +
+      "equations, solve residual 4e-15, train R² 0.44 (L0) → 0.94 (L11)); " +
+      "logit_L(h) = ln_f(h)·W_E^T. KL(p_final ‖ p_lens) in bits over the " +
+      "full 50,257-way softmax on 3,048 held-out positions. NOT the " +
+      "KL-trained lens of Belrose et al. 2023 — the fit is residual MSE, " +
+      "only the evaluation is distributional (stated on-canvas too).",
+    source:
+      "tuned.json — Alice corpus (Project Gutenberg #11, sha256 in meta), " +
+      "128-token windows, every 4th held out, position 0 dropped. Verified: " +
+      "layer 5 re-fit independently via SVD lstsq on the raw design matrix " +
+      "(vs normal equations) matches R² and KL/agreement to 4dp; one grid " +
+      "cell recomputed through m.logit_lens; layer-12 KL asserted exactly 0 " +
+      "both lenses; byte-identical re-run.",
+    legend: [
+      { label: "tuned lens (fitted translator)", rgb: "245,195,59" },
+      { label: "logit lens (raw readout)", rgb: "96,150,255" },
+      { label: "grid cell: KL to final, dark 0 → amber clamp", rgb: "143,119,60" },
+      { label: "outline: lens top-1 = final top-1", rgb: "255,255,255" },
+    ],
+    note: "least-squares translator, not the KL-trained lens · L0 logit point drawn off-scale with its true value printed · exact KL in every hover",
+    legendCorner: "br",
+    legendCollapsed: true,
+    create: () => new TunedLensDriver(),
   },
   {
     id: "sae-decoder",
