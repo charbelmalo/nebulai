@@ -389,7 +389,10 @@ export class OVEigenDriver implements InterpDriver {
       el.style.color = `rgb(${r},${g},${b})`;
       const w = el.offsetWidth;
       const [sx, sy] = p.position;
-      place(el, sx + 8 + w > this.cssW - 8 ? sx - w - 8 : sx + 8, sy - 9);
+      // extreme-Re anchors sit ON the ±Re axis — the same band as the axis
+      // direction tags; lift them clear so the two labels never collide
+      const yOff = Math.abs(sy - cy) < 16 ? -26 : -9;
+      place(el, sx + 8 + w > this.cssW - 8 ? sx - w - 8 : sx + 8, sy + yOff);
     }
   }
 

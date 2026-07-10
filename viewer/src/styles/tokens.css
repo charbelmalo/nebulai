@@ -1,17 +1,37 @@
 /* Nebul.AI viewer design tokens — single source of truth for chrome color.
    Mirrored in tokens.ts for GPU consumption; tests/unit/tokens-sync.test.ts
-   fails if the two drift. Values matched to the syncatlas reference frames. */
+   fails if the two drift.
+
+   Editorial dark system: neutral graphite surfaces, monochrome type, ONE
+   chrome accent. The 5-stop ramp is a data colormap (connection weight) —
+   it must never be used as chrome decoration. */
 
 :root {
-  --bg: #150f17;
-  --bg-raise: #1d1420;
-  --bg-pill: #221826;
+  /* surfaces — neutral graphite, no hue cast */
+  --bg: #0e0f12;
+  --bg-raise: #15161a;
+  --bg-pill: #1d1f24;
 
-  --hairline: rgba(233, 215, 240, 0.1);
-  --text: #efe7f2;
-  --text-dim: #9d8fa6;
+  /* monochrome type scale */
+  --hairline: rgba(244, 245, 247, 0.08);
+  --hairline-strong: rgba(244, 245, 247, 0.16);
+  --text: #f4f5f7;
+  --text-dim: #a0a3ac;
+  --text-faint: #686c76;
 
-  /* the 5-stop connection ramp: beams, legend bar, badges, cluster accents */
+  /* the single chrome accent + status colors */
+  --accent: #4d8dff;
+  --accent-soft: rgba(77, 141, 255, 0.14);
+  --success: #3ecf8e;
+  --warn: #f5b13d;
+  --danger: #ff5c7a;
+
+  /* scene-linked hot color: overlay labels that mirror a GPU highlight keep
+     the renderer's warm marker so DOM and canvas agree */
+  --data-hot: #f5c33b;
+
+  /* the 5-stop connection ramp: beams, legend bar, badges, cluster accents.
+     DATA ONLY — chrome uses --accent. */
   --ramp-0: #f5c33b;
   --ramp-1: #f0863a;
   --ramp-2: #ea4f86;
@@ -26,10 +46,31 @@
     var(--ramp-4)
   );
 
+  /* radius ladder — cards 24, sub-cards 16, controls 12 */
   --radius-pill: 999px;
-  --radius-card: 14px;
+  --radius-card: 24px;
+  --radius-card-sm: 16px;
+  --radius-ctl: 12px;
+
+  /* elevation — soft, never harsh */
+  --shadow-card:
+    0 1px 0 rgba(255, 255, 255, 0.03) inset,
+    0 12px 32px -16px rgba(0, 0, 0, 0.55);
+  --shadow-float:
+    0 24px 64px -24px rgba(0, 0, 0, 0.7),
+    0 4px 16px -8px rgba(0, 0, 0, 0.45);
+
+  /* glass — transient overlays and floating controls only */
+  --glass-bg: color-mix(in srgb, var(--bg-raise) 78%, transparent);
+  --glass-blur: blur(20px) saturate(1.35);
+
+  /* motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --t-fast: 160ms;
+  --t-med: 240ms;
 
   --font-ui:
     "Inter var", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }

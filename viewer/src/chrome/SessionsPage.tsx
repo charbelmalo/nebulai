@@ -10,7 +10,7 @@
  *  keyword map throws away. Everything runs client-side; raw transcript text is
  *  parsed in memory and never stored or transmitted. */
 
-import { useSignal } from "@preact/signals";
+import { signal, useSignal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
 import { appStore } from "../app/store";
 import {
@@ -26,6 +26,12 @@ import {
   saveSessionAnalysis,
 } from "./sessionStore";
 import { $sessions } from "./state";
+
+/** Pinned turn = the node last clicked in the plot. Page-level (not persisted):
+ *  the inspector, the plot highlight, and keyboard nav all read/write it. */
+const $pinned = signal<{ sessionId: string; index: number } | null>(null);
+/** Categories currently dimmed in the plot (legend-key toggles). */
+const $dimmedCats = signal<ToolCategory[]>([]);
 
 const CATEGORY_HELP: Record<ToolCategory, string> = {
   orient: "read / search / fetch",
@@ -73,6 +79,7 @@ export function SessionsPage() {
         <div class="sessions-stage">
           <SessionPlot analyses={active} />
           <SessionsLegend />
+          <TurnInspector analyses={active} />
           {active.length === 0 && (
             <div class="sessions-empty">
               <h2>Plot an agent session</h2>
@@ -109,6 +116,9 @@ function SessionPlot(props: { analyses: SessionAnalysis[] }) {
     if (!canvas || !overlay || !host) return;
     let disposed = false;
     const driver = new SessionPlotDriver();
+    driver.onSelect = (sel) => {
+      $pinned.value = sel;
+    };
     driver
       .init(canvas, overlay)
       .then(() => {
@@ -142,7 +152,20 @@ function SessionPlot(props: { analyses: SessionAnalysis[] }) {
   useEffect(() => {
     if (!ready.value) return;
     driverRef.current?.setSessions(props.analyses);
+    // drop a pinned turn whose session left the active set
+    const p = $pinned.value;
+    if (p && !props.analyses.some((a) => a.id === p.sessionId)) $pinned.value = null;
   }, [key, ready.value]);
+
+  // mirror page state → driver (selection ring, category dimming)
+  const pinned = $pinned.value;
+  const dimmed = $dimmedCats.value;
+  useEffect(() => {
+    if (ready.value) driverRef.current?.setSelected(pinned);
+  }, [pinned, ready.value]);
+  useEffect(() => {
+    if (ready.value) driverRef.current?.setCategoryFilter(dimmed);
+  }, [dimmed, ready.value]);
 
   return (
     <div class="sessions-canvas-host">
@@ -271,21 +294,182 @@ function SessionsSide(props: { dragOver: boolean; setDragOver: (v: boolean) => v
 // ── legend + stats ─────────────────────────────────────────────────────────
 
 function SessionsLegend() {
+  const dimmed = $dimmedCats.value;
   return (
     <div class="sessions-legend">
-      <div class="sessions-legend-title">turn category</div>
+      <div class="sessions-legend-title">
+        turn category <span class="sessions-legend-hint">click to dim</span>
+      </div>
       <ul class="sessions-legend-keys">
-        {CATEGORY_ORDER.map((c) => (
-          <li key={c}>
-            <span class="sessions-key-dot" style={{ background: `rgb(${CATEGORY_RGB[c].join(",")})` }} />
-            <span class="sessions-key-label">{c}</span>
-            <span class="sessions-key-help">{CATEGORY_HELP[c]}</span>
-          </li>
-        ))}
+        {CATEGORY_ORDER.map((c) => {
+          const off = dimmed.includes(c);
+          return (
+            <li key={c}>
+              <button
+                type="button"
+                class={`sessions-key${off ? " is-off" : ""}`}
+                aria-pressed={off}
+                title={off ? `show ${c} turns` : `dim ${c} turns`}
+                onClick={() => {
+                  $dimmedCats.value = off
+                    ? dimmed.filter((x) => x !== c)
+                    : [...dimmed, c];
+                }}
+              >
+                <span
+                  class="sessions-key-dot"
+                  style={{ background: `rgb(${CATEGORY_RGB[c].join(",")})` }}
+                />
+                <span class="sessions-key-label">{c}</span>
+                <span class="sessions-key-help">{CATEGORY_HELP[c]}</span>
+              </button>
+            </li>
+          );
+        })}
       </ul>
       <div class="sessions-legend-axes">
         X time · Y context (cache-read) · Z new-context/turn (cache-write) · size ∝ tools ·
-        faded = sub-agent · drag to orbit
+        faded = sub-agent · drag to orbit · <b>click a node to dissect it</b>
+      </div>
+    </div>
+  );
+}
+
+// ── turn inspector — click a node, dissect the turn ────────────────────────
+
+function TurnInspector(props: { analyses: SessionAnalysis[] }) {
+  const pin = $pinned.value;
+  const a = pin ? props.analyses.find((x) => x.id === pin.sessionId) : undefined;
+  const t = pin && a ? a.turns[pin.index] : undefined;
+
+  // ← / → step through the session's responses; Esc unpins. Skipped while the
+  // user is typing in an input (the paste box).
+  useEffect(() => {
+    if (!pin || !a || !t) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (e.key === "Escape") $pinned.value = null;
+      else if (e.key === "ArrowLeft" && pin.index > 0)
+        $pinned.value = { sessionId: pin.sessionId, index: pin.index - 1 };
+      else if (e.key === "ArrowRight" && pin.index < a.turns.length - 1)
+        $pinned.value = { sessionId: pin.sessionId, index: pin.index + 1 };
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pin?.sessionId, pin?.index, a?.turns.length]);
+
+  if (!pin || !a || !t) return null;
+
+  const files = [...new Set(t.files)];
+  return (
+    <div class="sessions-inspect" role="dialog" aria-label={`Response ${t.index + 1} of ${a.name}`}>
+      <div class="sessions-inspect-head">
+        <div class="sessions-inspect-title">
+          <span class="sessions-inspect-name">{a.name}</span>
+          <span class="sessions-inspect-turn">
+            response {t.index + 1} / {a.turns.length}
+            {t.isSidechain ? " · sub-agent" : ""}
+          </span>
+        </div>
+        <div class="sessions-inspect-nav">
+          <button
+            type="button"
+            class="sessions-inspect-btn"
+            aria-label="Previous response"
+            disabled={t.index === 0}
+            onClick={() => ($pinned.value = { sessionId: a.id, index: t.index - 1 })}
+          >
+            ←
+          </button>
+          <button
+            type="button"
+            class="sessions-inspect-btn"
+            aria-label="Next response"
+            disabled={t.index >= a.turns.length - 1}
+            onClick={() => ($pinned.value = { sessionId: a.id, index: t.index + 1 })}
+          >
+            →
+          </button>
+          <button
+            type="button"
+            class="sessions-inspect-btn"
+            aria-label="Close inspector"
+            onClick={() => ($pinned.value = null)}
+          >
+            ×
+          </button>
+        </div>
+      </div>
+
+      <div class="sessions-inspect-cat">
+        <span
+          class="sessions-key-dot"
+          style={{ background: `rgb(${CATEGORY_RGB[t.category].join(",")})` }}
+        />
+        {t.category}
+        <span class="sessions-inspect-cathelp">{CATEGORY_HELP[t.category]}</span>
+      </div>
+
+      <div class="sessions-inspect-scroll">
+        {t.promptPreview === undefined ? (
+          // record persisted before previews existed — say so, don't guess
+          <p class="sessions-inspect-note">
+            prompt/response text wasn’t captured for this saved analysis — re-import
+            the transcript to dissect it.
+          </p>
+        ) : (
+          t.promptPreview && (
+            <div class="sessions-inspect-quote">
+              <span class="sessions-inspect-quote-l">serving prompt</span>
+              <p>{t.promptPreview}</p>
+            </div>
+          )
+        )}
+        {t.textPreview && (
+          <div class="sessions-inspect-quote is-response">
+            <span class="sessions-inspect-quote-l">response (start)</span>
+            <p>{t.textPreview}</p>
+          </div>
+        )}
+
+        <div class="sessions-stat-row">
+          <Stat label="t+" value={fmtSpan(t.tSec)} />
+          <Stat label="context" value={fmtTok(t.cacheRead)} />
+          <Stat label="new ctx" value={fmtTok(t.cacheWrite)} />
+        </div>
+        <div class="sessions-stat-row">
+          <Stat label="output" value={fmtTok(t.outputTokens)} />
+          <Stat label="thinking" value={`${t.thinkingBlocks}`} />
+          <Stat label="prose" value={`${t.textLen}ch`} />
+        </div>
+
+        {t.tools.length > 0 && (
+          <div class="sessions-inspect-tools">
+            <span class="sessions-inspect-l">tools, in order</span>
+            <div class="sessions-stat-tools">
+              {t.tools.map((n, i) => (
+                <span key={`${n}-${i}`} class="sessions-tool-chip">
+                  {n.split("__").pop()}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        {files.length > 0 && (
+          <div class="sessions-inspect-files">
+            <span class="sessions-inspect-l">files touched</span>
+            <ul>
+              {files.map((f) => (
+                <li key={f}>{f}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <div class="sessions-inspect-meta">
+          {t.model && <span>{shortModel(t.model)}</span>}
+          <span title={t.requestId}>{t.requestId.slice(0, 18)}…</span>
+        </div>
       </div>
     </div>
   );

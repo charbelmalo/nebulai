@@ -230,9 +230,12 @@ async function boot() {
       const entry = st.datasets.find((d) => d.id === id);
       if (!entry) return;
       st.setLoading(true);
+      progress.classList.remove("is-done");
+      progress.style.width = "0%";
       try {
         const next = await loadDataset(entry.path, (loaded, total) => {
           appStore.getState().setLoading(true, loaded, total);
+          progress.style.width = `${((loaded / total) * 100).toFixed(1)}%`;
           say(`${id} — ${(loaded / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`);
         });
         appStore.getState().setDataset(id, next);
@@ -242,6 +245,8 @@ async function boot() {
         say(`${metaLine()} · gpu: ${caps.tier}`);
       } finally {
         appStore.getState().setLoading(false);
+        progress.style.width = "100%";
+        progress.classList.add("is-done");
       }
     },
     switchViewMode,

@@ -216,7 +216,10 @@ export class WeightSpectrumDriver implements InterpDriver {
     for (const el of Array.from(this.axisRoot.querySelectorAll<HTMLElement>(".interp-axis-y"))) {
       const sigma = Number(el.dataset.sigma);
       const [sx, sy] = this.worldToScreen(0, this.yAt(sigma));
-      el.style.transform = `translate(${(sx - 6).toFixed(1)}px, ${(sy - 8).toFixed(1)}px) translateX(-100%)`;
+      // right-aligned at the plot edge; clamp so the widest label (σ=100)
+      // can't cross the overlay's left boundary and get clipped
+      const x = Math.max(sx - 6, el.offsetWidth + 4);
+      el.style.transform = `translate(${x.toFixed(1)}px, ${(sy - 8).toFixed(1)}px) translateX(-100%)`;
     }
     const xEl = this.axisRoot.querySelector<HTMLElement>(".interp-axis-x");
     if (xEl) {

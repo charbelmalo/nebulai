@@ -482,11 +482,12 @@ export class InductionDriver implements InterpDriver {
       place(cap(String(P + 1)), x0 + (P + 1) * s + 4, y0 + 2);
       place(cap(String(T - 1)), x0 + (T - 1) * s - 16, y0 + 2);
       if (!narrow) {
-        place(
-          cap(compact ? "← 2nd repeat" : `← col ${P + 1}, where the 2nd repeat begins`),
-          x0 + (P + 1) * s + 30,
-          y0 + 2,
-        );
+        // full caption only when it actually fits between its anchor and the
+        // T−1 tick at the pattern's right edge (≈6.9 px/char, mono)
+        const capX = x0 + (P + 1) * s + 30;
+        const full = `← col ${P + 1}, where the 2nd repeat begins`;
+        const fits = capX + full.length * 6.9 < x0 + (T - 1) * s - 24;
+        place(cap(!compact && fits ? full : "← 2nd repeat"), capX, y0 + 2);
       }
     } else if (sel) {
       const note = cap(

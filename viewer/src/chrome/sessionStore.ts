@@ -2,10 +2,12 @@
  *  sessions, backed by the browser's IndexedDB.
  *
  *  PRIVACY: only the *derived* `SessionAnalysis` is persisted — token totals,
- *  the per-turn trajectory, the tool histogram, file paths. The raw transcript
- *  text (prompts, model prose, tool output) is NEVER stored; it stays in
- *  volatile memory for the lifetime of the parse and is dropped. IndexedDB is
- *  local to this browser profile on this machine and is never transmitted.
+ *  the per-turn trajectory, the tool histogram, file paths, plus short
+ *  (≤240-char) prompt/response previews that power the turn inspector. The
+ *  full raw transcript text (complete prompts, model prose, tool output) is
+ *  NEVER stored; it stays in volatile memory for the lifetime of the parse
+ *  and is dropped. IndexedDB is local to this browser profile on this machine
+ *  and is never transmitted.
  *
  *  This is what makes "analysis persistence from session to session" real: an
  *  analysis loaded today is still on the Sessions trajectory tomorrow, so you

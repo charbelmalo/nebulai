@@ -6,7 +6,7 @@
   /* One radius scale; derive everything else from it. */
   --r-sm: 8px;
   --r-md: 12px;
-  --r-lg: 20px;
+  --r-lg: 24px;
   --r-pill: 999px;
 }
 

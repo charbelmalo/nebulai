@@ -28,6 +28,9 @@ def _update_index(out_root: Path) -> Path:
                 "noise_fraction": meta["noise_fraction"],
                 "namer": meta.get("namer"),
                 "has_edges": "edges" in doc,
+                # the viewer's Internals model picker reads this instead of
+                # probing each model's interp/index.json over the network
+                "has_interp": (jp.parent / "interp" / "index.json").exists(),
             }
         )
     index = out_root / "index.json"
@@ -223,6 +226,9 @@ def _run_interp(args: argparse.Namespace) -> None:
     )
     for p in written:
         print(f"  {p}")
+    # refresh the discovery index so the viewer's model picker sees the new
+    # bundle without a re-run of `nebulai tokens`
+    _update_index(Path(args.out))
 
 
 def _run_compare(args: argparse.Namespace) -> None:

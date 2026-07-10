@@ -21,6 +21,12 @@
       "port": 8901
     },
     {
+      "name": "viewer-static-c",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "python", "-m", "http.server", "8903", "--directory", "."],
+      "port": 8903
+    },
+    {
       "name": "compare-viewer",
       "runtimeExecutable": "uv",
       "runtimeArgs": ["run", "python", "-m", "http.server", "8777", "--directory", "out/compare"],

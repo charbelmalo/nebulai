@@ -59,9 +59,10 @@ export interface InterpFeature {
   legend?: LegendKey[];
   note?: string;
   /** Which corner the legend card docks to. Defaults to top-right; radial views
-   *  set "bl", and the two-column attention view sets "br" (a narrower card that
-   *  tucks into the reserved right gutter) so it never covers the data. */
-  legendCorner?: "tr" | "bl" | "br";
+   *  set "bl", the two-column attention view sets "br" (a narrower card that
+   *  tucks into the reserved right gutter), and views whose data hugs the right
+   *  column set "tl" — always the corner that covers the least data. */
+  legendCorner?: "tr" | "tl" | "bl" | "br";
   /** True when the view renders one bundled prompt at a time and should get the
    *  prompt selector, even outside the "forward" group (e.g. the SAE piano-roll
    *  renders per-prompt encoder activations but belongs to the sae group). All

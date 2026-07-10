@@ -63,6 +63,10 @@ export interface DatasetEntry {
   noise_fraction: number;
   namer: string | null;
   has_edges: boolean;
+  /** true when out/<id>/interp/index.json exists. Optional: index.json files
+   *  written before this field simply omit it and the viewer falls back to a
+   *  network probe. */
+  has_interp?: boolean;
 }
 
 export interface DatasetIndex {

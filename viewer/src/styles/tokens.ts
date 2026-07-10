@@ -1,11 +1,11 @@
 /** TS mirror of tokens.css for GPU-side use (ramp textures, clear color).
  *  tests/unit/tokens-sync.test.ts asserts these match the CSS custom props. */
 
-export const BG = "#150f17";
-export const BG_RAISE = "#1d1420";
-export const BG_PILL = "#221826";
-export const TEXT = "#efe7f2";
-export const TEXT_DIM = "#9d8fa6";
+export const BG = "#0e0f12";
+export const BG_RAISE = "#15161a";
+export const BG_PILL = "#1d1f24";
+export const TEXT = "#f4f5f7";
+export const TEXT_DIM = "#a0a3ac";
 
 /** 5-stop connection ramp, low→high weight. */
 export const RAMP = ["#f5c33b", "#f0863a", "#ea4f86", "#e33bd0", "#8b3bf0"] as const;

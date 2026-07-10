@@ -50,6 +50,13 @@ export interface SessionTurn {
 
   category: ToolCategory; // dominant category of this turn's tools
   cumOutput: number; // cumulative output tokens through this turn (monotonic)
+
+  /** First ≤240 chars of the user prompt this turn was serving (the latest
+   *  real user text before it — tool_result lines don't count). null when the
+   *  transcript had none; undefined on records persisted before this field. */
+  promptPreview?: string | null;
+  /** First ≤240 chars of this turn's visible assistant prose. */
+  textPreview?: string | null;
 }
 
 /** Ground-truth session totals, present only in the SDK *audit* format's
@@ -204,6 +211,30 @@ interface Acc {
   thinkingBlocks: number;
   textLen: number;
   order: number;
+  promptPreview: string | null;
+  textPreview: string | null;
+}
+
+/** Collapse whitespace and clip to a short inspector preview. */
+function clipPreview(s: string): string {
+  const t = s.replace(/\s+/g, " ").trim();
+  return t.length > 240 ? `${t.slice(0, 239)}…` : t;
+}
+
+/** Real user text from a user line's content — the prompt, not a tool_result.
+ *  Lines carrying tool_result blocks are the harness feeding results back, so
+ *  they never count as a prompt even if a text block rides along. */
+function userText(content: unknown): string | null {
+  if (typeof content === "string") return content.trim() || null;
+  if (!Array.isArray(content)) return null;
+  let out = "";
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const b = block as Record<string, unknown>;
+    if (b.type === "tool_result") return null;
+    if (b.type === "text" && typeof b.text === "string") out += `${b.text} `;
+  }
+  return out.trim() || null;
 }
 
 /** True when a raw log string looks like a Claude Code agent transcript — either
@@ -298,6 +329,9 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
   let maxTs: number | null = null;
   let resultLine: RawLine | null = null;
   let sawAudit = false; // any line carried an _audit_timestamp / result subtype
+  // latest real user prompt, tracked per agent context (main vs each sub-agent)
+  // so a sub-agent's task brief doesn't clobber the main conversation's prompt
+  const lastPrompt = new Map<string, string>();
 
   for (const line of lines) {
     let o: RawLine;
@@ -332,10 +366,12 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
       const rid = o.message?.id ?? o.requestId ?? o.uuid ?? `turn-${order}`;
       let acc = byReq.get(rid);
       if (!acc) {
+        const isSide = !!o.isSidechain || o.parent_tool_use_id != null;
+        const agentKey = o.parent_tool_use_id ?? (isSide ? "side" : "main");
         acc = {
           requestId: rid,
           tMs: ts,
-          isSidechain: !!o.isSidechain || o.parent_tool_use_id != null,
+          isSidechain: isSide,
           parentToolUseId: o.parent_tool_use_id ?? null,
           model: o.message?.model ?? null,
           usage: {},
@@ -344,6 +380,8 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
           thinkingBlocks: 0,
           textLen: 0,
           order: order++,
+          promptPreview: lastPrompt.get(agentKey) ?? null,
+          textPreview: null,
         };
         byReq.set(rid, acc);
         reqOrder.push(rid);
@@ -373,11 +411,17 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
             acc.thinkingBlocks++;
           } else if (b.type === "text" && typeof b.text === "string") {
             acc.textLen += b.text.length;
+            if (acc.textPreview === null && b.text.trim()) acc.textPreview = clipPreview(b.text);
           }
         }
       }
     } else if (o.type === "user") {
       nUser++;
+      const ut = userText(o.message?.content);
+      if (ut) {
+        const isSide = !!o.isSidechain || o.parent_tool_use_id != null;
+        lastPrompt.set(o.parent_tool_use_id ?? (isSide ? "side" : "main"), clipPreview(ut));
+      }
     }
   }
 
@@ -442,6 +486,8 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
       textLen: acc.textLen,
       category,
       cumOutput,
+      promptPreview: acc.promptPreview,
+      textPreview: acc.textPreview,
     });
   });
 

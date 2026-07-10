@@ -816,7 +816,9 @@ function vennDist(r1: number, r2: number, target: number): number {
 function vis(s: string): string {
   const t = s
     .replace(/\n/g, "⏎")
-    .replace(/^ /, "␣")
+    // whole leading run, not just the first space — multi-space code-indent
+    // tokens otherwise render as an invisible gap between quotes
+    .replace(/^ +/, (m) => "␣".repeat(m.length))
     .replace(/[\x00-\x09\x0b-\x1f\x7f]/g, (c) =>
       String.fromCodePoint(0x2400 + (c === "\x7f" ? 0x21 : c.charCodeAt(0))),
     );

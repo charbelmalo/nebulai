@@ -115,12 +115,18 @@ function fmtSecs(n: number): string {
 }
 
 export class SessionPlotDriver {
+  /** Chrome hook: fired when the user clicks a turn node (or empty space →
+   *  null). The page owns the inspector; the driver only reports the pick. */
+  onSelect: ((sel: { sessionId: string; index: number } | null) => void) | null = null;
+
   private deck: Deck<OrbitView[]> | null = null;
   private core!: CoreModule;
   private layers!: LayersModule;
   private canvas!: HTMLCanvasElement;
   private overlay!: HTMLElement;
   private tooltip!: HTMLElement;
+  private selected: { sessionId: string; index: number } | null = null;
+  private hiddenCats = new Set<ToolCategory>();
 
   private nodes: Node[] = [];
   private segs: Seg[] = [];
@@ -167,6 +173,7 @@ export class SessionPlotDriver {
         this.deck?.setProps({ viewState: { orbit: viewState } });
       },
       onHover: (info: PickingInfo) => this.onHover(info),
+      onClick: (info: PickingInfo) => this.onClick(info),
       layers: [],
       width: this.cssW,
       height: this.cssH,
@@ -334,17 +341,32 @@ export class SessionPlotDriver {
         id: "session-nodes",
         data: this.nodes,
         getPosition: (d: Node) => d.position,
+        // dimmed (alpha 26) when its category is filtered out — still there,
+        // still pickable, just visually deprioritised. No information loss.
         getFillColor: (d: Node) =>
-          [...d.color, d.turn.isSidechain ? 130 : 235] as [number, number, number, number],
-        getRadius: (d: Node) => d.radius,
+          [
+            ...d.color,
+            this.hiddenCats.has(d.turn.category) ? 26 : d.turn.isSidechain ? 130 : 235,
+          ] as [number, number, number, number],
+        getRadius: (d: Node) => d.radius + (this.isSelected(d) ? 3 : 0),
         radiusUnits: "pixels",
         billboard: true,
         stroked: true,
-        getLineColor: [12, 14, 22, 220],
+        // amber ring = the data-hot echo for the inspector's pinned turn
+        getLineColor: (d: Node) =>
+          this.isSelected(d)
+            ? ([245, 195, 59, 255] as [number, number, number, number])
+            : ([12, 14, 22, 220] as [number, number, number, number]),
         lineWidthUnits: "pixels",
-        getLineWidth: 1,
+        getLineWidth: (d: Node) => (this.isSelected(d) ? 2.5 : 1),
         pickable: true,
         radiusMinPixels: 2,
+        updateTriggers: {
+          getFillColor: [...this.hiddenCats].join(","),
+          getLineColor: this.selKey(),
+          getLineWidth: this.selKey(),
+          getRadius: this.selKey(),
+        },
       }),
       new TextLayer({
         id: "session-ticks",
@@ -393,12 +415,49 @@ export class SessionPlotDriver {
     return agentOrder.map((k) => byAgent.get(k)!).filter((e) => e.path.length >= 2);
   }
 
+  /** Highlight one turn (amber ring) — the page's inspector selection. */
+  setSelected(sel: { sessionId: string; index: number } | null): void {
+    this.selected = sel;
+    this.render();
+  }
+
+  /** Dim (never remove — no information loss) the given turn categories. */
+  setCategoryFilter(hidden: ToolCategory[]): void {
+    this.hiddenCats = new Set(hidden);
+    this.render();
+  }
+
+  private selKey(): string {
+    return this.selected ? `${this.selected.sessionId}:${this.selected.index}` : "";
+  }
+
+  private isSelected(d: Node): boolean {
+    return (
+      this.selected !== null &&
+      this.selected.sessionId === d.sessionId &&
+      this.selected.index === d.index
+    );
+  }
+
+  private onClick(info: PickingInfo): void {
+    const obj = info.object as Node | undefined;
+    if (obj && info.layer?.id === "session-nodes") {
+      this.selected = { sessionId: obj.sessionId, index: obj.index };
+    } else {
+      this.selected = null;
+    }
+    this.render();
+    this.onSelect?.(this.selected);
+  }
+
   private onHover(info: PickingInfo): void {
     const obj = info.object as Node | undefined;
     if (!obj || info.layer?.id !== "session-nodes") {
       this.tooltip.style.visibility = "hidden";
+      this.canvas.style.cursor = "";
       return;
     }
+    this.canvas.style.cursor = "pointer";
     const t = obj.turn;
     const tools = t.tools.length
       ? t.tools.map((n) => n.split("__").pop()).join(" · ")

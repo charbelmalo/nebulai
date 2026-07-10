@@ -8,17 +8,48 @@
  *  The active model is the current dataset id (bundles are per-model). If a model
  *  has no interp export, the driver's setModel rejects and we say so plainly. */
 
-import { useSignal } from "@preact/signals";
+import { signal, useSignal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
+import { requestDataset } from "../app/actions";
 import { appStore } from "../app/store";
-import { loadInterpIndex } from "../data/interp";
+import { hasInterp, loadInterpIndex } from "../data/interp";
+import type { DatasetEntry } from "../data/schema";
 import type { InterpDriver, InterpGroup } from "../scene/interp/InterpDriver";
 import { GROUP_LABEL, INTERP_FEATURES, findFeature } from "../scene/interp/registry";
-import { $capabilities, $datasetId, $interp } from "./state";
+import { SelectRow } from "./controls";
+import { $capabilities, $datasetId, $datasets, $interp, $loading, $viewMode } from "./state";
 
 interface TraceEntry {
   slug: string;
   prompt: string;
+}
+
+/** Which datasets have an interp export (out/<id>/interp/index.json)? The
+ *  discovery index carries a `has_interp` flag, so the model picker can say up
+ *  front which models the Internals views will work for with zero extra
+ *  requests. Only entries from an older index that predate the flag fall back
+ *  to a per-model network probe. null = not resolved yet. */
+const $interpAvail = signal<Record<string, boolean> | null>(null);
+let availProbe: string | null = null;
+function probeInterpAvail(entries: DatasetEntry[]): void {
+  const key = entries.map((e) => e.id).join("|");
+  if (availProbe === key) return;
+  availProbe = key;
+  const known: Record<string, boolean> = {};
+  const unknown: DatasetEntry[] = [];
+  for (const e of entries) {
+    if (typeof e.has_interp === "boolean") known[e.id] = e.has_interp;
+    else unknown.push(e);
+  }
+  if (unknown.length === 0) {
+    $interpAvail.value = known; // fully answered by the index — no network
+    return;
+  }
+  Promise.all(unknown.map(async (e) => [e.id, await hasInterp(e.id)] as const)).then(
+    (pairs) => {
+      $interpAvail.value = { ...known, ...Object.fromEntries(pairs) };
+    },
+  );
 }
 
 export function InterpPage() {
@@ -29,6 +60,9 @@ export function InterpPage() {
   const feature = findFeature(interp.featureId);
 
   const status = useSignal<"loading" | "ready" | "error">("loading");
+  // Which real step the loading is in: spinning up the renderer vs fetching
+  // the bundle + computing the layout. Two awaits, two honest stages.
+  const phase = useSignal<"renderer" | "data">("renderer");
   const errMsg = useSignal("");
   const traces = useSignal<TraceEntry[]>([]);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -58,6 +92,10 @@ export function InterpPage() {
   // so the selector can offer them; resolve "" to the first slug.
   const isForward =
     (feature?.group === "forward" || feature?.perTrace === true) && feature?.ownPrompts !== true;
+  const avail = $interpAvail.value;
+  useEffect(() => {
+    if ($datasets.value.length) probeInterpAvail($datasets.value);
+  }, [$datasets.value]);
   useEffect(() => {
     if (!model) return;
     let ok = true;
@@ -87,6 +125,7 @@ export function InterpPage() {
     let last = performance.now();
     const t0 = last;
     status.value = "loading";
+    phase.value = "renderer";
     errMsg.value = "";
 
     const dprOf = () => Math.min(window.devicePixelRatio || 1, 2);
@@ -105,6 +144,7 @@ export function InterpPage() {
       const sz = sizeNow();
       d.resize(sz.w, sz.h, dprOf());
       driverRef.current = d;
+      phase.value = "data";
       try {
         await d.setModel(model, resolvedTrace);
       } catch (e) {
@@ -169,6 +209,29 @@ export function InterpPage() {
           <span class="interp-rail-title">Internals</span>
           <span class="interp-rail-count">{INTERP_FEATURES.length} of 25 live</span>
         </div>
+        <div class="interp-model">
+          <SelectRow
+            label="Model"
+            value={model ?? ""}
+            disabled={$loading.value.active || $viewMode.value === "compare"}
+            options={$datasets.value.map((d) => {
+              const has = avail?.[d.id];
+              return {
+                value: d.id,
+                label:
+                  has === true ? `${d.id} ✓` : has === false ? `${d.id} — map only` : d.id,
+              };
+            })}
+            onChange={(id) => requestDataset(id)}
+          />
+          <p class="interp-model-hint">
+            {avail === null
+              ? "checking which models have an internals export…"
+              : model && avail[model]
+                ? `✓ = has an internals export · reading out/${model}/interp`
+                : "✓ = has an internals export — pick one, or export this model below"}
+          </p>
+        </div>
         <div class="interp-rail-scroll">
           {[...byGroup.entries()].map(([group, feats]) => (
             <section key={group} class="interp-rail-group">
@@ -193,10 +256,7 @@ export function InterpPage() {
         </p>
       </aside>
 
-      <div class="interp-stage">
-        <canvas ref={canvasRef} class="interp-canvas" />
-        <div ref={overlayRef} class="interp-overlay" />
-
+      <div class={`interp-stage${isForward && traces.value.length > 0 ? " has-tracebar" : ""}`}>
         {isForward && traces.value.length > 0 && (
           <div class="interp-tracebar" role="radiogroup" aria-label="Prompt">
             <span class="interp-tracebar-label">prompt</span>
@@ -215,6 +275,11 @@ export function InterpPage() {
             ))}
           </div>
         )}
+
+        <div class="interp-canvas-host">
+          <canvas ref={canvasRef} class="interp-canvas" />
+          <div ref={overlayRef} class="interp-overlay" />
+        </div>
 
         {feature && (
           <div
@@ -254,16 +319,64 @@ export function InterpPage() {
           </div>
         )}
 
-        {status.value === "loading" && (
-          <div class="interp-status">computing…</div>
-        )}
-        {status.value === "error" && (
-          <div class="interp-status is-error">
-            <strong>No interp bundle for “{model}”.</strong>
-            <span>{errMsg.value}</span>
+        {$loading.value.active ? (
+          <div class="interp-status is-loading">
+            <strong>Switching model…</strong>
+            <span>
+              {$loading.value.total > 0
+                ? `downloading dataset — ${($loading.value.loaded / 1e6).toFixed(1)} / ${($loading.value.total / 1e6).toFixed(1)} MB`
+                : "downloading dataset…"}
+            </span>
+            <span class="interp-status-bar">
+              <span
+                class="interp-status-bar-fill is-measured"
+                style={{
+                  width: `${$loading.value.total > 0 ? Math.min(100, ($loading.value.loaded / $loading.value.total) * 100) : 0}%`,
+                }}
+              />
+            </span>
             <span class="interp-status-hint">
-              Run <span class="interp-kbd">nebulai interp --model {model}</span> to
-              export it.
+              the internals view refreshes automatically when the model lands
+            </span>
+          </div>
+        ) : status.value === "loading" ? (
+          <div class="interp-status is-loading">
+            <strong>{feature ? `#${feature.n} ${feature.label}` : "Loading view"}</strong>
+            <span>
+              {phase.value === "renderer"
+                ? "starting the renderer…"
+                : `fetching ${model} bundle + computing…`}
+            </span>
+            <span class="interp-status-bar">
+              <span class="interp-status-bar-fill" />
+            </span>
+            <span class="interp-status-hint">
+              first open fetches out/{model}/interp — cached after that
+            </span>
+          </div>
+        ) : null}
+        {status.value === "error" && !$loading.value.active && (
+          <div class="interp-status is-error">
+            <strong>No internals export for “{model}”.</strong>
+            <span>{errMsg.value}</span>
+            {avail && (
+              <div class="interp-status-actions">
+                {$datasets.value
+                  .filter((d) => d.id !== model && avail[d.id])
+                  .map((d) => (
+                    <button
+                      key={d.id}
+                      type="button"
+                      class="interp-status-switch"
+                      onClick={() => requestDataset(d.id)}
+                    >
+                      switch to {d.id}
+                    </button>
+                  ))}
+              </div>
+            )}
+            <span class="interp-status-hint">
+              or export this model: <span class="interp-kbd">nebulai interp --model {model}</span>
             </span>
           </div>
         )}

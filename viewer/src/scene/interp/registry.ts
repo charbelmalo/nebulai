@@ -501,7 +501,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
       { label: "decade gridline ‖x‖ = 10ᵏ", rgb: "148,140,165" },
     ],
     note: "log₁₀ y · hover a node for the exact norm + embed→final growth",
-    legendCorner: "tr",
+    legendCorner: "br",
     create: () => new ResidualRibbonDriver(),
   },
   {
@@ -529,7 +529,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
       { label: "all other tokens (rank ≥3) · p_rest", rgb: "123,130,156" },
     ],
     note: "no renormalization — position IS the true probability · switch prompts to compare",
-    legendCorner: "br",
+    legendCorner: "tl",
     create: () => new ProbabilitySimplexDriver(),
   },
   {

@@ -476,7 +476,9 @@ export class OcclusionDriver implements InterpDriver {
         }
       }
       if (!compact) {
-        place(cap("drop in log p of the baseline top-1 (nats, linear) · one bar = one real occluded forward"), GL + 4, GT + barZone - 12);
+        // top-left inside the panel — the short leading bars leave that region
+        // empty, whereas the old baseline slot collided with bars + the −tick
+        place(cap("drop in log p of the baseline top-1 (nats, linear) · one bar = one real occluded forward"), GL + 4, GT + 4);
       }
     }
   }
