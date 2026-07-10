@@ -550,6 +550,95 @@ export interface CompassBundle {
   exemplars: { f: number; kind: "neuron" | "token"; cos: number }[];
 }
 
+/** One co-firing chip: an exemplar pair with its exact counts. */
+export interface CofireChip {
+  i: number;
+  j: number;
+  /** exact joint count */
+  c: number;
+  /** expected count under independence, 2 dp */
+  e: number;
+  lift: number;
+  /** decoder-direction cosine, 4 dp */
+  cos: number;
+  /** most common token at co-firing positions (null when c = 0) */
+  tok: string | null;
+  /** that token's share of co-firing positions, 3 dp */
+  share: number;
+  /** joint count after a seeded shuffle of one feature's rows */
+  shuf: number;
+}
+
+export interface CofireBundle {
+  meta: {
+    model: string;
+    created: string;
+    sae_repo: string;
+    hook_point: string;
+    corpus: {
+      title: string;
+      source: string;
+      sha256: string;
+      n_chars: number;
+      n_tokens: number;
+      window: number;
+      n_windows: number;
+      /** counted positions (position 0 of each window dropped) */
+      n_pos: number;
+    };
+    quantity: string;
+    formula: string;
+    note: string;
+    d_sae: number;
+    layer: number;
+    /** support floor: pairs considered only when c >= this */
+    min_count: number;
+    /** export = top n_pairs by Dunning's G² among the n_support support pairs */
+    selection: string;
+    /** smallest exported G² — the truncation boundary */
+    g2_min: number;
+    /** total pairs with c >= min_count (before truncation) */
+    n_support: number;
+    /** Pearson r(decoder cos, PMI) over ALL support pairs — the global answer */
+    pearson_cos_pmi: number;
+    /** features that fired at least once */
+    n_active: number;
+    /** features with marginal count >= min_count */
+    n_eligible: number;
+    n_pairs: number;
+    l0_mean: number;
+    l0_median: number;
+    recon_cos_mean: number;
+    recon_cos_n: number;
+    shuffle: {
+      seed: number;
+      n_sampled: number;
+      shuf_sum: number;
+      e_sum: number;
+      /** aggregate shuffled/expected — ≈1 confirms the independence yardstick */
+      agg_ratio: number;
+    };
+  };
+  /** counted corpus positions */
+  N: number;
+  /** (n_pairs) feature ids, sorted by c desc */
+  pi: number[];
+  pj: number[];
+  /** (n_pairs) exact joint counts */
+  c: number[];
+  /** (n_pairs) decoder cosine, 4 dp */
+  cos: number[];
+  /** (n_pairs) index into ctok_strs: top co-firing token */
+  tt: number[];
+  /** (n_pairs) top co-token's share of co-firing positions, 3 dp */
+  tshare: number[];
+  ctok_strs: string[];
+  /** marginal counts for every feature appearing in the export */
+  f_ids: number[];
+  f_n: number[];
+  chips: { assoc: CofireChip[]; count: CofireChip[]; avoid: CofireChip[] };
+}
+
 /** One occlusion mode's per-position results (arrays indexed by position). */
 export interface OcclusionMode {
   /** drop in the baseline top-1's log-prob when this position is occluded, nats, 4 dp */
@@ -687,6 +776,9 @@ export const loadGrok = (model: string, base = "/out") =>
 
 export const loadCompass = (model: string, base = "/out") =>
   fetchJSON<CompassBundle>(`${interpBase(model, base)}/compass.json`);
+
+export const loadCofire = (model: string, base = "/out") =>
+  fetchJSON<CofireBundle>(`${interpBase(model, base)}/cofire.json`);
 
 export const loadHeads = (model: string, base = "/out") =>
   fetchJSON<HeadsBundle>(`${interpBase(model, base)}/heads.json`);

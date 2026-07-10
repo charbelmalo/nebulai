@@ -17,6 +17,7 @@
 import { AblationDriver } from "./AblationDriver";
 import { AttentionFlowDriver } from "./AttentionFlowDriver";
 import { AttentionRolloutDriver } from "./AttentionRolloutDriver";
+import { CofireDriver } from "./CofireDriver";
 import { CompassDriver } from "./CompassDriver";
 import { CompositionWebDriver } from "./CompositionWebDriver";
 import { EmbeddingConstellationDriver } from "./EmbeddingConstellationDriver";
@@ -767,6 +768,57 @@ export const INTERP_FEATURES: InterpFeature[] = [
     legendCorner: "br",
     legendCollapsed: true,
     create: () => new CompassDriver(),
+  },
+  {
+    id: "cofire-venn",
+    n: 24,
+    label: "Co-Firing Venn",
+    group: "sae",
+    blurb:
+      "Do SAE features that point alike FIRE alike? The res-jb encoder run " +
+      "over every token of Alice in Wonderland (44,179 positions, disclosed " +
+      "corpus, sha256 in meta): exact counts of how often every feature pair " +
+      "fires together vs the independence expectation n_i·n_j/N. Across all " +
+      "854,237 pairs with ≥20 co-firings, decoder cosine correlates with " +
+      "co-firing PMI at r = 0.50 — geometry predicts behavior, but only " +
+      "halfway. The strongest avoiders expect ~486 co-firings and show ZERO; " +
+      "the top one has decoder cos −0.49 (anti-aligned directions never fire " +
+      "together), while another avoider pair is nearly orthogonal (−0.03) — " +
+      "exclusion without geometric opposition. The venn panel is area-true: " +
+      "circle areas ∝ marginal counts, overlap ∝ the exact joint count.",
+    math:
+      "fires = ReLU((x̄ − b_dec)·W_enc + b_enc) > 0 at blocks.8.hook_resid_pre, " +
+      "x̄ = x − mean(x); window = the SAE's own training context (128, " +
+      "asserted from cfg — 512-token windows measured OOD: L0 159 vs 66). " +
+      "c_ij = exact joint count; PMI = log₂(c·N/(n_i·n_j)) from the shipped " +
+      "integers; export = top 20,000 pairs by Dunning's G² (2×2 " +
+      "log-likelihood) above support c ≥ 20, both tails (smallest exported " +
+      "G² 480.9). Venn center distance solved by bisection so the lens area " +
+      "equals the exact overlap (rel err < 1e-11, tested).",
+    source:
+      "cofire.json ⋈ sae.json. Corpus: Project Gutenberg #11 (public " +
+      "domain). Verified: sparse XᵀX counts ≡ sorted-row intersections for " +
+      "every exported pair (asserted); 3 pairs + marginals recounted from an " +
+      "independent corpus re-pass (exact); seeded shuffle of one feature's " +
+      "rows lands on the expectation (aggregate ratio 0.987); re-run " +
+      "byte-identical. L0 mean 66.5, recon cos 0.951 — the published regime.",
+    legend: [
+      { label: "pair — color = co-count (log viridis)", rgb: "54,181,120" },
+      { label: "venn: feature i (area ∝ count)", rgb: "96,165,250" },
+      { label: "venn: feature j (area ∝ count)", rgb: "244,114,182" },
+      { label: "PMI 0 = independence guide", rgb: "118,126,158" },
+    ],
+    note:
+      "position 0 of each window dropped (chunk boundary + GPT-2's " +
+      "massive-activation outlier) · shown pairs are the top by G² " +
+      "significance, NOT a full census — the header says so and the global " +
+      "r over all support pairs ships in meta · PMI has a hard ceiling " +
+      "log₂(N/max nᵢ), so rare pairs dominate the top · chips dedupe by " +
+      "feature · top co-token per pair exposes token-driven pairs " +
+      "(“co-fires only on ⏎”)",
+    legendCorner: "br",
+    legendCollapsed: true,
+    create: () => new CofireDriver(),
   },
   {
     id: "grokking-clock",

@@ -28,6 +28,7 @@ norms, and logit-lens top-k readouts — all real, all small.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -1784,6 +1785,421 @@ def compute_compass(
     }
 
 
+# Corpus for co-firing statistics: one complete public-domain book, stored in
+# the repo and sha256-stamped into the bundle so every count is reproducible.
+COFIRE_CORPUS = Path(__file__).parent / "corpus_alice.txt"
+
+
+def compute_cofire(
+    m: GPT2Numpy,
+    repo: str = SAE_REPO,
+    hook: str = SAE_HOOK,
+    window: int = 128,
+    min_count: int = 20,
+    max_pairs: int = 20000,
+    top_chips: int = 10,
+    shuffle_sample: int = 200,
+    recon_every: int = 4,
+    seed: int = 0,
+) -> dict:
+    """#24 Co-Firing Venn — which SAE features fire TOGETHER, counted on a corpus.
+
+    #5/#12/#22 are about where decoder directions POINT; this is about how the
+    features BEHAVE: the res-jb encoder is run over every token of a real,
+    disclosed corpus (Alice's Adventures in Wonderland, Project Gutenberg #11,
+    public domain, sha256 in meta), and for every pair of features we count the
+    exact number of positions where both fire (acts > 0). Joined with each
+    pair's decoder cosine, this asks the polysemanticity question directly: do
+    geometrically-similar features fire on the same tokens (feature splitting)
+    or do they exclude each other (winner-take-all)?
+
+    Exact quantities, no estimation:
+      n_i  = #positions feature i fires        (integer)
+      c_ij = #positions BOTH fire               (integer, sparse XᵀX)
+      e_ij = n_i·n_j/N   expected under independence with these marginals
+      lift = c_ij·N/(n_i·n_j);  PMI = log2 lift  (computed client-side from the
+             exact integers — nothing pre-rounded enters the axes)
+      cos  = cosine(W_dec[i], W_dec[j])          (float32, float64-verified)
+
+    Honesty:
+    - window = the SAE's own training context_size (128, asserted from cfg):
+      feeding longer contexts is out-of-distribution for the SAE — a 512-token
+      first attempt measured L0 ≈ 159 and recon cos 0.86 vs the published
+      ~60-70 / 0.93+ regime.
+    - Position 0 of every window is dropped from ALL statistics: a chunk
+      boundary is not a real document start and carries GPT-2's massive-
+      activation outlier (see compute_sae_acts). Stated in meta.
+    - Selection is Dunning's G² (the standard 2×2 log-likelihood collocation
+      statistic, exact from the same integers): the top max_pairs pairs by G²
+      among all pairs with c_ij ≥ min_count. A raw count threshold was tried
+      first and kept only always-on pairs (max lift 10); G² spans both tails —
+      strong attraction AND strong avoidance above the support floor. The
+      global cos↔PMI Pearson over ALL support pairs ships in meta so the
+      truncation cannot fake a correlation. PMI has a hard ceiling
+      log2(N/max(n_i,n_j)) — rare pairs dominate the top; disclosed.
+    - c = 0 avoidance can't clear a support floor by definition, so the
+      strongest below-independence pairs are additionally surfaced among the
+      300 most active features where e ≥ 20 ("avoid" chips).
+    - Measured yardstick: a seeded permutation of one feature's firing rows
+      destroys pairing while keeping both marginals; shuffled counts are
+      exported per chip and as an aggregate ratio vs e (expect ≈ 1).
+    - Two independent count paths must agree: c_ij from the sparse matmul is
+      asserted equal to the sorted-row intersection size for EVERY exported
+      pair (which also yields the top co-firing token, so token-driven pairs
+      are visible: "co-fires mostly on ' the'").
+    - Chunking restarts the positional embedding every `window` tokens;
+      position-sensitive features see that sawtooth (real, disclosed).
+    """
+    from huggingface_hub import hf_hub_download
+    from safetensors.numpy import load_file
+    from scipy import sparse as sp
+
+    text = COFIRE_CORPUS.read_text(encoding="utf-8")
+    sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    cfg = json.loads(open(hf_hub_download(repo, f"{hook}/cfg.json")).read())
+    t = load_file(hf_hub_download(repo, f"{hook}/sae_weights.safetensors"))
+    W_enc, b_enc = t["W_enc"], t["b_enc"]
+    W_dec, b_dec = t["W_dec"], t["b_dec"]
+    d_sae, d_in = int(cfg["d_sae"]), int(cfg["d_in"])
+    layer = int(cfg["hook_point_layer"])
+    assert W_enc.shape == (d_in, d_sae), f"W_enc shape {W_enc.shape}"
+    assert W_dec.shape == (d_sae, d_in), f"W_dec shape {W_dec.shape}"
+    assert d_in == m.d, f"SAE d_in {d_in} != model d {m.d}"
+    assert window == int(cfg["context_size"]), (
+        f"window {window} != SAE training context_size {cfg['context_size']} — "
+        "longer contexts are out-of-distribution for the SAE (measured: L0 159 "
+        "vs the published ~65 at 512 tokens)"
+    )
+
+    ids = m.encode(text)
+    n_tok = len(ids)
+
+    pos_feats: list[np.ndarray] = []  # active feature ids per counted position
+    tok_of_pos: list[int] = []  # token id at each counted position
+    nj = np.zeros(d_sae, dtype=np.int64)
+    l0_parts: list[np.ndarray] = []
+    cos_sum, cos_n = 0.0, 0
+    n_windows = 0
+    for w0 in range(0, n_tok, window):
+        chunk = ids[w0 : w0 + window]
+        if len(chunk) < 2:
+            break
+        tr: Trace = m.forward(chunk)
+        x = tr.resid[layer].astype(np.float32)
+        xc = x - x.mean(axis=1, keepdims=True)  # TL center_writing_weights basis
+        acts = np.maximum((xc - b_dec) @ W_enc + b_enc, 0.0)
+        if n_windows % recon_every == 0:  # recon cosine sampled (cost = 2nd big matmul)
+            recon = acts @ W_dec + b_dec
+            rc = (recon[1:] * xc[1:]).sum(1) / (
+                np.linalg.norm(recon[1:], axis=1) * np.linalg.norm(xc[1:], axis=1) + 1e-12
+            )
+            cos_sum += float(rc.sum())
+            cos_n += rc.size
+        n_windows += 1
+        A = acts[1:] > 0.0  # (T-1, d_sae) — position 0 dropped from all stats
+        nj += A.sum(0)
+        l0_parts.append(A.sum(1))
+        for r in range(A.shape[0]):
+            pos_feats.append(np.flatnonzero(A[r]).astype(np.int32))
+            tok_of_pos.append(int(chunk[r + 1]))
+
+    N = len(pos_feats)
+    l0 = np.concatenate(l0_parts)
+    assert l0.size == N
+    n_active = int((nj > 0).sum())
+
+    # Features eligible for pair statistics. c_ij ≤ min(n_i, n_j), so no
+    # dropped feature could have formed a qualifying pair — the census over
+    # c ≥ min_count is exhaustive despite the restriction.
+    kept = np.flatnonzero(nj >= min_count)
+    remap = np.full(d_sae, -1, dtype=np.int32)
+    remap[kept] = np.arange(kept.size, dtype=np.int32)
+
+    indptr = np.zeros(N + 1, dtype=np.int64)
+    idx_parts: list[np.ndarray] = []
+    for r, f in enumerate(pos_feats):
+        kf = remap[f]
+        kf = kf[kf >= 0]
+        idx_parts.append(kf)
+        indptr[r + 1] = indptr[r] + kf.size
+    indices = np.concatenate(idx_parts)
+    X = sp.csr_matrix(
+        (np.ones(indices.size, dtype=np.int32), indices, indptr), shape=(N, kept.size)
+    )
+    C = sp.triu(X.T @ X, k=1).tocoo()
+
+    c_all = C.data.astype(np.int64)
+    qual = c_all >= min_count
+    pi_s = kept[C.row[qual]]  # ALL support pairs (before G² truncation)
+    pj_s = kept[C.col[qual]]
+    c_s = c_all[qual]
+    n_support = int(c_s.size)
+    na_s = nj[pi_s].astype(np.float64)
+    nb_s = nj[pj_s].astype(np.float64)
+
+    # Dunning's G² over the full 2×2 table — exact from the integer counts.
+    def g2_of(cv: np.ndarray, na: np.ndarray, nb: np.ndarray) -> np.ndarray:
+        tot = float(N)
+        k11 = cv.astype(np.float64)
+        k12, k21 = na - k11, nb - k11
+        k22 = tot - na - nb + k11
+
+        def term(k: np.ndarray, row: np.ndarray, col: np.ndarray) -> np.ndarray:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                v = k * np.log(k * tot / (row * col))
+            return np.where(k > 0, v, 0.0)
+
+        return 2.0 * (
+            term(k11, na, nb)
+            + term(k12, na, tot - nb)
+            + term(k21, tot - na, nb)
+            + term(k22, tot - na, tot - nb)
+        )
+
+    g2_s = g2_of(c_s, na_s, nb_s)
+
+    # Decoder cosines for ALL support pairs (blocked) — needed for the global
+    # cos↔PMI correlation, so the exported truncation cannot fake a trend.
+    Wd64 = W_dec.astype(np.float64)
+    dn = np.linalg.norm(Wd64, axis=1)
+    assert float(dn.min()) > 1e-6, "zero-norm decoder row"
+    U = (Wd64 / dn[:, None]).astype(np.float32)
+    cos_s = np.empty(n_support, dtype=np.float64)
+    B = 262144
+    for r0 in range(0, n_support, B):
+        r1 = min(r0 + B, n_support)
+        cos_s[r0:r1] = np.einsum("ij,ij->i", U[pi_s[r0:r1]], U[pj_s[r0:r1]])
+    pmi_s = np.log2(c_s * float(N) / (na_s * nb_s))
+    pearson = float(np.corrcoef(cos_s, pmi_s)[0, 1])
+
+    # Export: top max_pairs by G² (both tails), then sort by c desc for
+    # transport determinism (the viewer reads c[0] as the color-scale max).
+    sel_g2 = np.argsort(-g2_s, kind="stable")[:max_pairs]
+    pi, pj, c = pi_s[sel_g2], pj_s[sel_g2], c_s[sel_g2]
+    cosd, g2v = cos_s[sel_g2], g2_s[sel_g2]
+    g2_min = float(g2v.min())
+    order = np.lexsort((pj, pi, -c))  # deterministic: c desc, then ids
+    pi, pj, c, cosd = pi[order], pj[order], c[order], cosd[order]
+    n_pairs = int(c.size)
+
+    # float64 verification of the float32 cosine scan on a seeded sample.
+    rngv = np.random.default_rng(seed)
+    samp = rngv.choice(n_pairs, size=min(64, n_pairs), replace=False)
+    U64 = Wd64 / dn[:, None]
+    worst = max(
+        abs(float(U64[pi[k]] @ U64[pj[k]]) - float(cosd[k])) for k in map(int, samp)
+    )
+    assert worst < 1e-5, f"cosine verification failed: {worst}"
+
+    # Sorted firing-row list per involved feature (from CSC — rows are sorted).
+    Xc = X.tocsc()
+    tok_arr = np.array(tok_of_pos, dtype=np.int32)
+
+    def rows_of(f: int) -> np.ndarray:
+        k = int(remap[f])
+        assert k >= 0
+        return Xc.indices[Xc.indptr[k] : Xc.indptr[k + 1]]
+
+    # Per-pair: independent recount (intersection ≡ matmul count) + top co-token.
+    tok_table: dict[int, int] = {}
+    ctok_strs: list[str] = []
+    tt = np.empty(n_pairs, dtype=np.int32)
+    tshare = np.empty(n_pairs, dtype=np.float64)
+    for k in range(n_pairs):
+        co = np.intersect1d(rows_of(int(pi[k])), rows_of(int(pj[k])), assume_unique=True)
+        assert co.size == int(c[k]), f"count mismatch pair {k}: {co.size} != {c[k]}"
+        vals, cnts = np.unique(tok_arr[co], return_counts=True)
+        b = int(cnts.argmax())  # ties → lowest token id (np.unique is sorted)
+        tid = int(vals[b])
+        if tid not in tok_table:
+            tok_table[tid] = len(ctok_strs)
+            ctok_strs.append(m.decode1(tid))
+        tt[k] = tok_table[tid]
+        tshare[k] = cnts[b] / co.size
+
+    # Measured shuffle yardstick: permute one feature's rows (marginals kept,
+    # pairing destroyed) — aggregate count over a seeded pair sample vs e.
+    perm = np.random.default_rng(seed).permutation(N)
+    rngs = np.random.default_rng(seed + 1)
+    sel = rngs.choice(n_pairs, size=min(shuffle_sample, n_pairs), replace=False)
+
+    def shuf_count(a: int, b: int) -> int:
+        za = np.zeros(N, dtype=bool)
+        za[rows_of(a)] = True
+        zb = np.zeros(N, dtype=bool)
+        zb[rows_of(b)] = True
+        return int((za[perm] & zb).sum())
+
+    sh_sum = sum(shuf_count(int(pi[k]), int(pj[k])) for k in map(int, sel))
+    e_sum = float(sum(nj[pi[k]] * nj[pj[k]] / N for k in map(int, sel)))
+
+    lift = c.astype(np.float64) * N / (nj[pi].astype(np.float64) * nj[pj])
+    g2e = g2_of(c, nj[pi].astype(np.float64), nj[pj].astype(np.float64))
+
+    def chip(k: int) -> dict:
+        a, b = int(pi[k]), int(pj[k])
+        return {
+            "i": a,
+            "j": b,
+            "c": int(c[k]),
+            "e": round(float(nj[a] * nj[b] / N), 2),
+            "lift": round(float(lift[k]), 2),
+            "cos": round(float(cosd[k]), 4),
+            "tok": ctok_strs[int(tt[k])],
+            "share": round(float(tshare[k]), 3),
+            "shuf": shuf_count(a, b),
+        }
+
+    def chip_list(idx_order: np.ndarray) -> list[dict]:
+        out: list[dict] = []
+        used: set[int] = set()
+        for k in map(int, idx_order):
+            if int(pi[k]) in used or int(pj[k]) in used:
+                continue  # chips deduped by feature (top pairs cluster in families)
+            used.add(int(pi[k]))
+            used.add(int(pj[k]))
+            out.append(chip(k))
+            if len(out) >= top_chips:
+                break
+        return out
+
+    # assoc chips: strongest ABOVE-independence pairs by G² (both G² tails are
+    # in the export; the below-independence tail is covered by avoid chips)
+    assoc_order = np.argsort(-np.where(lift > 1.0, g2e, -1.0), kind="stable")
+    chips_assoc = chip_list(assoc_order)
+    chips_count = chip_list(np.arange(n_pairs))  # already sorted by c desc
+
+    # Mutual exclusion: among the 300 most active features, the pairs whose
+    # expected co-count is largest while the observed count sits far below it.
+    ta = kept[np.argsort(-nj[kept], kind="stable")[:300]]
+    Xd = np.zeros((N, ta.size), dtype=np.int32)
+    for q, f in enumerate(map(int, ta)):
+        Xd[rows_of(f), q] = 1
+    C300 = Xd.T @ Xd
+    E300 = np.outer(nj[ta], nj[ta]).astype(np.float64) / N
+    iu, ju = np.triu_indices(ta.size, k=1)
+    e_u, c_u = E300[iu, ju], C300[iu, ju].astype(np.float64)
+    okm = e_u >= 20.0
+    lift_u = c_u[okm] / e_u[okm]
+    av_order = np.lexsort((-e_u[okm], lift_u))  # lift asc, then e desc
+    ai, aj = ta[iu[okm]], ta[ju[okm]]
+    chips_avoid: list[dict] = []
+    used_a: set[int] = set()
+    for k in map(int, av_order):
+        a, b = int(ai[k]), int(aj[k])
+        if a in used_a or b in used_a:
+            continue
+        used_a.add(a)
+        used_a.add(b)
+        cv = int(c_u[okm][k])
+        co = np.intersect1d(rows_of(a), rows_of(b), assume_unique=True)
+        assert co.size == cv
+        if cv > 0:
+            vals, cnts = np.unique(tok_arr[co], return_counts=True)
+            bb = int(cnts.argmax())
+            tok_s, share = m.decode1(int(vals[bb])), round(float(cnts[bb] / cv), 3)
+        else:
+            tok_s, share = None, 0.0
+        chips_avoid.append(
+            {
+                "i": a,
+                "j": b,
+                "c": cv,
+                "e": round(float(e_u[okm][k]), 2),
+                "lift": round(float(lift_u[k]), 4),
+                "cos": round(float(U64[a] @ U64[b]), 4),
+                "tok": tok_s,
+                "share": share,
+                "shuf": shuf_count(a, b),
+            }
+        )
+        if len(chips_avoid) >= top_chips:
+            break
+
+    # Marginals for every feature appearing anywhere in the export.
+    f_ids = np.unique(
+        np.concatenate(
+            [pi, pj, [ch["i"] for ch in chips_avoid], [ch["j"] for ch in chips_avoid]]
+        )
+    )
+
+    return {
+        "meta": {
+            "model": m.model_id,
+            "created": _now(),
+            "sae_repo": repo,
+            "hook_point": hook,
+            "corpus": {
+                "title": "Alice's Adventures in Wonderland — Lewis Carroll (1865)",
+                "source": "Project Gutenberg eBook #11 (public domain); header/"
+                "footer stripped, CRLF→LF normalized",
+                "sha256": sha,
+                "n_chars": len(text),
+                "n_tokens": n_tok,
+                "window": window,
+                "n_windows": n_windows,
+                "n_pos": N,
+            },
+            "quantity": "exact SAE co-firing counts over every corpus position: "
+            "n_i (marginal), c_ij (joint), vs the independence expectation "
+            "n_i·n_j/N — joined with each pair's decoder-direction cosine",
+            "formula": "x̄ = x − mean(x); acts = ReLU((x̄ − b_dec)·W_enc + b_enc); "
+            "fires = acts > 0 at blocks.8.hook_resid_pre. c_ij = |{p: i,j both "
+            "fire}| (sparse XᵀX ≡ sorted-row intersection, asserted equal). "
+            "e_ij = n_i·n_j/N; lift = c_ij·N/(n_i·n_j); PMI = log2 lift — "
+            "computed in the viewer from the exact integers. selection = "
+            "Dunning's G² over the full 2×2 table. "
+            "cos = cosine(W_dec[i], W_dec[j]).",
+            "note": f"window = SAE training context_size ({window}, asserted). "
+            "position 0 of each window dropped from all statistics (chunk "
+            f"boundary + massive-activation outlier). export = top {max_pairs} "
+            f"pairs by G² among all {n_support} pairs with c ≥ {min_count} "
+            "(both tails; smallest exported G² in meta). PMI ceiling = "
+            "log2(N/max(n_i,n_j)) — rare pairs dominate the top. c = 0 "
+            "avoidance can't clear a support floor, so below-independence "
+            "exemplars are additionally drawn from the 300 most active "
+            "features (e ≥ 20). shuffle = seeded permutation of one feature's "
+            "rows (marginals kept). chips deduped by feature. recon cosine "
+            f"sampled every {recon_every}th window. positional embedding "
+            "restarts each window (sawtooth for position-sensitive features). "
+            "counts exact; cos 4dp, shares 3dp.",
+            "d_sae": d_sae,
+            "layer": layer,
+            "min_count": int(min_count),
+            "selection": "top_g2",
+            "g2_min": round(g2_min, 2),
+            "n_support": n_support,
+            "pearson_cos_pmi": round(pearson, 4),
+            "n_active": n_active,
+            "n_eligible": int(kept.size),
+            "n_pairs": n_pairs,
+            "l0_mean": round(float(l0.mean()), 2),
+            "l0_median": int(np.median(l0)),
+            "recon_cos_mean": round(cos_sum / max(cos_n, 1), 4),
+            "recon_cos_n": cos_n,
+            "shuffle": {
+                "seed": seed,
+                "n_sampled": int(sel.size),
+                "shuf_sum": int(sh_sum),
+                "e_sum": round(e_sum, 2),
+                "agg_ratio": round(sh_sum / e_sum, 4),
+            },
+        },
+        "N": N,
+        "pi": [int(v) for v in pi],
+        "pj": [int(v) for v in pj],
+        "c": [int(v) for v in c],
+        "cos": [round(float(v), 4) for v in cosd],
+        "tt": [int(v) for v in tt],
+        "tshare": [round(float(v), 3) for v in tshare],
+        "ctok_strs": ctok_strs,
+        "f_ids": [int(v) for v in f_ids],
+        "f_n": [int(nj[v]) for v in f_ids],
+        "chips": {"assoc": chips_assoc, "count": chips_count, "avoid": chips_avoid},
+    }
+
+
 def compute_grok(
     p: int = 97,
     n_hidden: int = 128,
@@ -2146,6 +2562,10 @@ def write_bundles(
             dump("compass.json", compute_compass(m))
         except Exception as e:  # noqa: BLE001
             print(f"[interp] compass.json skipped: {e}")
+        try:
+            dump("cofire.json", compute_cofire(m))
+        except Exception as e:  # noqa: BLE001
+            print(f"[interp] cofire.json skipped: {e}")
         # grokking toy model — not derived from gpt2, but the Internals gallery
         # (and its index.json) lives in the gpt2 bundle dir
         dump("grok.json", compute_grok())
