@@ -11,7 +11,8 @@
  *    forward  — a real forward pass on a curated prompt (trace bundle)
  *    sae      — sparse-autoencoder features (downloaded SAE weights)
  *    trained  — a small model trained offline (e.g. grokking toy model)
- *    live     — in-browser forward pass on user text (capstone)
+ *    live     — a real forward pass on user text via a local probe server
+ *               (weights stay on-machine; nothing precomputed) — capstone
  */
 
 import { AblationDriver } from "./AblationDriver";
@@ -26,6 +27,7 @@ import { GrokClockDriver } from "./GrokClockDriver";
 import { HeadFingerprintDriver } from "./HeadFingerprintDriver";
 import { InductionDriver } from "./InductionDriver";
 import type { InterpFeature } from "./InterpDriver";
+import { LiveNebulaDriver } from "./LiveNebulaDriver";
 import { LogitAttribDriver } from "./LogitAttribDriver";
 import { LogitLensTunnelDriver } from "./LogitLensTunnelDriver";
 import { NeuronFieldDriver } from "./NeuronFieldDriver";
@@ -909,6 +911,47 @@ export const INTERP_FEATURES: InterpFeature[] = [
     legendCorner: "br",
     legendCollapsed: true,
     create: () => new GrokClockDriver(),
+  },
+  {
+    id: "live-nebula",
+    n: 25,
+    label: "Live Prompt Nebula",
+    group: "live",
+    blurb:
+      "Type any prompt and watch a REAL forward pass answer: every edit sends the " +
+      "text to a local probe server running the exact numpy GPT-2 used for every " +
+      "offline bundle, and the grid redraws from its response — the logit lens's " +
+      "top-1 token at every (layer, position), colored by the entropy of the full " +
+      "50,257-way lens distribution on the absolute 0 → log₂V = 15.62-bit scale. " +
+      "Watch uncertainty collapse layer by layer, and the final candidates settle, " +
+      "for text nobody curated. The measured server compute time is printed on " +
+      "every response; when the server is off, the view says so — it never fakes.",
+    math:
+      "lens_L(t) = ln_f(resid[L,t])·W_E^T — the model's own final LN + tied " +
+      "unembedding on the stream entering block L (raw logit lens, no translator). " +
+      "H = −Σ p·log₂p and KL(p_final(t) ‖ p_lens(L,t)) over the full 50,257-way " +
+      "softmax in float64. Row 12 is a standing identity check: top-1 equals the " +
+      "final prediction, KL ~0 (float32 resid snapshot; measured < 1e-4 bits).",
+    source:
+      "POST /live/forward on a local stdlib-Python server (src/nebulai/backend/" +
+      "interp/live_server.py) — weights (~0.5 GB float32) stay on your machine, " +
+      "which is why this is a local process and not an in-browser port. Verified: " +
+      "seeded cells recomputed independently through m.logit_lens match at export " +
+      "precision; HTTP response byte-equals the direct function call; deterministic. " +
+      "Endpoint configurable in Settings → Model Probing.",
+    legend: [
+      { label: "lens top-1 — bright = low entropy (certain)", rgb: "245,195,59" },
+      { label: "high entropy (near-uniform)", rgb: "40,42,60" },
+      { label: "outline = matches final top-1", rgb: "255,255,255" },
+    ],
+    note:
+      "one real forward per edit (debounced 450 ms) · prompts cap at 96 tokens " +
+      "(disclosed) · position 0 rides GPT-2's massive-activation outlier — its " +
+      "early rows read near-uniform; real, not a bug",
+    ownPrompts: true,
+    legendCorner: "br",
+    legendCollapsed: true,
+    create: () => new LiveNebulaDriver(),
   },
 ];
 

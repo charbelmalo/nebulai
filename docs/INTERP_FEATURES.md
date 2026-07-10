@@ -67,13 +67,18 @@ Existing drivers: Atlas/Chord/Hierarchy/Compare already ship (adapt, don't rebui
 | 2 | Attribution Ink | occlusion Δlogit / grad·input | forward | attrib_<p>.json | ⬜ |
 | 4 | Causal-Trace Heatmap | activation patching Δ | forward×patch | patch_<p>.json | ⬜ |
 | 17 | Ablation Ghosts | neuron/head ablation Δlogit | forward×ablate | ablate_<p>.json | ⬜ |
-| 14 | Tuned-Lens Delta | regression translator vs lens | forward+fit | tuned.json | ⬜ (caveat: affine-fit) |
+| 14 | Tuned-Lens Delta | regression translator vs lens | forward+fit | tuned.json | ✅ shipped as #20 (caveat stated) |
 | 5 | SAE Firing Aurora | SAE encode of resid | SAE weights | sae_<p>.json | ⬜ (download SAE) |
 | 20 | Feature Piano-Roll | SAE feature × position | SAE+forward | sae_<p>.json | ⬜ |
 | 13 | Superposition Prism | SAE decoder geometry | SAE weights | sae_geom.json | ⬜ |
 | 24 | Polysemantic Venn | SAE feature co-firing | SAE+corpus | sae_cofire.json | ⬜ |
 | 16 | Grokking Clock | Fourier features of trained toy | numpy train | grok.json | ⬜ (trains tiny model) |
-| 25 | Live Prompt Nebula | live forward (JS port) | forward (JS) | in-browser | ⬜ (capstone) |
+| 25 | Live Prompt Nebula | live forward on typed text | forward (local server) | live_server.py | ✅ capstone — probe-server, NOT a JS port (0.5 GB weights stay local) |
+
+> **Status source of truth:** `viewer/src/scene/interp/registry.ts` (rendered at
+> `/guide`). All **25 of 25** are live as of 2026-07-10; the per-row boxes above
+> are the original roadmap and the doc's numbering drifted from the shipped
+> `#n` ids — trust the registry.
 
 Honesty caveats to surface in `/guide` and in-view:
 - **Tuned lens** here is a least-squares affine translator, not the full trained
@@ -93,8 +98,10 @@ Honesty caveats to surface in `/guide` and in-view:
    weight-only feature end-to-end (Weight Spectrum) through all 3 review passes.
 4. Weight-only batch (6, 12, 15, 22) → forward batch (3,7,8,18,23,19,2,4,17,14).
 5. SAE batch (5,20,13,24) after downloading a gpt2-small SAE.
-6. Grokking Clock (numpy training) + Live Prompt Nebula (JS forward port).
-7. `/guide` route (math + source per feature) + Netlify deploy.
+6. ✅ Grokking Clock (numpy training) + Live Prompt Nebula (local probe server —
+   the JS-port idea was dropped: 0.5 GB float32 weights don't belong in a tab).
+7. ✅ `/guide` route (math + source per feature). Netlify deploy still open —
+   the live feature degrades to its honest offline banner on a static host.
 
 ## Review-pass checklist (every feature, ≥3 passes)
 - **P1 numerical**: tensor shapes asserted; units/normalization correct; formula

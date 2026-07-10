@@ -403,6 +403,14 @@ function ProbingTab() {
           placeholder="llama3.2:3b or gpt-4o-mini"
           onChange={(v) => appStore.getState().setProbing("model", v)}
         />
+        <TextRow
+          label="Live nebula server"
+          type="url"
+          value={p.liveUrl}
+          placeholder="http://127.0.0.1:8123"
+          onChange={(v) => appStore.getState().setProbing("liveUrl", v)}
+          hint="Internals #25 — python -m nebulai.backend.interp.live_server"
+        />
       </SettingsSection>
 
       <SettingsSection title="Live probing">

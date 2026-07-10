@@ -16,7 +16,10 @@ const GROUP_SOURCE: Record<InterpGroup, string> = {
   forward: "One real forward pass on a curated prompt (pick the prompt in Internals).",
   sae: "Sparse-autoencoder features from downloaded SAE weights.",
   trained: "A small model trained offline (e.g. a grokking toy model).",
-  live: "An in-browser forward pass on text you type.",
+  live:
+    "A real forward pass on text you type — computed on request by a local " +
+    "probe server running the same numpy GPT-2 as every offline bundle " +
+    "(weights stay on your machine; nothing is precomputed).",
 };
 
 function openInInternals(id: string): void {

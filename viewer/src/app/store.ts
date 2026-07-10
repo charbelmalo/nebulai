@@ -143,6 +143,7 @@ export interface Probing {
   probeIntervalMs: number; // 5000–60000 — recurring health check
   autoRun: boolean; // rebuild the map when config changes
   useM4Worker: boolean; // route through 192.168.0.200 (m4worker-bridge)
+  liveUrl: string; // Internals #25 live probe server (nebulai live_server)
 }
 
 export type ProbeStage =
@@ -370,6 +371,7 @@ export const appStore = createStore<AppState>()((set) => ({
     probeIntervalMs: 15000,
     autoRun: false,
     useM4Worker: false,
+    liveUrl: "http://127.0.0.1:8123",
   },
   progress: {
     stage: "idle",
