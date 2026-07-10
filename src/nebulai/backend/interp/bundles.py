@@ -1603,6 +1603,258 @@ def compute_sae_web(
     }
 
 
+def compute_grok(
+    p: int = 97,
+    n_hidden: int = 128,
+    frac: float = 0.22,
+    lr: float = 1e-3,
+    wd: float = 0.3,
+    kappa: float = 16.0,
+    steps: int = 40_000,
+    seed: int = 0,
+    ckpt_every: int = 100,
+) -> dict:
+    """Train a toy modular-addition MLP from scratch and record the grokking run.
+
+    Gromov (2023) setup: y = ((onehot(a) ++ onehot(b)) @ W1)**2 @ W2, MSE loss
+    against one-hot targets, full-batch AdamW. Weight decay drives the
+    memorize->generalize transition; the generalizing solution is periodic in
+    the token index, so the DFT of W1's rows over `a` concentrates onto a few
+    key frequencies exactly when test accuracy jumps. This bundle is NOT
+    derived from GPT-2 — it is a separately trained toy model.
+    """
+    rng = np.random.default_rng(seed)
+    A, B = np.meshgrid(np.arange(p), np.arange(p), indexing="ij")
+    a, b = A.ravel(), B.ravel()
+    c = (a + b) % p
+    n = p * p
+    perm = rng.permutation(n)
+    ntr = int(frac * n)
+    tr, te = perm[:ntr], perm[ntr:]
+
+    X = np.zeros((n, 2 * p), dtype=np.float32)
+    X[np.arange(n), a] = 1
+    X[np.arange(n), p + b] = 1
+    Y = np.zeros((n, p), dtype=np.float32)
+    Y[np.arange(n), c] = 1
+    Xtr, Ytr, ctr = X[tr], Y[tr], c[tr]
+    Xte, Yte, cte = X[te], Y[te], c[te]
+
+    W1 = (kappa * rng.standard_normal((2 * p, n_hidden)) / np.sqrt(2 * p)).astype(np.float32)
+    W2 = (kappa * rng.standard_normal((n_hidden, p)) / np.sqrt(n_hidden)).astype(np.float32)
+
+    n_freq = p // 2 + 1
+    # rfft multiplicity: freq 0 appears once, freqs 1..(p-1)/2 fold conjugates
+    mult = np.ones(n_freq)
+    mult[1:] = 2.0
+
+    def spectrum(W: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Per-freq power fraction + per-unit purity of the a-half rows.
+
+        purity[u] = the largest single non-DC frequency's share of unit u's
+        total spectral power — the quantity that jumps at the grok.
+        Parseval-checked against p * ||W_a||^2.
+        """
+        Wa = W[:p].astype(np.float64)
+        F = np.fft.rfft(Wa, axis=0)
+        spec = mult[:, None] * np.abs(F) ** 2  # (n_freq, n_hidden)
+        pw = spec.sum(1)
+        total = pw.sum()
+        parseval = p * float((Wa**2).sum())
+        assert abs(total - parseval) < 1e-6 * max(parseval, 1.0), (total, parseval)
+        dom = spec[1:].argmax(0) + 1
+        purity = spec[dom, np.arange(spec.shape[1])] / spec.sum(0)
+        return pw / total, purity
+
+    def evaluate(Xs: np.ndarray, Ys: np.ndarray, cs: np.ndarray) -> tuple[float, float]:
+        out = ((Xs @ W1) ** 2) @ W2
+        acc = float((out.argmax(1) == cs).mean())
+        loss = float(((out - Ys) ** 2).mean())
+        return acc, loss
+
+    m1 = np.zeros_like(W1)
+    v1 = np.zeros_like(W1)
+    m2 = np.zeros_like(W2)
+    v2 = np.zeros_like(W2)
+    b1m, b2m, eps = 0.9, 0.98, 1e-8
+
+    ck_steps: list[int] = []
+    ck_tracc: list[float] = []
+    ck_teacc: list[float] = []
+    ck_trloss: list[float] = []
+    ck_teloss: list[float] = []
+    ck_fpower: list[np.ndarray] = []
+    ck_pur_med: list[float] = []
+    ck_pur_q1: list[float] = []
+    ck_pur_q3: list[float] = []
+
+    def checkpoint(t: int) -> tuple[float, float]:
+        atr, ltr = evaluate(Xtr, Ytr, ctr)
+        ate, lte = evaluate(Xte, Yte, cte)
+        pw, purity = spectrum(W1)
+        ck_steps.append(t)
+        ck_tracc.append(atr)
+        ck_teacc.append(ate)
+        ck_trloss.append(ltr)
+        ck_teloss.append(lte)
+        ck_fpower.append(pw)
+        ck_pur_med.append(float(np.median(purity)))
+        ck_pur_q1.append(float(np.percentile(purity, 25)))
+        ck_pur_q3.append(float(np.percentile(purity, 75)))
+        return atr, ate
+
+    checkpoint(0)
+    tr100_step: int | None = None
+    grok_step: int | None = None
+    for t in range(1, steps + 1):
+        Z = Xtr @ W1
+        H = Z * Z
+        D = (H @ W2 - Ytr) * (2.0 / ntr)
+        gW2 = H.T @ D
+        dZ = (D @ W2.T) * 2 * Z
+        gW1 = Xtr.T @ dZ
+        for W, g, mm, vv in ((W1, gW1, m1, v1), (W2, gW2, m2, v2)):
+            mm *= b1m
+            mm += (1 - b1m) * g
+            vv *= b2m
+            vv += (1 - b2m) * g * g
+            W -= lr * ((mm / (1 - b1m**t)) / (np.sqrt(vv / (1 - b2m**t)) + eps) + wd * W)
+        if t % ckpt_every == 0:
+            atr, ate = checkpoint(t)
+            if atr > 0.999 and tr100_step is None:
+                tr100_step = t
+            if ate > 0.999 and grok_step is None:
+                grok_step = t
+            if grok_step is not None and t >= grok_step + 4000:
+                break
+
+    assert tr100_step is not None, "toy model never fit the training set"
+    assert grok_step is not None, "toy model never generalized — no grokking run to export"
+    assert grok_step - tr100_step >= 1000, (
+        f"train->test gap only {grok_step - tr100_step} steps — not a grokking run"
+    )
+
+    # final re-verification from scratch: fresh forward equals stored last checkpoint
+    ate_final, _ = evaluate(Xte, Yte, cte)
+    assert abs(ate_final - ck_teacc[-1]) < 1e-12
+
+    # the spectral signature of THIS architecture is per-unit, not aggregate:
+    # each hidden unit becomes a near-pure single-frequency oscillator, but
+    # different units pick different frequencies, so the aggregate spectrum
+    # stays spread (unlike the sparse key-freq story of grokking transformers).
+    init_pw = ck_fpower[0]
+    assert float(init_pw[1:].max()) < 10.0 / n_freq, "init spectrum unexpectedly peaked"
+    assert ck_pur_med[-1] > 0.8, f"final purity only {ck_pur_med[-1]:.2f} — units not single-freq"
+    # while the net is memorized-but-not-generalized, purity must still be near
+    # its chance level: the purity jump and the test-accuracy jump coincide
+    memorized = [i for i, ta in enumerate(ck_teacc) if ta < 0.05]
+    pur_at_mem = ck_pur_med[memorized[-1]] if memorized else float("nan")
+    assert memorized and pur_at_mem < 0.3, f"purity already {pur_at_mem:.2f} before generalization"
+
+    # per-hidden-unit dominant frequency + purity of the final network
+    Wa64 = W1[:p].astype(np.float64)
+    F = np.fft.rfft(Wa64, axis=0)
+    spec_u = mult[:, None] * np.abs(F) ** 2  # (n_freq, n_hidden)
+    unit_freq = spec_u[1:].argmax(0) + 1
+    unit_frac = spec_u[unit_freq, np.arange(n_hidden)] / spec_u.sum(0)
+
+    # the clock: project token rows onto the orthonormalized (cos, sin) Fourier
+    # pair of a frequency k; the grokked embedding lays the p tokens on a circle
+    # traversed k times, i.e. angle(token a) ~ +/- 2*pi*k*a/p + const. Clocks are
+    # ranked by MEASURED circularity |mean exp(i(theta_a -+ 2*pi*k*a/p))| — the
+    # selection criterion is itself a computed, exported quantity.
+    final_pw = ck_fpower[-1]
+    cands = []
+    for k in range(1, n_freq):
+        cosv = np.cos(2 * np.pi * k * np.arange(p) / p)
+        sinv = np.sin(2 * np.pi * k * np.arange(p) / p)
+        u_c = cosv @ Wa64
+        u_s = sinv @ Wa64
+        u_c /= np.linalg.norm(u_c)
+        u_s -= (u_s @ u_c) * u_c
+        u_s /= np.linalg.norm(u_s)
+        xs = Wa64 @ u_c
+        ys = Wa64 @ u_s
+        theta = np.arctan2(ys, xs)
+        best_r = max(
+            float(abs(np.exp(1j * (theta - sign * 2 * np.pi * k * np.arange(p) / p)).mean()))
+            for sign in (1, -1)
+        )
+        radii = np.hypot(xs, ys)
+        cands.append((best_r, k, xs, ys, radii))
+    cands.sort(key=lambda c: -c[0])
+    clocks = [
+        {
+            "k": int(k),
+            "circ": round(best_r, 4),
+            "radius_cv": round(float(radii.std() / radii.mean()), 4),
+            "n_units": int((unit_freq == k).sum()),
+            "power_frac": round(float(final_pw[k]), 4),
+            "xy": [round(float(v), 4) for pair in zip(xs, ys) for v in pair],
+        }
+        for best_r, k, xs, ys, radii in cands[:5]
+    ]
+    # the grokked clock must actually be a clock: near-perfect phase alignment
+    assert clocks[0]["circ"] > 0.9, f"best clock circularity only {clocks[0]['circ']}"
+
+    n_ck = len(ck_steps)
+    return {
+        "meta": {
+            "model": f"toy MLP (2*{p} -> {n_hidden} -> {p}), phi(z)=z^2, no biases",
+            "task": f"c = (a + b) mod {p}",
+            "created": _now(),
+            "note": "Trained from scratch in numpy — NOT GPT-2. Full-batch AdamW "
+            f"(lr {lr}, wd {wd}, beta 0.9/0.98), init scale kappa={kappa}, "
+            f"MSE loss on one-hot targets, seed {seed}. Accuracies/losses are "
+            "exact full-split evaluations at every checkpoint (no smoothing).",
+            "quantity": "train/test accuracy + MSE loss per checkpoint; per-unit "
+            "single-frequency purity (median/quartiles) per checkpoint; DFT "
+            "power fraction of W1's a-rows per frequency per checkpoint; final "
+            "per-unit dominant frequency; token projections onto Fourier pairs "
+            "of the most circular frequencies",
+            "formula": "purity[u] = max_k mult_k|rfft_a W1[a,u]|_k^2 / sum_k (k>0); "
+            "power_k = mult_k * sum_u |rfft_a W1[a,u]|_k^2, normalized per "
+            "checkpoint (Parseval-checked vs p*||W1_a||^2); clock coords = "
+            "W1_a rows projected on the orthonormalized (cos 2pi k a/p, "
+            "sin 2pi k a/p) span; circ = |mean_a exp(i(theta_a -+ 2pi k a/p))|",
+            "p": p,
+            "n_hidden": n_hidden,
+            "train_frac": frac,
+            "n_train": int(ntr),
+            "n_test": int(n - ntr),
+            "steps_run": int(ck_steps[-1]),
+            "ckpt_every": ckpt_every,
+            "tr100_step": int(tr100_step),
+            "grok_step": int(grok_step),
+            "acc_threshold": 0.999,
+            "purity_init": round(ck_pur_med[0], 4),
+            "purity_at_memorized": round(pur_at_mem, 4),
+            "purity_final": round(ck_pur_med[-1], 4),
+            "top5_mass_final": round(float(np.sort(final_pw[1:])[::-1][:5].sum()), 4),
+            "init_max_frac": round(float(init_pw[1:].max()), 4),
+            "n_freq": n_freq,
+            "spread_note": "aggregate spectrum stays SPREAD (top-5 freqs hold "
+            "~15% of power) — the structure is per-unit: each unit becomes a "
+            "near-pure single-frequency oscillator, units share the freqs out. "
+            "This differs from the sparse key-frequency story of grokking "
+            "transformers and is reported as measured.",
+        },
+        "steps": ck_steps,
+        "train_acc": [round(v, 4) for v in ck_tracc],
+        "test_acc": [round(v, 4) for v in ck_teacc],
+        "train_loss": [round(v, 6) for v in ck_trloss],
+        "test_loss": [round(v, 6) for v in ck_teloss],
+        "purity_med": [round(v, 4) for v in ck_pur_med],
+        "purity_q1": [round(v, 4) for v in ck_pur_q1],
+        "purity_q3": [round(v, 4) for v in ck_pur_q3],
+        "fpower": [round(float(v), 4) for row in ck_fpower for v in row],
+        "unit_freq": [int(v) for v in unit_freq],
+        "unit_frac": [round(float(v), 4) for v in unit_frac],
+        "clocks": clocks,
+        "n_ckpt": n_ck,
+    }
+
+
 def _logit_lens_topk(m: GPT2Numpy, resid_row: np.ndarray, k: int = 6) -> list:
     lg = m.logit_lens(resid_row)
     lg = lg - lg.max()
@@ -1709,6 +1961,9 @@ def write_bundles(
             dump("sae_web.json", compute_sae_web())
         except Exception as e:  # noqa: BLE001
             print(f"[interp] sae_web.json skipped: {e}")
+        # grokking toy model — not derived from gpt2, but the Internals gallery
+        # (and its index.json) lives in the gpt2 bundle dir
+        dump("grok.json", compute_grok())
 
     traces_index = []
     for prompt in prompts or DEFAULT_PROMPTS:

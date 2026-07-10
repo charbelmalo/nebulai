@@ -443,6 +443,71 @@ export interface SAEWebBundle {
   pairs: { i: number; j: number; cos: number; mutual: boolean }[];
 }
 
+/** One clock face: token rows of the trained W1 projected onto the
+ *  orthonormalized (cos 2πka/p, sin 2πka/p) Fourier pair of frequency k. */
+export interface GrokClock {
+  k: number;
+  /** measured phase alignment |mean exp(i(θ_a ∓ 2πka/p))| — selection criterion */
+  circ: number;
+  /** radius coefficient of variation — how un-circular the ring is */
+  radius_cv: number;
+  /** hidden units whose dominant frequency is k */
+  n_units: number;
+  /** this frequency's share of total spectral power */
+  power_frac: number;
+  /** flat [x0,y0,x1,y1,…], length 2p */
+  xy: number[];
+}
+
+/** Grokking run of a toy modular-addition MLP — trained from scratch in
+ *  numpy, NOT derived from GPT-2 (meta.note says so). */
+export interface GrokBundle {
+  meta: {
+    model: string;
+    task: string;
+    created: string;
+    note: string;
+    quantity: string;
+    formula: string;
+    p: number;
+    n_hidden: number;
+    train_frac: number;
+    n_train: number;
+    n_test: number;
+    steps_run: number;
+    ckpt_every: number;
+    /** first checkpoint with train acc > threshold */
+    tr100_step: number;
+    /** first checkpoint with test acc > threshold — the grok */
+    grok_step: number;
+    acc_threshold: number;
+    purity_init: number;
+    /** purity at the last memorized-but-not-generalized checkpoint */
+    purity_at_memorized: number;
+    purity_final: number;
+    top5_mass_final: number;
+    init_max_frac: number;
+    n_freq: number;
+    spread_note: string;
+  };
+  steps: number[]; // n_ckpt checkpoint steps
+  train_acc: number[]; // 4 dp
+  test_acc: number[];
+  train_loss: number[]; // 6 dp MSE
+  test_loss: number[];
+  /** median / quartiles of per-unit single-frequency purity per checkpoint */
+  purity_med: number[];
+  purity_q1: number[];
+  purity_q3: number[];
+  /** flat n_ckpt × n_freq power fraction per frequency (row-sums ≈ 1) */
+  fpower: number[];
+  /** per hidden unit: dominant non-DC frequency of the final network */
+  unit_freq: number[];
+  unit_frac: number[];
+  clocks: GrokClock[];
+  n_ckpt: number;
+}
+
 /** One occlusion mode's per-position results (arrays indexed by position). */
 export interface OcclusionMode {
   /** drop in the baseline top-1's log-prob when this position is occluded, nats, 4 dp */
@@ -574,6 +639,9 @@ export const loadOcclusion = (model: string, base = "/out") =>
 
 export const loadSAEWeb = (model: string, base = "/out") =>
   fetchJSON<SAEWebBundle>(`${interpBase(model, base)}/sae_web.json`);
+
+export const loadGrok = (model: string, base = "/out") =>
+  fetchJSON<GrokBundle>(`${interpBase(model, base)}/grok.json`);
 
 export const loadHeads = (model: string, base = "/out") =>
   fetchJSON<HeadsBundle>(`${interpBase(model, base)}/heads.json`);

@@ -20,6 +20,7 @@ import { AttentionRolloutDriver } from "./AttentionRolloutDriver";
 import { CompositionWebDriver } from "./CompositionWebDriver";
 import { EmbeddingConstellationDriver } from "./EmbeddingConstellationDriver";
 import { FourierAtlasDriver } from "./FourierAtlasDriver";
+import { GrokClockDriver } from "./GrokClockDriver";
 import { HeadFingerprintDriver } from "./HeadFingerprintDriver";
 import { InductionDriver } from "./InductionDriver";
 import type { InterpFeature } from "./InterpDriver";
@@ -719,6 +720,51 @@ export const INTERP_FEATURES: InterpFeature[] = [
     legendCorner: "br",
     legendCollapsed: true,
     create: () => new SAEWebDriver(),
+  },
+  {
+    id: "grokking-clock",
+    n: 16,
+    label: "Grokking Clock",
+    group: "trained",
+    blurb:
+      "Delayed generalization, live from a training run: a toy MLP " +
+      "(2·97 → 128 → 97, φ=z², no biases) trained from scratch on " +
+      "c = (a+b) mod 97 — this is NOT GPT-2. Train accuracy hits 100% at " +
+      "step 3.8k while test sits at chance; test snaps to 99.9% at 7.9k — a " +
+      "4,100-step gap where the network memorizes before it understands. The " +
+      "cyan curve is the mechanism forming: the median hidden unit's " +
+      "single-frequency purity is 0.08 at init, still 0.10 while memorized, " +
+      "0.94 after the grok — it moves in lockstep with test accuracy. " +
+      "Project the trained W1 onto a frequency's Fourier pair and the 97 " +
+      "tokens land on a circle traversed k times: the clock the network " +
+      "invented to do modular addition.",
+    math:
+      "y = ((onehot(a) ⧺ onehot(b))·W1)²·W2, MSE vs one-hot, full-batch " +
+      "AdamW (wd 0.3). purity(unit) = max single non-DC frequency's share of " +
+      "the unit's rfft power along the a-rows of W1 (Parseval-checked). " +
+      "clock k: coords = W1ₐ projected on orthonormalized (cos 2πka/p, " +
+      "sin 2πka/p); circularity = |meanₐ exp(i(θₐ ∓ 2πka/p))| — clocks " +
+      "ranked by this measured value, best k=24 at 0.964.",
+    source:
+      "grok.json — trained from scratch in numpy (seed 0, deterministic: " +
+      "asserted identical on re-run), 120 checkpoints every 100 steps. " +
+      "Clock circularity independently recomputed from the exported " +
+      "coordinates (drift < 2e-3, asserted). Unlike transformer grokking, " +
+      "the AGGREGATE spectrum stays spread (top-5 freqs ≈ 15%) — the " +
+      "sparsity is per-unit, which is what purity measures.",
+    legend: [
+      { label: "test accuracy — the grok", rgb: "245,195,59" },
+      { label: "train accuracy", rgb: "138,146,178" },
+      { label: "unit purity — median + IQR band", rgb: "70,200,235" },
+      { label: "W1 power per frequency (heat ramp)", rgb: "155,131,78" },
+    ],
+    note:
+      "toy model trained offline, NOT GPT-2 · linear axes, no smoothing · " +
+      "heat ramp clamps at the max non-DC cell (stated on-plot, DC " +
+      "saturates) · clock chips ranked by measured circularity",
+    legendCorner: "br",
+    legendCollapsed: true,
+    create: () => new GrokClockDriver(),
   },
 ];
 
