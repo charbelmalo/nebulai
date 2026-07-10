@@ -364,6 +364,53 @@ export interface InductionBundle {
   patterns: InductionPattern[];
 }
 
+/** One multi-head ablation (top induction heads knocked out together). */
+export interface AblationCombo {
+  label: string;
+  sites: [number, number][];
+  d_zero: number;
+  d_mean: number;
+  /** per-position NLL curves, length T−1, indexed by predicted j−1, nats, 4 dp */
+  nll_zero: number[];
+  nll_mean: number[];
+}
+
+export interface AblationBundle {
+  meta: {
+    model: string;
+    created: string;
+    quantity: string;
+    formula: string;
+    note: string;
+    n_layer: number;
+    n_head: number;
+    period: number;
+    T: number;
+    seed: number;
+    /** induction window: predicted-token indices [first, last], inclusive */
+    window: [number, number];
+    /** baseline mean NLL over the window (nats) */
+    base_window: number;
+    /** baseline mean NLL over first-repeat predictions (nats) */
+    base_first: number;
+    /** max |Δlogit| of the unablated replicated forward vs the baseline */
+    ident_drift: number;
+    n_forward: number;
+  };
+  token_strs: string[];
+  /** seed-0 induction score per head (same formula as induction.json) */
+  ind: number[];
+  /** Δ mean window NLL per head, flat n_layer·n_head row-major, nats */
+  d_zero: number[];
+  d_mean: number[];
+  /** baseline per-position NLL, length T−1, indexed by predicted j−1 */
+  nll_base: number[];
+  /** per-head curves, flat (n_layer·n_head)·(T−1) row-major (head, position) */
+  nll_zero: number[];
+  nll_mean: number[];
+  combos: AblationCombo[];
+}
+
 /** [token string, probability] — the honest readout unit for lens/next-token. */
 export type LensTopk = [string, number][];
 
@@ -451,6 +498,9 @@ export const loadPatch = (model: string, base = "/out") =>
 
 export const loadInduction = (model: string, base = "/out") =>
   fetchJSON<InductionBundle>(`${interpBase(model, base)}/induction.json`);
+
+export const loadAblation = (model: string, base = "/out") =>
+  fetchJSON<AblationBundle>(`${interpBase(model, base)}/ablation.json`);
 
 export const loadHeads = (model: string, base = "/out") =>
   fetchJSON<HeadsBundle>(`${interpBase(model, base)}/heads.json`);

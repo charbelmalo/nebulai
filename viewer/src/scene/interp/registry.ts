@@ -14,6 +14,7 @@
  *    live     — in-browser forward pass on user text (capstone)
  */
 
+import { AblationDriver } from "./AblationDriver";
 import { AttentionFlowDriver } from "./AttentionFlowDriver";
 import { AttentionRolloutDriver } from "./AttentionRolloutDriver";
 import { CompositionWebDriver } from "./CompositionWebDriver";
@@ -303,6 +304,49 @@ export const INTERP_FEATURES: InterpFeature[] = [
     legendCorner: "br",
     ownPrompts: true,
     create: () => new InductionDriver(),
+  },
+  {
+    id: "ablation-ghosts",
+    n: 17,
+    label: "Ablation Ghosts",
+    group: "forward",
+    blurb:
+      "The causal closer for the induction arc: every head knocked out, one " +
+      "real ablated forward each, on the same repeated random-token sequence " +
+      "as #2d. The grid is the rise in second-repeat loss; clicking a head " +
+      "draws its ghost — the ablated loss curve over the baseline's ×60 " +
+      "in-context drop. The headline is redundancy: ablating the TOP-scoring " +
+      "induction head (L7H10) changes nothing (−0.01 nats), but the top-4 " +
+      "together cost +2.0 (zero) / +3.2 (mean) nats — 3× the sum of their " +
+      "singles, backup heads caught compensating. Mean-ablation ranks the " +
+      "circuit #2c predicted: L5H1 +0.65, L4H11 +0.38, L6H9 +0.27. And " +
+      "L10H7/L11H10 — the negative movers from #13 — HELP when removed.",
+    math:
+      "Δ[l,h] = mean NLL over predicted positions 50–96 (second-repeat tokens " +
+      "whose context token has occurred before) minus baseline; NLL(j) = " +
+      "−log p(s_j | s_<j) in nats. Ablation replaces head (l,h)'s a@v slice " +
+      "before c_proj with 0 (zero mode) or its per-run positional mean (mean " +
+      "mode). Zero is off-distribution, mean keeps the head's average signal " +
+      "— they disagree by up to 1.3 nats and both ship.",
+    source:
+      "ablation.json — 293 real forwards (baseline + 144 heads × 2 modes + " +
+      "2 combos × 2). Verified: the unablated replicated forward reproduces " +
+      "the baseline logits bit-for-bit (drift 0.0); Δ recomputed from the " +
+      "exported per-position curves matches at 4 dp; sequence and induction " +
+      "scores identical to induction.json's seed-0 run.",
+    legend: [
+      { label: "Δ > 0 — ablation raises window loss (head needed)", rgb: "245,195,59" },
+      { label: "Δ < 0 — ablation lowers loss (head hurts)", rgb: "96,165,250" },
+      { label: "baseline NLL curve (unablated)", rgb: "205,210,228" },
+    ],
+    note:
+      "grid ramp spans 0→max |Δ| of the selected mode (stated in header) · " +
+      "curves join 96 discrete per-position values — no smoothing · " +
+      "single-head ablation understates redundant circuits (see combo chips)",
+    legendCollapsed: true,
+    legendCorner: "br",
+    ownPrompts: true,
+    create: () => new AblationDriver(),
   },
   {
     id: "logit-lens-tunnel",

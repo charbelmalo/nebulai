@@ -17,6 +17,7 @@ Bundles written by `write_bundles`:
   attrib.json     — direct logit attribution of the final margin (#13 Logit Attribution)
   patch.json      — residual-stream activation patching grids    (#14 Causal Patching Map)
   induction.json  — repeated-sequence induction-head diagnostic  (#2d Induction Microscope)
+  ablation.json   — per-head ablation Δ-loss on that sequence    (#17 Ablation Ghosts)
   trace_<slug>.json — one real forward pass per curated prompt   (#3/7/8/18/23 …)
 
 The trace bundle deliberately does NOT store full logits (T×50257 is ~26 MB);
@@ -1203,6 +1204,176 @@ def compute_induction(
     }
 
 
+def _forward_ablate(
+    m: GPT2Numpy, ids: list[int], sites: list[tuple[int, int]], mode: str
+) -> np.ndarray:
+    """Full forward pass with the given attention heads ablated; returns logits (T, V).
+
+    Replicates GPT2Numpy.forward's float32 op order exactly, so an empty `sites`
+    list reproduces Trace.logits bit-for-bit (the caller asserts this). At each
+    ablated (layer, head) the head's context slice — its rows of a@v, i.e. the
+    head's contribution entering c_proj — is zeroed ("zero") or replaced by its
+    mean over this run's positions ("mean"). c_proj's bias belongs to no head
+    and is never touched."""
+    if mode not in ("zero", "mean"):
+        raise ValueError(f"unknown ablation mode {mode!r}")
+    T, d, H, dh = len(ids), m.d, m.n_head, m.d_head
+    by_layer: dict[int, list[int]] = {}
+    for lyr, hd in sites:
+        by_layer.setdefault(lyr, []).append(hd)
+    x = m.wte[ids] + m.wpe[:T]
+    cmask = np.triu(np.full((T, T), -np.inf, dtype=np.float32), k=1)
+    for L in range(m.n_layer):
+        p = f"h.{L}."
+        xn, _ = _layernorm(x, m._g(p + "ln_1.weight"), m._g(p + "ln_1.bias"))
+        qkv = xn @ m._g(p + "attn.c_attn.weight") + m._g(p + "attn.c_attn.bias")
+        q, k, v = np.split(qkv, 3, axis=-1)
+        q = q.reshape(T, H, dh).transpose(1, 0, 2)
+        k = k.reshape(T, H, dh).transpose(1, 0, 2)
+        v = v.reshape(T, H, dh).transpose(1, 0, 2)
+        a = _softmax((q @ k.transpose(0, 2, 1)) / np.sqrt(dh) + cmask, axis=-1)
+        ctx = (a @ v).transpose(1, 0, 2).reshape(T, d)
+        for hd in by_layer.get(L, ()):
+            sl = slice(hd * dh, (hd + 1) * dh)
+            if mode == "zero":
+                ctx[:, sl] = 0.0
+            else:
+                ctx[:, sl] = ctx[:, sl].mean(axis=0, keepdims=True)
+        x = x + (ctx @ m._g(p + "attn.c_proj.weight") + m._g(p + "attn.c_proj.bias"))
+        xn2, _ = _layernorm(x, m._g(p + "ln_2.weight"), m._g(p + "ln_2.bias"))
+        h = _gelu_new(xn2 @ m._g(p + "mlp.c_fc.weight") + m._g(p + "mlp.c_fc.bias"))
+        x = x + (h @ m._g(p + "mlp.c_proj.weight") + m._g(p + "mlp.c_proj.bias"))
+    xf, _ = _layernorm(x, m._g("ln_f.weight"), m._g("ln_f.bias"))
+    # cast exactly as Trace.logits does, so the no-ablation path is bit-for-bit
+    return (xf @ m.wte.T).astype(np.float32)
+
+
+def _nll_curve(logits: np.ndarray, ids: list[int]) -> np.ndarray:
+    """Per-position next-token NLL in nats: out[j−1] = −log p(ids[j] | ids[:j]),
+    j = 1..T−1, via a numerically stable log-softmax."""
+    rows = logits[:-1].astype(np.float64)  # (T−1, V)
+    mx = rows.max(axis=-1, keepdims=True)
+    lse = (mx[:, 0] + np.log(np.exp(rows - mx).sum(axis=-1)))
+    tgt = np.asarray(ids[1:])
+    return lse - rows[np.arange(len(tgt)), tgt]
+
+
+def compute_ablation(m: GPT2Numpy, period: int = 48, seed: int = 0) -> dict:
+    """Per-head causal ablation on the SAME repeated random-token sequence as
+    compute_induction (same seed → identical tokens): does knocking a head out
+    actually hurt in-context copying?
+
+    Metric: mean next-token NLL (nats) over the induction window — predicted
+    token indices j in [period+2, 2·period], i.e. the second-repeat tokens whose
+    current context token has occurred before, so the induction rule
+    "[A][B] … [A] → predict [B]" is available. (j = period+1's context token is
+    the unique last token of the first repeat — no earlier occurrence, so it is
+    excluded.) Δ[l,h] = window mean after ablating (l,h) − baseline.
+
+    Two ablation modes, both exported — they disagree and that disagreement is
+    data: "zero" deletes the head's output (off-distribution but standard);
+    "mean" replaces it with its per-position mean over this run (keeps the
+    head's average signal, removes its position-dependence). Full per-position
+    NLL curves ship for every head and mode (~27k floats — small, unlike #2d's
+    T×T patterns), so any head's "ghost" curve can be drawn against baseline.
+
+    Combos (top-2 / top-4 induction-scoring heads ablated together, heads
+    picked from THIS run's measured scores) expose redundancy: single-head
+    ablation understates circuits with backup heads."""
+    eot = m.V - 1
+    rng = np.random.default_rng(seed)
+    ids = [eot] + (lst := rng.integers(0, eot, size=period).tolist()) + lst
+    P, T = period, len(ids)
+    nL, H = m.n_layer, m.n_head
+
+    tr = m.forward(ids)
+    ident = float(np.abs(_forward_ablate(m, ids, [], "zero") - tr.logits).max())
+    assert ident < 1e-5, "no-ablation forward must reproduce the baseline logits"
+
+    base = _nll_curve(tr.logits, ids)  # (T−1,) indexed by predicted j−1
+    win = slice(P + 1, 2 * P)  # curve indices for predicted j in [P+2, 2P]
+    base_win = float(base[win].mean())
+    first = float(base[1:P].mean())  # predicted j in [2, P]: inside first repeat
+    assert base_win < first, "second-repeat loss must drop (in-context learning)"
+
+    # this run's induction scores (same formula as compute_induction) — hover
+    # context tying Δ-loss back to the behavioral score, from the same forward
+    ts = np.arange(P + 1, 2 * P + 1)
+    ind = tr.attn[:, :, ts, ts - P + 1].mean(axis=-1)  # (nL, H)
+
+    def run(sites: list[tuple[int, int]], mode: str) -> tuple[float, np.ndarray]:
+        nll = _nll_curve(_forward_ablate(m, ids, sites, mode), ids)
+        return float(nll[win].mean() - base_win), nll
+
+    d = {"zero": np.zeros((nL, H)), "mean": np.zeros((nL, H))}
+    curves = {"zero": np.zeros((nL * H, T - 1)), "mean": np.zeros((nL * H, T - 1))}
+    for L in range(nL):
+        for hd in range(H):
+            for mode in ("zero", "mean"):
+                d[mode][L, hd], curves[mode][L * H + hd] = run([(L, hd)], mode)
+
+    top = np.argsort(ind.reshape(-1))[::-1]
+    combo_sites = [
+        [(int(f) // H, int(f) % H) for f in top[:2]],
+        [(int(f) // H, int(f) % H) for f in top[:4]],
+    ]
+    combos = []
+    for sites in combo_sites:
+        entry: dict = {
+            "label": "+".join(f"L{lyr}H{hd}" for lyr, hd in sites),
+            "sites": [[lyr, hd] for lyr, hd in sites],
+        }
+        for mode in ("zero", "mean"):
+            dv, nll = run(sites, mode)
+            entry[f"d_{mode}"] = round(dv, 4)
+            entry[f"nll_{mode}"] = [round(float(v), 4) for v in nll]
+        combos.append(entry)
+
+    def flat4(a: np.ndarray) -> list[float]:
+        return [round(float(v), 4) for v in a.reshape(-1)]
+
+    return {
+        "meta": {
+            "model": m.model_id,
+            "created": _now(),
+            "quantity": "per-head causal ablation on the repeated random-token "
+            "sequence: change in mean next-token NLL over the induction window, "
+            "plus full per-position loss curves for every head and mode",
+            "formula": "Δ[l,h] = mean_{j=P+2..2P} NLL_abl(j) − NLL_base(j); "
+            "NLL(j) = −log p(s_j | s_<j) in nats; ablation replaces head (l,h)'s "
+            "a@v slice before c_proj with 0 (zero) or its per-run positional "
+            "mean (mean)",
+            "note": "a true intervention: one full ablated forward per (head, "
+            "mode) in the model's own float32 (the unablated path reproduces "
+            "the baseline logits — drift exported). Window = second-repeat "
+            "predictions whose context token has occurred before, so induction "
+            "is available; j=P+1 excluded (its context token is unique). Zero-"
+            "ablation is off-distribution; mean-ablation keeps the head's "
+            "average signal — both shown, their disagreement is data. Single-"
+            "head ablation understates redundant circuits (see combos). "
+            "Rounded to 4 dp.",
+            "n_layer": nL,
+            "n_head": H,
+            "period": P,
+            "T": T,
+            "seed": seed,
+            "window": [P + 2, 2 * P],
+            "base_window": round(base_win, 4),
+            "base_first": round(first, 4),
+            "ident_drift": ident,
+            "n_forward": 1 + 2 * nL * H + 2 * len(combo_sites),
+        },
+        "token_strs": tr.token_strs,
+        "ind": flat4(ind),
+        "d_zero": flat4(d["zero"]),
+        "d_mean": flat4(d["mean"]),
+        "nll_base": [round(float(v), 4) for v in base],
+        "nll_zero": flat4(curves["zero"]),  # row-major (l·H+h, predicted j−1)
+        "nll_mean": flat4(curves["mean"]),
+        "combos": combos,
+    }
+
+
 def _logit_lens_topk(m: GPT2Numpy, resid_row: np.ndarray, k: int = 6) -> list:
     lg = m.logit_lens(resid_row)
     lg = lg - lg.max()
@@ -1292,6 +1463,7 @@ def write_bundles(
     dump("attrib.json", compute_logit_attrib(m, prompts=prompts))
     dump("patch.json", compute_patching(m))
     dump("induction.json", compute_induction(m))
+    dump("ablation.json", compute_ablation(m))
     # SAE decoder constellation — only where an open SAE release exists for the
     # model (res-jb covers gpt2-small). External download; skip loudly if absent.
     if model_id == "gpt2":
