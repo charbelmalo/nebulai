@@ -1486,6 +1486,123 @@ def compute_occlusion(m: GPT2Numpy, prompts: list[str] | None = None) -> dict:
     }
 
 
+def compute_sae_web(
+    repo: str = SAE_REPO,
+    hook: str = SAE_HOOK,
+    top_pairs: int = 60,
+    baseline_pairs: int = 200_000,
+    seed: int = 0,
+) -> dict:
+    """#12 Decoder Cosine Web — nearest-neighbor cosine structure of W_dec.
+
+    For every SAE feature i, the maximum cosine similarity between its decoder
+    direction and any OTHER feature's direction (exact, all 24576² pairs
+    scanned in blocks), plus the global top pairs. High nearest-neighbor
+    cosine is direct evidence of FEATURE SPLITTING — the SAE learning several
+    near-duplicate directions for one underlying direction — a real
+    superposition phenomenon, measured, not illustrated.
+
+    Honesty: the scale for "high" is a MEASURED random-pair baseline (seeded
+    sample of pairs, mean/std/p99/p99.9/max exported) — not an eyeballed
+    threshold. "Mutual" is exact: i and j are each other's nearest neighbor.
+    Rows are normalized to exact unit length before the scan, so these are
+    true cosines even where ‖W_dec[i]‖ deviates from 1 (release range
+    0.9998–1.0013)."""
+    from huggingface_hub import hf_hub_download
+    from safetensors.numpy import load_file
+
+    cfg = json.loads(open(hf_hub_download(repo, f"{hook}/cfg.json")).read())
+    t = load_file(hf_hub_download(repo, f"{hook}/sae_weights.safetensors"))
+    W = t["W_dec"].astype(np.float64)
+    d_sae, d_in = int(cfg["d_sae"]), int(cfg["d_in"])
+    assert W.shape == (d_sae, d_in), f"W_dec shape {W.shape} != ({d_sae},{d_in})"
+    U = (W / np.linalg.norm(W, axis=1, keepdims=True)).astype(np.float32)
+
+    nn_idx = np.zeros(d_sae, dtype=np.int64)
+    nn_cos = np.zeros(d_sae)
+    cand: list[tuple[float, int, int]] = []  # global top-pair candidates (i<j)
+    B = 2048
+    for r0 in range(0, d_sae, B):
+        r1 = min(r0 + B, d_sae)
+        G = U[r0:r1] @ U.T  # (block, d_sae) float32
+        rows = np.arange(r0, r1)
+        G[np.arange(r1 - r0), rows] = -2.0  # mask self
+        idx = np.argmax(G, axis=1)
+        nn_idx[r0:r1] = idx
+        nn_cos[r0:r1] = G[np.arange(r1 - r0), idx].astype(np.float64)
+        # global-pair candidates from the strict upper triangle (dedupe i<j)
+        G[np.arange(d_sae)[None, :] <= rows[:, None]] = -2.0
+        flat = np.argpartition(G.reshape(-1), -4 * top_pairs)[-4 * top_pairs :]
+        for f in flat:
+            i_loc, j = divmod(int(f), d_sae)
+            v = float(G[i_loc, j])
+            if v > -2.0:
+                cand.append((v, r0 + i_loc, j))
+    cand.sort(reverse=True)
+
+    # float32-matmul precision check: recompute a seeded sample of nn cosines
+    # as exact float64 dots — the export is only honest if they agree
+    rng = np.random.default_rng(seed)
+    Wu64 = W / np.linalg.norm(W, axis=1, keepdims=True)
+    sample = rng.integers(0, d_sae, size=64)
+    worst = max(
+        abs(float(Wu64[i] @ Wu64[nn_idx[i]]) - nn_cos[i]) for i in map(int, sample)
+    )
+    assert worst < 1e-5, f"float32 cosine drift {worst:.2e} ≥ 1e-5"
+
+    # measured random-pair baseline — the yardstick for "unusually close"
+    a = rng.integers(0, d_sae, size=baseline_pairs)
+    b = rng.integers(0, d_sae, size=baseline_pairs)
+    keep = a != b
+    a, b = a[keep], b[keep]
+    base = np.einsum("ij,ij->i", U[a].astype(np.float64), U[b].astype(np.float64))
+    mutual = nn_idx[nn_idx] == np.arange(d_sae)
+
+    pairs = [
+        {
+            "i": i,
+            "j": j,
+            "cos": round(v, 4),
+            "mutual": bool(nn_idx[i] == j and nn_idx[j] == i),
+        }
+        for v, i, j in cand[:top_pairs]
+    ]
+    return {
+        "meta": {
+            "model": "gpt2",
+            "created": _now(),
+            "sae_repo": repo,
+            "hook_point": hook,
+            "quantity": "nearest-neighbor cosine between SAE decoder directions "
+            "(rows of W_dec, unit-normalized) — every one of the "
+            f"{d_sae}² ordered pairs scanned; evidence of feature splitting",
+            "formula": "nn_cos[i] = max_{j≠i} cos(W_dec[i], W_dec[j]); mutual "
+            "⇔ nn(nn(i)) = i. baseline = cosine over a seeded random sample "
+            "of distinct pairs.",
+            "note": "float32 matmul, verified against exact float64 dots on a "
+            "seeded sample (worst |Δ| asserted < 1e-5). nn_cos rounded to 4 dp. "
+            "No layout, no projection: both plot axes are computed quantities "
+            "(release-measured firing sparsity × nn cosine).",
+            "d_sae": d_sae,
+            "d_in": d_in,
+            "mutual_count": int(mutual.sum()),
+            "baseline": {
+                "n_pairs": int(a.size),
+                "seed": seed,
+                "mean": round(float(base.mean()), 4),
+                "std": round(float(base.std()), 4),
+                "p99": round(float(np.percentile(base, 99)), 4),
+                "p999": round(float(np.percentile(base, 99.9)), 4),
+                "max": round(float(base.max()), 4),
+            },
+        },
+        "nn_idx": [int(v) for v in nn_idx],
+        "nn_cos": [round(float(v), 4) for v in nn_cos],
+        "mutual": [int(v) for v in mutual],
+        "pairs": pairs,
+    }
+
+
 def _logit_lens_topk(m: GPT2Numpy, resid_row: np.ndarray, k: int = 6) -> list:
     lg = m.logit_lens(resid_row)
     lg = lg - lg.max()
@@ -1588,6 +1705,10 @@ def write_bundles(
             dump("sae_acts.json", compute_sae_acts(m, prompts=prompts))
         except Exception as e:  # noqa: BLE001
             print(f"[interp] sae_acts.json skipped: {e}")
+        try:
+            dump("sae_web.json", compute_sae_web())
+        except Exception as e:  # noqa: BLE001
+            print(f"[interp] sae_web.json skipped: {e}")
 
     traces_index = []
     for prompt in prompts or DEFAULT_PROMPTS:

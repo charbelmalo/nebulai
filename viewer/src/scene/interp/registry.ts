@@ -33,6 +33,7 @@ import { ProbabilitySimplexDriver } from "./ProbabilitySimplexDriver";
 import { ResidualRibbonDriver } from "./ResidualRibbonDriver";
 import { SAEConstellationDriver } from "./SAEConstellationDriver";
 import { SAEPianoRollDriver } from "./SAEPianoRollDriver";
+import { SAEWebDriver } from "./SAEWebDriver";
 import { WeightSpectrumDriver } from "./WeightSpectrumDriver";
 
 export const INTERP_FEATURES: InterpFeature[] = [
@@ -677,6 +678,47 @@ export const INTERP_FEATURES: InterpFeature[] = [
     legendCorner: "br",
     legendCollapsed: true,
     create: () => new SAEPianoRollDriver(),
+  },
+  {
+    id: "decoder-cosine-web",
+    n: 12,
+    label: "Decoder Cosine Web",
+    group: "sae",
+    blurb:
+      "Feature splitting, measured: for every SAE feature, the maximum cosine " +
+      "between its decoder direction and any other feature's — all 24,576² " +
+      "pairs scanned exactly. The SAE learned at least EIGHT exact copies of " +
+      "one newline direction (pairwise cos 1.0000, including #11746, the " +
+      "piano-roll's position-0 sink feature). 24 features have a twin above " +
+      "0.9 — with matching meanings: #16199~#22836 both read ↑abolic (0.907), " +
+      "#4641~#16870 both ↑care (0.903), #11249 ↑prising ~ #21550 ↑nexpected " +
+      "(0.902). And the MEDIAN feature's nearest neighbor (0.525) is above " +
+      "the 99.9th percentile of random pairs (0.336) — decoder directions " +
+      "are far from evenly spread.",
+    math:
+      "nn_cos[i] = maxⱼ≠ᵢ cos(W_dec[i], W_dec[j]) over exact unit-normalized " +
+      "rows; mutual ⇔ nn(nn(i)) = i. The yardstick for 'unusually close' is a " +
+      "MEASURED random-pair baseline (~200k seeded distinct pairs: mean " +
+      "0.0041, p99 0.171, p99.9 0.336, max 0.697) — drawn as guide lines, " +
+      "not an eyeballed threshold.",
+    source:
+      "sae_web.json ⋈ sae.json (res-jb, blocks.8.hook_resid_pre). Verified: " +
+      "float32 scan matches exact float64 dots on a seeded sample (worst " +
+      "drift < 1e-5, asserted); top pair and 3 random rows recomputed from " +
+      "the raw safetensors end-to-end; x is the release's measured firing " +
+      "sparsity, same field the constellation shows.",
+    legend: [
+      { label: "mutual — i and j are each other's nn", rgb: "245,195,59" },
+      { label: "one-way nearest neighbor", rgb: "138,146,178" },
+      { label: "measured random-pair baseline guides", rgb: "118,126,158" },
+    ],
+    note:
+      "no layout, no projection — both axes are computed quantities · " +
+      "draw order deterministically shuffled (no z-bias) · chips list top " +
+      "pairs once per feature (the ⏎ clique otherwise fills every slot)",
+    legendCorner: "br",
+    legendCollapsed: true,
+    create: () => new SAEWebDriver(),
   },
 ];
 

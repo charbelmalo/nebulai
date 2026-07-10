@@ -411,6 +411,38 @@ export interface AblationBundle {
   combos: AblationCombo[];
 }
 
+/** #12 Decoder Cosine Web — nearest-neighbor cosine structure of W_dec.
+ *  Joined with SAEBundle (labels + measured firing sparsity) in the driver. */
+export interface SAEWebBundle {
+  meta: {
+    model: string;
+    created: string;
+    sae_repo: string;
+    hook_point: string;
+    quantity: string;
+    formula: string;
+    note: string;
+    d_sae: number;
+    d_in: number;
+    /** features that are their nearest neighbor's nearest neighbor */
+    mutual_count: number;
+    /** measured random-pair cosine baseline — the yardstick for "close" */
+    baseline: {
+      n_pairs: number;
+      seed: number;
+      mean: number;
+      std: number;
+      p99: number;
+      p999: number;
+      max: number;
+    };
+  };
+  nn_idx: number[]; // length d_sae
+  nn_cos: number[]; // length d_sae, 4 dp
+  mutual: number[]; // 0/1, length d_sae
+  pairs: { i: number; j: number; cos: number; mutual: boolean }[];
+}
+
 /** One occlusion mode's per-position results (arrays indexed by position). */
 export interface OcclusionMode {
   /** drop in the baseline top-1's log-prob when this position is occluded, nats, 4 dp */
@@ -539,6 +571,9 @@ export const loadAblation = (model: string, base = "/out") =>
 
 export const loadOcclusion = (model: string, base = "/out") =>
   fetchJSON<OcclusionBundle>(`${interpBase(model, base)}/occlusion.json`);
+
+export const loadSAEWeb = (model: string, base = "/out") =>
+  fetchJSON<SAEWebBundle>(`${interpBase(model, base)}/sae_web.json`);
 
 export const loadHeads = (model: string, base = "/out") =>
   fetchJSON<HeadsBundle>(`${interpBase(model, base)}/heads.json`);
