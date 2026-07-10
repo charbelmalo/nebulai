@@ -18,6 +18,7 @@ Bundles written by `write_bundles`:
   patch.json      — residual-stream activation patching grids    (#14 Causal Patching Map)
   induction.json  — repeated-sequence induction-head diagnostic  (#2d Induction Microscope)
   ablation.json   — per-head ablation Δ-loss on that sequence    (#17 Ablation Ghosts)
+  occlusion.json  — leave-one-token-out Δ log-prob per prompt    (#19 Occlusion Vignette)
   trace_<slug>.json — one real forward pass per curated prompt   (#3/7/8/18/23 …)
 
 The trace bundle deliberately does NOT store full logits (T×50257 is ~26 MB);
@@ -1374,6 +1375,117 @@ def compute_ablation(m: GPT2Numpy, period: int = 48, seed: int = 0) -> dict:
     }
 
 
+def _logsoftmax(row: np.ndarray) -> np.ndarray:
+    r = row.astype(np.float64)
+    mx = r.max()
+    return r - (mx + np.log(np.exp(r - mx).sum()))
+
+
+def compute_occlusion(m: GPT2Numpy, prompts: list[str] | None = None) -> dict:
+    """Leave-one-token-out occlusion importance — exact input-level causal
+    attribution, no gradients, one real forward per occlusion.
+
+    For each prompt: the baseline forward fixes the model's own top-1 next
+    token c at the final position. Then every position p is occluded two ways
+    — both real, and they answer different questions:
+
+      sub — token p replaced by <|endoftext|> (positions preserved; the model
+            sees a sink token where the word was)
+      del — token p deleted (every later token shifts one position left, so
+            positional embeddings move too; disclosed)
+
+    drop[p] = log p_base(c) − log p_occluded(c), in nats: positive = the token
+    was supporting the prediction; negative = it was suppressing it. The new
+    top-1 under each occlusion is exported, so a *flipped* prediction is
+    visible exactly (e.g. IOI: delete the second name and watch the flip).
+
+    Causality check baked in: deleting the FINAL token must reproduce the
+    baseline's second-to-last-position logits (causal attention cannot look
+    ahead); the max drift across prompts is asserted small and exported."""
+    prompts = prompts or DEFAULT_PROMPTS
+    eot = m.V - 1
+    out = []
+    causal_drift = 0.0
+    for prompt in prompts:
+        ids = m.encode(prompt)
+        tr = m.forward(ids)
+        T = len(ids)
+        tau = T - 1
+        base_row = tr.logits[tau]
+        c = int(np.argmax(base_row))
+        base_lp = _logsoftmax(base_row)
+        pr = float(np.exp(base_lp[c]))
+
+        # no-op check: "occluding" a position with its own token is the
+        # baseline forward — must be bit-identical (deterministic numpy)
+        same = list(ids)
+        same[0] = ids[0]
+        assert np.array_equal(m.forward(same).logits, tr.logits)
+
+        modes: dict[str, dict[str, list]] = {}
+        for mode in ("sub", "del"):
+            drop_lp: list[float] = []
+            drop_logit: list[float] = []
+            new_top: list[list] = []
+            for p in range(T):
+                if mode == "sub":
+                    occ = list(ids)
+                    occ[p] = eot
+                else:
+                    occ = ids[:p] + ids[p + 1 :]
+                    if not occ:  # single-token prompt fully deleted
+                        drop_lp.append(0.0)
+                        drop_logit.append(0.0)
+                        new_top.append(["", 0.0])
+                        continue
+                row = m.forward(occ).logits[-1]
+                if mode == "del" and p == tau:
+                    # causal attention: dropping the last token must leave the
+                    # earlier positions' logits (numerically) unchanged
+                    causal_drift = max(causal_drift, float(np.abs(row - tr.logits[tau - 1]).max()))
+                lp = _logsoftmax(row)
+                drop_lp.append(round(float(base_lp[c] - lp[c]), 4))
+                drop_logit.append(round(float(base_row[c]) - float(row[c]), 4))
+                nt = int(np.argmax(row))
+                new_top.append([m.decode1(nt), round(float(np.exp(lp[nt])), 4)])
+            modes[mode] = {"drop_lp": drop_lp, "drop_logit": drop_logit, "new_top": new_top}
+
+        out.append({
+            "slug": _slug(prompt),
+            "prompt": prompt,
+            "token_strs": tr.token_strs,
+            "T": T,
+            "top1": [m.decode1(c), round(pr, 4), round(float(base_row[c]), 4)],
+            "sub": modes["sub"],
+            "del": modes["del"],
+        })
+    assert causal_drift < 1e-3, "deleting the final token must not change earlier logits"
+
+    return {
+        "meta": {
+            "model": m.model_id,
+            "created": _now(),
+            "quantity": "leave-one-token-out occlusion importance: change in the "
+            "baseline top-1 next token's log-probability when each prompt "
+            "position is substituted with <|endoftext|> or deleted",
+            "formula": "drop[p] = log p_base(c) − log p_occluded(c) at the final "
+            "position, c = the BASELINE forward's own argmax next token; "
+            "drop_logit is the same difference in raw logits",
+            "note": "exact intervention — one real forward per (position, mode), "
+            "no gradients, no approximation. sub keeps every position in place; "
+            "del shifts later tokens left so positional embeddings move (both "
+            "shown — they answer different questions). Occluding the final "
+            "position changes the very token the model predicts from — kept, "
+            "honestly showing exactly that. drop > 0: the token supported the "
+            "prediction; drop < 0: it was suppressing it. new_top = the "
+            "occluded run's own top-1 [str, p]. Rounded to 4 dp.",
+            "n_forward": sum(1 + 2 * len(m.encode(p)) + 1 for p in prompts),
+            "causal_drift": causal_drift,
+        },
+        "prompts": out,
+    }
+
+
 def _logit_lens_topk(m: GPT2Numpy, resid_row: np.ndarray, k: int = 6) -> list:
     lg = m.logit_lens(resid_row)
     lg = lg - lg.max()
@@ -1464,6 +1576,7 @@ def write_bundles(
     dump("patch.json", compute_patching(m))
     dump("induction.json", compute_induction(m))
     dump("ablation.json", compute_ablation(m))
+    dump("occlusion.json", compute_occlusion(m, prompts=prompts or DEFAULT_PROMPTS))
     # SAE decoder constellation — only where an open SAE release exists for the
     # model (res-jb covers gpt2-small). External download; skip loudly if absent.
     if model_id == "gpt2":

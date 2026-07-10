@@ -411,6 +411,41 @@ export interface AblationBundle {
   combos: AblationCombo[];
 }
 
+/** One occlusion mode's per-position results (arrays indexed by position). */
+export interface OcclusionMode {
+  /** drop in the baseline top-1's log-prob when this position is occluded, nats, 4 dp */
+  drop_lp: number[];
+  /** same difference in raw logits */
+  drop_logit: number[];
+  /** the occluded run's own top-1 per position: [token string, probability] */
+  new_top: [string, number][];
+}
+
+export interface OcclusionPrompt {
+  slug: string;
+  prompt: string;
+  token_strs: string[];
+  T: number;
+  /** baseline top-1 at the final position: [token string, probability, logit] */
+  top1: [string, number, number];
+  sub: OcclusionMode;
+  del: OcclusionMode;
+}
+
+export interface OcclusionBundle {
+  meta: {
+    model: string;
+    created: string;
+    quantity: string;
+    formula: string;
+    note: string;
+    n_forward: number;
+    /** max |Δlogit| of del-final-token vs the baseline's T−2 row (causality) */
+    causal_drift: number;
+  };
+  prompts: OcclusionPrompt[];
+}
+
 /** [token string, probability] — the honest readout unit for lens/next-token. */
 export type LensTopk = [string, number][];
 
@@ -501,6 +536,9 @@ export const loadInduction = (model: string, base = "/out") =>
 
 export const loadAblation = (model: string, base = "/out") =>
   fetchJSON<AblationBundle>(`${interpBase(model, base)}/ablation.json`);
+
+export const loadOcclusion = (model: string, base = "/out") =>
+  fetchJSON<OcclusionBundle>(`${interpBase(model, base)}/occlusion.json`);
 
 export const loadHeads = (model: string, base = "/out") =>
   fetchJSON<HeadsBundle>(`${interpBase(model, base)}/heads.json`);

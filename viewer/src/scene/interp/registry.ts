@@ -26,6 +26,7 @@ import type { InterpFeature } from "./InterpDriver";
 import { LogitAttribDriver } from "./LogitAttribDriver";
 import { LogitLensTunnelDriver } from "./LogitLensTunnelDriver";
 import { NeuronFieldDriver } from "./NeuronFieldDriver";
+import { OcclusionDriver } from "./OcclusionDriver";
 import { OVEigenDriver } from "./OVEigenDriver";
 import { PatchingMapDriver } from "./PatchingMapDriver";
 import { ProbabilitySimplexDriver } from "./ProbabilitySimplexDriver";
@@ -347,6 +348,51 @@ export const INTERP_FEATURES: InterpFeature[] = [
     legendCorner: "br",
     ownPrompts: true,
     create: () => new AblationDriver(),
+  },
+  {
+    id: "occlusion-vignette",
+    n: 19,
+    label: "Occlusion Vignette",
+    group: "forward",
+    blurb:
+      "Leave-one-token-out: each prompt position is occluded — substituted " +
+      "with <|endoftext|> or deleted outright — and one real forward measures " +
+      "how far the baseline top-1's log-probability falls. On the IOI prompt, " +
+      "deleting “ Mary” flips the prediction to “ John” (+4.22 nats) and " +
+      "deleting the duplicated “ John” makes it fall back to “ them” (+1.79) " +
+      "— name-mover evidence at the input level. Occluding the “ E” of Eiffel " +
+      "makes the model guess “ London”. Honest surprise: syntax dominates — " +
+      "“ is”/“ of”/“ to” post the biggest drops (up to +18.9 nats), because " +
+      "occlusion measures total contribution, scaffolding included. Completes " +
+      "the causal lenses: input (here) · residual patch (#14) · head ablation " +
+      "(#17) · direct attribution (#13).",
+    math:
+      "drop[p] = log p_base(c) − log p_occluded(c) at the final position, " +
+      "where c is the BASELINE forward's own argmax next token; drop_logit is " +
+      "the same difference in raw logits. Sub mode keeps positions " +
+      "(<|endoftext|> in place); del mode deletes the token, so later " +
+      "positions shift and their positional embeddings move — a bigger, " +
+      "disclosed intervention. Each occluded run's own top-1 is exported, so " +
+      "prediction flips are shown, not inferred.",
+    source:
+      "occlusion.json — 100 real forwards (5 prompts × (baseline + T sub + " +
+      "T del + causality check)). Verified: the replicated baseline matches " +
+      "Trace.logits exactly; deleting the FINAL token reproduces the " +
+      "baseline's second-to-last logits bit-for-bit (causal drift 0.0); the " +
+      "IOI del-“ John” drop recomputed from scratch matches at 4 dp.",
+    legend: [
+      { label: "drop > 0 — token supported the prediction", rgb: "245,195,59" },
+      { label: "drop < 0 — token was suppressing it", rgb: "96,165,250" },
+      { label: "white outline — occlusion flips the top-1", rgb: "255,255,255" },
+    ],
+    note:
+      "one linear scale both directions — nats-per-px identical above and " +
+      "below the zero axis, extents stated on the axis · del mode shifts " +
+      "positional embeddings (disclosed) · drops include syntactic " +
+      "scaffolding, not just semantics",
+    legendCollapsed: true,
+    legendCorner: "br",
+    create: () => new OcclusionDriver(),
   },
   {
     id: "logit-lens-tunnel",
