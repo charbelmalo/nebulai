@@ -508,6 +508,48 @@ export interface GrokBundle {
   n_ckpt: number;
 }
 
+/** #22 Direction Compass — per SAE feature, exact max cosine of its decoder
+ *  direction against ALL MLP-neuron write directions (c_proj rows) and ALL
+ *  token embeddings (W_E rows), plus a measured random-direction baseline. */
+export interface CompassBundle {
+  meta: {
+    model: string;
+    created: string;
+    sae_repo: string;
+    hook_point: string;
+    quantity: string;
+    formula: string;
+    note: string;
+    d_sae: number;
+    d: number;
+    n_neurons: number;
+    n_tokens: number;
+    d_mlp: number;
+    /** fraction of best-neuron matches in layers 0–7 (before the hook) */
+    upstream_frac: number;
+    baseline: {
+      n_dirs: number;
+      seed: number;
+      neuron: { mean: number; p99: number; max: number };
+      token: { mean: number; p99: number; max: number };
+    };
+  };
+  /** (d_sae) max signed cos vs neuron write directions, 4 dp */
+  nc: number[];
+  /** (d_sae) flat best-neuron index: layer = i // d_mlp, unit = i % d_mlp */
+  ni: number[];
+  /** (d_sae) max signed cos vs token embeddings, 4 dp */
+  tc: number[];
+  /** (d_sae) best-token id */
+  ti: number[];
+  /** (d_sae) index into tok_strs for the best token's string */
+  ti_u: number[];
+  tok_strs: string[];
+  /** (n_layer) how many features' best neuron lives in each layer */
+  layer_counts: number[];
+  exemplars: { f: number; kind: "neuron" | "token"; cos: number }[];
+}
+
 /** One occlusion mode's per-position results (arrays indexed by position). */
 export interface OcclusionMode {
   /** drop in the baseline top-1's log-prob when this position is occluded, nats, 4 dp */
@@ -642,6 +684,9 @@ export const loadSAEWeb = (model: string, base = "/out") =>
 
 export const loadGrok = (model: string, base = "/out") =>
   fetchJSON<GrokBundle>(`${interpBase(model, base)}/grok.json`);
+
+export const loadCompass = (model: string, base = "/out") =>
+  fetchJSON<CompassBundle>(`${interpBase(model, base)}/compass.json`);
 
 export const loadHeads = (model: string, base = "/out") =>
   fetchJSON<HeadsBundle>(`${interpBase(model, base)}/heads.json`);

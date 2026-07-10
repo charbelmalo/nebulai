@@ -1603,6 +1603,187 @@ def compute_sae_web(
     }
 
 
+def compute_compass(
+    m: GPT2Numpy,
+    repo: str = SAE_REPO,
+    hook: str = SAE_HOOK,
+    baseline_n: int = 2000,
+    top_exemplars: int = 8,
+    seed: int = 0,
+) -> dict:
+    """#22 Direction Compass — where SAE feature directions point, measured
+    against the model's own two big families of residual-stream directions.
+
+    For every SAE decoder direction (unit-normalized row of W_dec, the same
+    rows #5/#12 use), the exact maximum cosine to
+      (a) every MLP neuron write direction — all n_layer·d_mlp rows of
+          mlp.c_proj, the same rows #6 uses — and
+      (b) every token embedding (row of W_E, the same rows #15 uses).
+    Both scans are exhaustive (24576×36864 and 24576×50257 cosines), float32
+    blocked matmuls verified against exact float64 dots on a seeded sample.
+
+    Honesty:
+    - The yardstick is a MEASURED baseline: `baseline_n` seeded random unit
+      directions in the same d-space are scanned against each family the same
+      way; the distribution of THEIR max-cos (mean/p99/max) is exported. In
+      768-d a random direction still finds ~0.16 max-cos in a 36k family —
+      raw cosines without this baseline would overstate alignment.
+    - Cosines are SIGNED maxima: anti-aligned directions are not surfaced
+      (stated in meta) — this asks "which direction writes most similarly",
+      not "which is most correlated in magnitude".
+    - Causal structure disclosed: the SAE reads blocks.8.hook_resid_pre = the
+      residual BEFORE block 8, the sum of writes from layers 0–7 (+ emb). A best
+      match in layers 8–11 is geometric similarity only — that neuron writes
+      AFTER the hook and cannot be the feature's upstream source. Per-feature
+      best-match layer is exported so the viewer can show the split.
+    """
+    from huggingface_hub import hf_hub_download
+    from safetensors.numpy import load_file
+
+    cfg = json.loads(open(hf_hub_download(repo, f"{hook}/cfg.json")).read())
+    t = load_file(hf_hub_download(repo, f"{hook}/sae_weights.safetensors"))
+    W = t["W_dec"].astype(np.float64)
+    d_sae, d_in = int(cfg["d_sae"]), int(cfg["d_in"])
+    assert W.shape == (d_sae, d_in), f"W_dec shape {W.shape} != ({d_sae},{d_in})"
+    assert d_in == m.d, f"SAE d_in {d_in} != model d {m.d}"
+    U = (W / np.linalg.norm(W, axis=1, keepdims=True)).astype(np.float32)
+
+    d, d_mlp = m.d, 4 * m.d
+    blocks = []
+    for L in range(m.n_layer):
+        Wp = m._g(f"h.{L}.mlp.c_proj.weight")
+        assert Wp.shape == (d_mlp, d), f"c_proj L{L} shape {Wp.shape}"
+        blocks.append(Wp)
+    Nrows = np.concatenate(blocks, axis=0).astype(np.float64)  # (n_layer·d_mlp, d)
+    n_neur = Nrows.shape[0]
+    nn_norm = np.linalg.norm(Nrows, axis=1, keepdims=True)
+    assert float(nn_norm.min()) > 1e-6, "degenerate zero-norm c_proj row"
+    Nu = (Nrows / nn_norm).astype(np.float32)
+
+    E = m.wte.astype(np.float64)  # (V, d)
+    n_tok = E.shape[0]
+    e_norm = np.linalg.norm(E, axis=1, keepdims=True)
+    assert float(e_norm.min()) > 1e-6, "degenerate zero-norm embedding row"
+    Eu = (E / e_norm).astype(np.float32)
+
+    def max_cos(Q: np.ndarray, F: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """exhaustive signed max cosine of each unit row of Q against family F"""
+        n = Q.shape[0]
+        best = np.zeros(n)
+        idx = np.zeros(n, dtype=np.int64)
+        B = 2048
+        for r0 in range(0, n, B):
+            r1 = min(r0 + B, n)
+            G = Q[r0:r1] @ F.T
+            j = np.argmax(G, axis=1)
+            idx[r0:r1] = j
+            best[r0:r1] = G[np.arange(r1 - r0), j].astype(np.float64)
+        return best, idx
+
+    nc, ni = max_cos(U, Nu)  # vs neuron write directions
+    tc, ti = max_cos(U, Eu)  # vs token embeddings
+
+    # float32-matmul precision check against exact float64 dots
+    rng = np.random.default_rng(seed)
+    Wu64 = W / np.linalg.norm(W, axis=1, keepdims=True)
+    Nu64 = Nrows / nn_norm
+    Eu64 = E / e_norm
+    sample = rng.integers(0, d_sae, size=64)
+    worst = max(
+        max(abs(float(Wu64[i] @ Nu64[ni[i]]) - nc[i]) for i in map(int, sample)),
+        max(abs(float(Wu64[i] @ Eu64[ti[i]]) - tc[i]) for i in map(int, sample)),
+    )
+    assert worst < 1e-5, f"float32 cosine drift {worst:.2e} ≥ 1e-5"
+
+    # measured baseline: what max-cos does a RANDOM direction get per family?
+    R = rng.standard_normal((baseline_n, d))
+    Ru = (R / np.linalg.norm(R, axis=1, keepdims=True)).astype(np.float32)
+    bn, _ = max_cos(Ru, Nu)
+    bt, _ = max_cos(Ru, Eu)
+
+    def base_stats(b: np.ndarray) -> dict:
+        return {
+            "mean": round(float(b.mean()), 4),
+            "p99": round(float(np.percentile(b, 99)), 4),
+            "max": round(float(b.max()), 4),
+        }
+
+    layer = (ni // d_mlp).astype(np.int64)
+    layer_counts = np.bincount(layer, minlength=m.n_layer)
+    upstream = int(layer_counts[:8].sum())  # layers 0–7 write before the hook
+
+    # unique-string table for best-match tokens (hover text without a
+    # client-side tokenizer); indices into it per feature
+    tok_strs: list[str] = []
+    tok_map: dict[int, int] = {}
+    ti_u = np.zeros(d_sae, dtype=np.int64)
+    for i in range(d_sae):
+        tid = int(ti[i])
+        if tid not in tok_map:
+            tok_map[tid] = len(tok_strs)
+            tok_strs.append(m.decode1(tid))
+        ti_u[i] = tok_map[tid]
+
+    # chip exemplars: strongest alignments, deduped by the MATCHED PARTNER —
+    # eight top features can share one neuron (they do: several features tie
+    # at ~0.97 on a single L2 neuron), and repeating it teaches nothing
+    ex: list[dict] = []
+    part_n: set[int] = set()
+    for i in map(int, np.argsort(nc)[::-1]):
+        if int(ni[i]) not in part_n:
+            part_n.add(int(ni[i]))
+            ex.append({"f": i, "kind": "neuron", "cos": round(float(nc[i]), 4)})
+            if len(part_n) >= top_exemplars:
+                break
+    part_t: set[int] = set()
+    for i in map(int, np.argsort(tc)[::-1]):
+        if int(ti[i]) not in part_t:
+            part_t.add(int(ti[i]))
+            ex.append({"f": i, "kind": "token", "cos": round(float(tc[i]), 4)})
+            if len(part_t) >= top_exemplars:
+                break
+
+    return {
+        "meta": {
+            "model": m.model_id,
+            "created": _now(),
+            "sae_repo": repo,
+            "hook_point": hook,
+            "quantity": "per SAE feature: exact max cosine of its decoder "
+            "direction against ALL MLP-neuron write directions and ALL token "
+            "embeddings (both families unit-normalized, exhaustive scan)",
+            "formula": "nc[i] = max_j cos(W_dec[i], c_proj_row[j]); "
+            "tc[i] = max_v cos(W_dec[i], W_E[v]). baseline = the same scan "
+            "for seeded random unit directions in the same d-space.",
+            "note": "signed maxima — anti-aligned partners not surfaced. "
+            "float32 matmul verified vs float64 on a seeded sample "
+            "(worst |Δ| asserted < 1e-5). cosines rounded to 4 dp. Neuron "
+            f"layers 8–11 write AFTER {hook}: a best match there is "
+            "geometric similarity only, not an upstream source.",
+            "d_sae": d_sae,
+            "d": d,
+            "n_neurons": int(n_neur),
+            "n_tokens": int(n_tok),
+            "d_mlp": d_mlp,
+            "upstream_frac": round(upstream / d_sae, 4),
+            "baseline": {
+                "n_dirs": baseline_n,
+                "seed": seed,
+                "neuron": base_stats(bn),
+                "token": base_stats(bt),
+            },
+        },
+        "nc": [round(float(v), 4) for v in nc],
+        "ni": [int(v) for v in ni],  # flat neuron idx: layer = i // d_mlp
+        "tc": [round(float(v), 4) for v in tc],
+        "ti": [int(v) for v in ti],  # token id
+        "ti_u": [int(v) for v in ti_u],  # index into tok_strs
+        "tok_strs": tok_strs,
+        "layer_counts": [int(v) for v in layer_counts],
+        "exemplars": ex,
+    }
+
+
 def compute_grok(
     p: int = 97,
     n_hidden: int = 128,
@@ -1961,6 +2142,10 @@ def write_bundles(
             dump("sae_web.json", compute_sae_web())
         except Exception as e:  # noqa: BLE001
             print(f"[interp] sae_web.json skipped: {e}")
+        try:
+            dump("compass.json", compute_compass(m))
+        except Exception as e:  # noqa: BLE001
+            print(f"[interp] compass.json skipped: {e}")
         # grokking toy model — not derived from gpt2, but the Internals gallery
         # (and its index.json) lives in the gpt2 bundle dir
         dump("grok.json", compute_grok())

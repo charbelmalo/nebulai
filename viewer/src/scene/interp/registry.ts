@@ -17,6 +17,7 @@
 import { AblationDriver } from "./AblationDriver";
 import { AttentionFlowDriver } from "./AttentionFlowDriver";
 import { AttentionRolloutDriver } from "./AttentionRolloutDriver";
+import { CompassDriver } from "./CompassDriver";
 import { CompositionWebDriver } from "./CompositionWebDriver";
 import { EmbeddingConstellationDriver } from "./EmbeddingConstellationDriver";
 import { FourierAtlasDriver } from "./FourierAtlasDriver";
@@ -720,6 +721,52 @@ export const INTERP_FEATURES: InterpFeature[] = [
     legendCorner: "br",
     legendCollapsed: true,
     create: () => new SAEWebDriver(),
+  },
+  {
+    id: "direction-compass",
+    n: 22,
+    label: "Direction Compass",
+    group: "sae",
+    blurb:
+      "Where do SAE feature directions actually point? For every one of the " +
+      "24,576 decoder directions, the exact max cosine against ALL 36,864 MLP " +
+      "neuron write directions (y-axis) and against all 50,257 token " +
+      "embeddings (x-axis) — over two billion cosines, scanned exhaustively. " +
+      "98.4% of features " +
+      "sit above the diagonal: closer to some neuron's write direction than " +
+      "to any token embedding. 32 features are essentially a single neuron " +
+      "(cos > 0.9) — and 93.8% of best-neuron matches lie in layers 0–7, " +
+      "upstream of the SAE's hook, exactly where a feature's writers must " +
+      "live. The most token-aligned features are suffix morphemes: 's' " +
+      "(0.673), 'ing' (0.657), 'ly' (0.656), 'ed' (0.568).",
+    math:
+      "nc[i] = maxⱼ cos(W_dec[i], c_proj_row[j]) over 12·3072 unit-normalized " +
+      "rows; tc[i] = maxᵥ cos(W_dec[i], W_E[v]) over 50,257. Signed maxima — " +
+      "anti-alignments not surfaced. Yardstick: 2,000 seeded random unit " +
+      "768-d directions scanned identically → max-cos mean 0.149 (neuron) / " +
+      "0.130 (token), p99 0.178 — drawn as guide lines, so 'aligned' has a " +
+      "measured baseline, not an eyeballed one.",
+    source:
+      "compass.json ⋈ sae.json (res-jb, blocks.8.hook_resid_pre). Verified: " +
+      "3 features recomputed end-to-end in float64 from the raw safetensors " +
+      "(max-cos AND argmax exact); float32 scan drift < 1e-5 asserted; " +
+      "deterministic re-run byte-identical. The hook reads the residual " +
+      "BEFORE block 8 — best neurons in L8–11 (6.2%) write after it and are " +
+      "flagged geometric-only on hover.",
+    legend: [
+      { label: "best neuron in L0 (viridis floor)", rgb: "59,82,138" },
+      { label: "best neuron in L6", rgb: "54,181,120" },
+      { label: "best neuron in L11 (after hook)", rgb: "253,231,37" },
+      { label: "measured random-dir baseline guides", rgb: "118,126,158" },
+    ],
+    note:
+      "no layout, no projection — both axes are exhaustively computed max " +
+      "cosines on the same 0–1 scale · color = best-neuron layer (same ramp " +
+      "as #6) · draw order deterministically shuffled · chips dedupe by " +
+      "matched partner (eight top features share one L2 neuron)",
+    legendCorner: "br",
+    legendCollapsed: true,
+    create: () => new CompassDriver(),
   },
   {
     id: "grokking-clock",
