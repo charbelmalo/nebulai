@@ -109,6 +109,8 @@ def build_cmd(model: str, source: str, params: dict[str, Any]) -> list[str]:
         if p["namer"] not in NAMERS:
             raise ValueError(f"invalid namer {p['namer']!r}")
         cmd += ["--namer", p["namer"]]
+    if p.get("namer_model"):
+        cmd += ["--anthropic-model", str(p["namer_model"])]
     if p.get("edges"):
         if p["edges"] not in ("knn", "cluster", "none"):
             raise ValueError(f"invalid edges {p['edges']!r}")

@@ -57,6 +57,7 @@ def test_build_cmd_minimal():
     cmd = build_cmd("gpt2", "hf", {})
     assert cmd[:5] == [sys.executable, "-u", "-m", "nebulai", "tokens"]
     assert cmd[5:] == ["--model", "gpt2"]
+    assert "--anthropic-model" not in cmd  # no namer_model -> no flag
 
 
 def test_build_cmd_full_params():
@@ -71,6 +72,7 @@ def test_build_cmd_full_params():
             "min_samples": 5,
             "cluster_method": "eom",
             "namer": "none",
+            "namer_model": "claude-haiku-4-5",
             "edges": "cluster",
             "force": True,
         },
@@ -83,6 +85,7 @@ def test_build_cmd_full_params():
         ("--min-samples", "5"),
         ("--cluster-method", "eom"),
         ("--namer", "none"),
+        ("--anthropic-model", "claude-haiku-4-5"),
         ("--edges", "cluster"),
     ]:
         i = cmd.index(flag)
