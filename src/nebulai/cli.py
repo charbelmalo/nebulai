@@ -314,6 +314,144 @@ def _run_sae(args: argparse.Namespace) -> None:
         print(f"  {p}")
 
 
+def _run_neurons(args: argparse.Namespace) -> None:
+    """Plan B: MLP-neuron write-direction map. Mirrors _run_sae's 5-stage
+    structure and its exact `[k/5] ...` prints (build_server parses them)."""
+    from .backend.cluster import cluster_units
+    from .backend.export import export_json
+    from .backend.name import name_clusters
+    from .backend.reduce import reduce_vectors
+    from .backend.viz import render
+    from .frontends.neurons import (
+        load_neuron_units,
+        neuron_dataset_id,
+        neuron_tensor_path,
+        placeholder_titles,
+    )
+
+    if args.source == "label":
+        raise SystemExit(
+            "label-space projection is not implemented — it would lay the map "
+            "out by the label-embedder's semantics, not the model's geometry; "
+            "the MVP ships model space (w_out rows) only"
+        )
+
+    t = _timer()
+    units = load_neuron_units(
+        model_repo=args.model,
+        layer=args.layer,
+        max_neurons=args.max_neurons,
+        center=args.center,
+        labels_source=args.labels,
+        out_root=Path(args.out),
+    )
+    tensor_path = neuron_tensor_path(args.layer)
+    dataset_id = neuron_dataset_id(units.meta["model"], tensor_path)
+    out_dir = Path(args.out) / dataset_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    print(
+        f"[1/5] loaded {len(units)} MLP neuron units from "
+        f"{args.model}/{tensor_path} (d_mlp {units.meta['d_mlp']}, "
+        f"curated to {units.meta['kept']}, {units.meta['n_labeled']} labeled) [{t()}]"
+    )
+
+    reduce_params = {
+        "model_repo": args.model,
+        "layer": args.layer,
+        "max_neurons": args.max_neurons,
+        "source": args.source,
+        "center": args.center,
+        "cluster_dim": args.cluster_dim,
+        "n_neighbors": args.n_neighbors,
+        "seed": args.seed,
+    }
+    cache = out_dir / "reduced.npz"
+    cache_meta = out_dir / "reduced.params.json"
+    t = _timer()
+    if (
+        not args.force
+        and cache.exists()
+        and cache_meta.exists()
+        and json.loads(cache_meta.read_text()) == reduce_params
+    ):
+        z = np.load(cache)
+        u_cluster, u3, u2 = z["u_cluster"], z["u3"], z["u2"]
+        print(f"[2/5] reused cached reductions from {cache} [{t()}]")
+    else:
+        u_cluster, u3, u2 = reduce_vectors(
+            units.vectors,
+            cluster_dim=args.cluster_dim,
+            n_neighbors=args.n_neighbors,
+            seed=args.seed,
+        )
+        np.savez_compressed(cache, u_cluster=u_cluster, u3=u3, u2=u2)
+        cache_meta.write_text(json.dumps(reduce_params))
+        print(f"[2/5] UMAP -> {args.cluster_dim}d/3d/2d [{t()}]")
+
+    t = _timer()
+    cluster_ids, probs = cluster_units(
+        u_cluster,
+        min_cluster_size=args.min_cluster_size,
+        min_samples=args.min_samples,
+        method=args.cluster_method,
+    )
+    n_clusters = len({int(c) for c in cluster_ids if c >= 0})
+    noise = float((cluster_ids < 0).mean())
+    print(f"[3/5] HDBSCAN: {n_clusters} clusters, {noise:.0%} noise [{t()}]")
+
+    t = _timer()
+    if units.meta.get("n_labeled", 0) == 0:
+        # every member label is a placeholder — an LLM namer would invent
+        # semantics from zero information, so title clusters honestly instead
+        titles, namer_used = placeholder_titles(cluster_ids)
+    else:
+        titles, namer_used = name_clusters(
+            units,
+            cluster_ids,
+            namer=args.namer,
+            openrouter_model=args.openrouter_model,
+            ollama_model=args.ollama_model,
+            ollama_host=args.ollama_host,
+            anthropic_model=args.anthropic_model,
+            env_file=args.env_file,
+        )
+    print(f"[4/5] named {len(titles)} clusters via '{namer_used}' [{t()}]")
+
+    t = _timer()
+    json_path = out_dir / "nebulai.json"
+    meta = export_json(
+        json_path,
+        units,
+        u2,
+        u3,
+        cluster_ids,
+        probs,
+        titles,
+        namer_used,
+        u_cluster=u_cluster,
+        edges_mode=args.edges,
+    )
+    png = out_dir / "map_static.png"
+    html = out_dir / "map_interactive.html"
+    render(
+        u2,
+        cluster_ids,
+        titles,
+        units.labels,
+        png,
+        html,
+        title=f"Nebul.AI — {units.meta['model']} MLP neuron map",
+        sub_title=(
+            f"{meta['n_points']} MLP neurons · {meta['n_clusters']} clusters · "
+            f"MLP write directions ({tensor_path}) -> UMAP -> HDBSCAN"
+        ),
+    )
+    _update_index(Path(args.out))
+    print(f"[5/5] exported [{t()}]")
+    for p in (json_path, png, html):
+        print(f"  {p}")
+
+
 def _run_edges(args: argparse.Namespace) -> None:
     """Backfill schema-v2 edges into existing nebulai.json artifacts.
 
@@ -635,6 +773,105 @@ def main() -> None:
         "--force", action="store_true", help="recompute cached reductions"
     )
     s.set_defaults(fn=_run_sae)
+
+    n = sub.add_parser(
+        "neurons",
+        help="Plan B: MLP-neuron write-direction map (raw-neuron contrast to sae)",
+    )
+    n.add_argument(
+        "--model",
+        default="openai-community/gpt2",
+        help="HF repo holding the GPT-2 weights (model.safetensors)",
+    )
+    n.add_argument(
+        "--layer",
+        type=int,
+        default=8,
+        help="MLP layer (default 8 — matched depth to sae's blocks.8.hook_resid_pre)",
+    )
+    n.add_argument(
+        "--max-neurons",
+        type=int,
+        default=None,
+        help="keep the first N of d_mlp neurons (default: all — a full layer is "
+        "3072, under sae's 4096 cap)",
+    )
+    n.add_argument(
+        "--source",
+        choices=["model", "label"],
+        default="model",
+        help="geometry source: model = rows of the MLP down-projection (c_proj / "
+        "W_out — model-internal); label = RESERVED (not implemented — would use "
+        "label-embedder geometry)",
+    )
+    n.add_argument(
+        "--labels",
+        choices=["none"],
+        default="none",
+        help="label source: none = placeholders only (no public raw-neuron "
+        "auto-interp export exists for gpt2-small — Neuronpedia's mlp sources "
+        "are OpenAI SAEs)",
+    )
+    n.add_argument(
+        "--center",
+        action="store_true",
+        help="mean-center W_out rows (off by default — directions ARE the "
+        "semantics; reduce uses cosine)",
+    )
+    n.add_argument("--out", default="out", help="output directory root")
+    n.add_argument("--cluster-dim", type=int, default=10)
+    n.add_argument("--n-neighbors", type=int, default=30)
+    n.add_argument("--min-cluster-size", type=int, default=None)
+    n.add_argument("--min-samples", type=int, default=None)
+    n.add_argument(
+        "--cluster-method",
+        choices=["leaf", "eom"],
+        default="leaf",
+        help="HDBSCAN selection (leaf: fine clusters; eom: coarse)",
+    )
+    n.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="UMAP seed; -1 = non-deterministic but parallel (faster)",
+    )
+    n.add_argument(
+        "--namer",
+        choices=["auto", "openrouter", "ollama", "anthropic", "none"],
+        default="auto",
+        help="cluster-naming backend (auto: ollama -> openrouter -> centroid)",
+    )
+    n.add_argument(
+        "--openrouter-model",
+        default="openai/gpt-oss-120b:free",
+        help="OpenRouter slug for cluster naming",
+    )
+    n.add_argument(
+        "--ollama-model",
+        default="liquidai/lfm2.5-1.2b-instruct",
+        help="preferred ollama model on the worker (falls back to first text model)",
+    )
+    n.add_argument(
+        "--ollama-host",
+        default="http://192.168.0.200:11434",
+        help="ollama base URL (default: M4 worker)",
+    )
+    n.add_argument("--anthropic-model", default="claude-opus-4-8")
+    n.add_argument(
+        "--env-file",
+        default=None,
+        help="path to a .env with OPENROUTER_API_KEY (default: ~/.hermes/.env)",
+    )
+    n.add_argument(
+        "--edges",
+        choices=["knn", "cluster", "none"],
+        default="knn",
+        help="similarity edges in the export (see `tokens --edges`)",
+    )
+    n.add_argument(
+        "--force", action="store_true", help="recompute cached reductions"
+    )
+    n.set_defaults(fn=_run_neurons)
 
     e = sub.add_parser(
         "edges",
