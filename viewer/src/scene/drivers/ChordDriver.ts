@@ -1,7 +1,8 @@
 /** The chord view — the video's radial "hairball" scene (frames f04/f08):
- *  clusters as glowing rim nodes on a circle, similarity edges as gradient
- *  bezier ribbons through the interior (solid + thick when strong, dotted
- *  trails when weak), rotated radial HTML labels. three-TSL so it rides both
+ *  clusters as glowing rim nodes on a circle, similarity edges as thin static
+ *  gradient bezier ribbons through the interior (weight maps to opacity and a
+ *  hairline-to-thin width — no dashes, no motion, matching the atlas beams'
+ *  minimal register), rotated radial HTML labels. three-TSL so it rides both
  *  the webgpu and forceWebGL rungs.
  *
  *  Honesty: rim order comes from each cluster's atlas 2-D centroid angle, so
@@ -59,8 +60,6 @@ export class ChordDriver implements SceneDriver {
   private camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
   private canvas!: HTMLCanvasElement;
 
-  private readonly uTime = uniform(0);
-  private readonly uMotion = uniform(1);
   /** world units per CSS px — set on resize, feeds px-true widths */
   private readonly uWpp = uniform(0.01);
 
@@ -110,9 +109,6 @@ export class ChordDriver implements SceneDriver {
     this.renderer.setClearColor(0x000000, 0);
     this.camera.position.z = 10;
 
-    const reduced = appStore.getState().capabilities?.reducedMotion ?? false;
-    if (reduced) this.uMotion.value = 0;
-
     this.rampTex = new THREE.DataTexture(rampTextureData(), 256, 1, THREE.RGBAFormat);
     this.rampTex.needsUpdate = true;
 
@@ -158,7 +154,8 @@ export class ChordDriver implements SceneDriver {
   /** Bezier ribbon chords, adapted from BeamsLayer: per-instance endpoints on
    *  the rim, a control point pulled toward the center (long chords sweep
    *  deep, short ones stay shallow), the shared ramp as an endpoint-to-
-   *  endpoint hue gradient, and the weight-gated dotted/solid mask. */
+   *  endpoint hue gradient, and weight mapped straight to opacity — static
+   *  ribbons, nothing animated. */
   private buildChords(): void {
     this.chordSeg = new THREE.InstancedBufferAttribute(new Float32Array(MAX_CHORDS * 4), 4);
     this.chordMeta = new THREE.InstancedBufferAttribute(new Float32Array(MAX_CHORDS * 4), 4);
@@ -195,8 +192,8 @@ export class ChordDriver implements SceneDriver {
     // bezier tangent → ribbon normal
     const tangent = p1.sub(p0).normalize();
     const perp = vec2(tangent.y.negate(), tangent.x);
-    // strong links are thick ribbons, weak ones hairlines
-    const widthPx = mix(float(1.1), float(7), aWeight.mul(aWeight));
+    // thin register: strong links a touch wider, weak ones hairlines
+    const widthPx = mix(float(1.0), float(2.5), aWeight);
     const pos = p.add(perp.mul(across.mul(widthPx).mul(this.uWpp)));
     material.positionNode = vec3(pos, 0.02);
 
@@ -205,15 +202,10 @@ export class ChordDriver implements SceneDriver {
 
     const edgeFade = across.abs().mul(2).smoothstep(0.25, 1).oneMinus();
     const endFade = t.smoothstep(0, 0.04).mul(t.oneMinus().smoothstep(0, 0.04));
-    const pulse = t.mul(len.mul(2.5)).sub(this.uTime.mul(2.2)).sin().mul(0.5).add(0.5);
-    const energy = mix(float(1), pulse.mul(0.5).add(0.62), this.uMotion);
+    // weight IS the opacity — one visual channel, honestly mapped, static
     const alpha = mix(float(0.16), float(0.62), aWeight);
-    const solid = aWeight.smoothstep(0.45, 0.85);
-    const dotPhase = t.mul(len).div(this.uWpp).div(22).sub(this.uTime.mul(this.uMotion).mul(1.4));
-    const dots = dotPhase.fract().sub(0.5).abs().mul(2).smoothstep(0.3, 0.65).oneMinus();
-    const dashMask = mix(dots, float(1), solid);
     const focus = mix(float(0.05), float(1), aActive); // dim when unfocused
-    material.opacityNode = edgeFade.mul(endFade).mul(energy).mul(alpha).mul(dashMask).mul(focus);
+    material.opacityNode = edgeFade.mul(endFade).mul(alpha).mul(focus);
 
     this.materials.push(material);
     this.chordMesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1, 32, 1), material, MAX_CHORDS);
@@ -536,8 +528,7 @@ export class ChordDriver implements SceneDriver {
 
   // ── SceneDriver plumbing ─────────────────────────────────────────────────
 
-  frame(_dt: number, t: number): void {
-    this.uTime.value = t;
+  frame(_dt: number, _t: number): void {
     this.renderer.render(this.scene, this.camera);
   }
 
