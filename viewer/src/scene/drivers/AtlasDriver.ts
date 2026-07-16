@@ -219,7 +219,9 @@ export class AtlasDriver implements SceneDriver {
     const overlay = document.getElementById("overlay-html")!;
     this.labels = new LabelOverlay(overlay, ds.hulls, ds.columns.clusters, (cid) => {
       appStore.getState().setSelection({ kind: "cluster", id: cid });
-      this.flyToCluster(cid);
+      // flyToCluster targets pos2-frame coords — flying there mid-flythrough
+      // would point the camera off the 3D cloud, so pills only fly when flat
+      if (this.morph <= 0.02) this.flyToCluster(cid);
     });
 
     const t = appStore.getState().toggles;
@@ -353,9 +355,12 @@ export class AtlasDriver implements SceneDriver {
       );
       this.camera.lookAt(this.cam.cx, this.cam.cy, 0);
       this.camera.updateProjectionMatrix();
+      // refresh matrixWorldInverse now (render would too, but a frame later)
+      // so projectWorld-anchored pills track this frame's camera, not last's
+      this.camera.updateMatrixWorld();
       this.points.uSize.value = POINT_PX * this.cam.wpp;
       if (this.beams) this.beams.uWpp.value = this.cam.wpp;
-      this.labels?.update(this.cam);
+      this.labels?.update(this.cam, this.morph, this.projectWorld);
       this.badges?.update(this.cam);
       this.cameraDirty = false;
     }
@@ -484,13 +489,13 @@ export class AtlasDriver implements SceneDriver {
     this.userDroveCamera = false;
   }
 
-  /** Push the eased morph into every layer that cares. Territories, label
-   *  pills, and halos are flat-map furniture, so they fade out on the lift. */
+  /** Push the eased morph into every layer that cares. Territories and halos
+   *  are flat-map furniture, so they fade out on the lift; label pills persist
+   *  (they re-anchor to cluster centroids via projectWorld in frame()). */
   private applyMorph(): void {
     const m = this.morph;
     if (this.points) this.points.uMorph.value = m;
     this.territories?.setFade(1 - m);
-    this.labels?.setFade(1 - m);
     if (this.halos) this.halos.uFade.value = 1 - m;
     appStore.getState().setMorphT(m);
   }
@@ -896,14 +901,23 @@ export class AtlasDriver implements SceneDriver {
   private projectPoint(i: number): [number, number] {
     const cols = this.dataset!.columns;
     const m = this.morph;
-    const v = this.projScratch.set(
-      cols.pos2[i * 2]! * (1 - m) + cols.pos3[i * 3]! * m,
-      cols.pos2[i * 2 + 1]! * (1 - m) + cols.pos3[i * 3 + 1]! * m,
-      cols.pos3[i * 3 + 2]! * m,
+    return (
+      this.projectWorld(
+        cols.pos2[i * 2]! * (1 - m) + cols.pos3[i * 3]! * m,
+        cols.pos2[i * 2 + 1]! * (1 - m) + cols.pos3[i * 3 + 1]! * m,
+        cols.pos3[i * 3 + 2]! * m,
+      ) ?? [-9999, -9999] // clipped — park the tooltip far offscreen
     );
-    v.project(this.camera);
-    return [(v.x * 0.5 + 0.5) * this.cam.viewportW, (-v.y * 0.5 + 0.5) * this.cam.viewportH];
   }
+
+  /** Project a morph-space world position through the render camera; null
+   *  when it lands outside the near/far clip range (hide, don't mis-place).
+   *  Label pills use this so they track clusters through the flythrough. */
+  private projectWorld = (x: number, y: number, z: number): [number, number] | null => {
+    const v = this.projScratch.set(x, y, z).project(this.camera);
+    if (v.z < -1 || v.z > 1) return null;
+    return [(v.x * 0.5 + 0.5) * this.cam.viewportW, (-v.y * 0.5 + 0.5) * this.cam.viewportH];
+  };
 
   private hoverClear(): void {
     this.hoveredIndex = null;
