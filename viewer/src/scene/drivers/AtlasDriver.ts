@@ -72,6 +72,8 @@ export class AtlasDriver implements SceneDriver {
   private hullsById = new Map<number, ClusterHull>();
   /** cluster centroids in pos3 (u3 display) space — 3D beam anchors */
   private centroid3ById = new Map<number, [number, number, number]>();
+  /** per-cluster pos3 xy spread radius (RMS*2, clamped) — 3D fly-to framing */
+  private radius3ById = new Map<number, number>();
 
   // hero layers: beams + flare live for the driver's whole life; halos are
   // rebuilt per dataset (hub choice is data-driven)
@@ -125,6 +127,8 @@ export class AtlasDriver implements SceneDriver {
   private morph = 0;
   private morphTween: { from: number; to: number; start: number; duration: number } | null = null;
   private bounds3: [number, number, number, number] | null = null;
+  /** max xy dimension of the pos3 cloud — scale reference for 3D fly-to */
+  private extent3 = 1;
   private camDist = 30;
   private idPicker: IdPicker | null = null;
   private lastIdPickAt = 0;
@@ -222,9 +226,9 @@ export class AtlasDriver implements SceneDriver {
     const overlay = document.getElementById("overlay-html")!;
     this.labels = new LabelOverlay(overlay, ds.hulls, ds.columns.clusters, (cid) => {
       appStore.getState().setSelection({ kind: "cluster", id: cid });
-      // flyToCluster targets pos2-frame coords — flying there mid-flythrough
-      // would point the camera off the 3D cloud, so pills only fly when flat
-      if (this.morph <= 0.02) this.flyToCluster(cid);
+      // flyToCluster is morph-aware — it aims at the pos2 hull anchor when flat
+      // and the pos3 centroid mid-flythrough, so pills fly correctly in both
+      this.flyToCluster(cid);
     });
 
     const t = appStore.getState().toggles;
@@ -256,6 +260,33 @@ export class AtlasDriver implements SceneDriver {
       if (y > m3y1) m3y1 = y;
     }
     this.bounds3 = [m3x0, m3y0, m3x1, m3y1];
+    this.extent3 = Math.max(m3x1 - m3x0, m3y1 - m3y0) || 1;
+
+    // per-cluster pos3 xy spread, so a 3D fly-to frames the neighborhood at a
+    // sane zoom. RMS*2 (not max) so one stray point can't inflate the window;
+    // the band clamp then guards both a lone tight cluster and a diffuse one.
+    this.radius3ById.clear();
+    {
+      const cid = ds.columns.clusterId;
+      const sumSq = new Map<number, number>();
+      const counts = new Map<number, number>();
+      for (let i = 0; i < ds.columns.count; i++) {
+        const c = cid[i]!;
+        if (c < 0) continue;
+        const centroid = this.centroid3ById.get(c);
+        if (!centroid) continue;
+        const dx = q[i * 3]! - centroid[0];
+        const dy = q[i * 3 + 1]! - centroid[1];
+        sumSq.set(c, (sumSq.get(c) ?? 0) + dx * dx + dy * dy);
+        counts.set(c, (counts.get(c) ?? 0) + 1);
+      }
+      const lo = this.extent3 * 0.01, hi = this.extent3 * 0.25;
+      for (const [c, ss] of sumSq) {
+        const n = counts.get(c)!;
+        const rms2 = Math.sqrt(ss / n) * 2;
+        this.radius3ById.set(c, Math.min(Math.max(rms2, lo), hi));
+      }
+    }
 
     // the tilt orbit needs the camera pulled back past the 3-D cloud's depth
     this.camDist = this.mapExtent * 2;
@@ -638,22 +669,48 @@ export class AtlasDriver implements SceneDriver {
    *  a fixed fraction of the map so nearby tokens stay in frame for context. */
   flyToPoint(id: number): void {
     if (!this.dataset) return;
+    this.userDroveCamera = true;
+    const fitPx = Math.min(this.cam.viewportW, this.cam.viewportH) * 0.55;
+    if (this.morph > 0.02) {
+      // mid-flythrough cam.cx/cy live in the pos3 xy frame — aim there, not at
+      // pos2. The point sits at z = pos3[id*3+2]; the camera's lookAt targets
+      // the z=0 plane at (cx, cy), so there's a vertical offset — accepted, the
+      // orthographic projection keeps the neighborhood in frame.
+      const q = this.dataset.columns.pos3;
+      const x = q[id * 3];
+      const y = q[id * 3 + 1];
+      if (x === undefined || y === undefined) return;
+      const wpp = Math.max((this.extent3 * 0.06) / fitPx, this.cam.minWpp);
+      this.cam.flyTo(x, y, wpp, performance.now());
+      return;
+    }
     const p = this.dataset.columns.pos2;
     const x = p[id * 2];
     const y = p[id * 2 + 1];
     if (x === undefined || y === undefined) return;
-    this.userDroveCamera = true;
-    const fitPx = Math.min(this.cam.viewportW, this.cam.viewportH) * 0.55;
     const wpp = Math.max((this.mapExtent * 0.06) / fitPx, this.cam.minWpp);
     this.cam.flyTo(x, y, wpp, performance.now());
   }
 
   /** Cinematic zoom onto one cluster (pill click / future keyboard nav). */
   flyToCluster(clusterId: number): void {
+    const fitPx = Math.min(this.cam.viewportW, this.cam.viewportH) * 0.55;
+    const centroid3 = this.centroid3ById.get(clusterId);
+    if (this.morph > 0.02 && centroid3) {
+      // mid-flythrough cam.cx/cy live in the pos3 xy frame — aim at the pos3
+      // centroid, not the pos2 hull anchor. The centroid sits at z =
+      // centroid3[2]; the camera's lookAt targets the z=0 plane at (cx, cy), so
+      // there's a vertical offset — accepted, the orthographic projection keeps
+      // the neighborhood in frame.
+      this.userDroveCamera = true;
+      const r3 = this.radius3ById.get(clusterId) ?? this.extent3 * 0.04;
+      const wpp = Math.max((r3 * 2) / fitPx, this.cam.minWpp);
+      this.cam.flyTo(centroid3[0], centroid3[1], wpp, performance.now());
+      return;
+    }
     const hull = this.hullsById.get(clusterId);
     if (!hull) return;
     this.userDroveCamera = true;
-    const fitPx = Math.min(this.cam.viewportW, this.cam.viewportH) * 0.55;
     const wpp = Math.max((hullRadius(hull) * 2) / fitPx, this.cam.minWpp);
     this.cam.flyTo(hull.anchor[0], hull.anchor[1], wpp, performance.now());
   }
