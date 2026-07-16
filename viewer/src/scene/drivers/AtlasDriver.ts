@@ -40,6 +40,16 @@ const ORBIT_EL_MAX = 0.85;
 const WHEEL_ORBIT_AZ = 0.004; // rad per px of horizontal wheel/swipe
 const EL_CLAMP_MAX = 1.45; // ~83° from overhead — keep the horizon off-screen
 
+// navigation smoothing: raw input moves *targets*; the rendered angles ease
+// toward them, and a released drag coasts on its exponentially-decaying
+// velocity. Reduced motion snaps instantly (no ease, no inertia, no auto-orbit).
+const ORBIT_EASE_TAU_S = 0.08; // ease time-constant while following the target
+const ORBIT_INERTIA_TAU_S = 0.35; // coast decay after release
+const ORBIT_VEL_EPS = 1e-3; // rad/s — below this the coast is over
+const ORBIT_SETTLE_EPS = 1e-4; // rad — target reached
+const ZOOM_TAU_S = 0.05; // pending wheel factor settles in ~120 ms
+const AUTO_ORBIT_RAD_S = 0.06; // base auto-orbit rate, scaled by orbitSpeed
+
 // 2D↔3D morph: the camera lifts to this tilt while points glide pos2→pos3
 const TILT_RAD = (38 * Math.PI) / 180;
 const MORPH_MS = 900;
@@ -84,11 +94,22 @@ export class AtlasDriver implements SceneDriver {
   private lastPointer: { x: number; y: number } | null = null;
 
   // orbit: user azimuth + extra elevation, scaled by morph so a flat 2-D map
-  // stays exactly top-down (overlays project top-down and must not drift)
+  // stays exactly top-down (overlays project top-down and must not drift).
+  // orbitAz/orbitEl are the *rendered* angles; input writes the targets and
+  // stepNavigation() eases the rendered angles toward them each frame.
   private orbiting = false;
   private orbitLast: { x: number; y: number } | null = null;
   private orbitAz = 0;
   private orbitEl = 0;
+  private orbitAzTarget = 0;
+  private orbitElTarget = 0;
+  /** release-inertia velocities (rad/s), EMA of the live drag velocity */
+  private orbitAzVel = 0;
+  private orbitElVel = 0;
+  private orbitMoveAt = 0;
+  /** wheel zoom: pending log-factor drained over ~120 ms, cursor-anchored */
+  private zoomPending = 0;
+  private zoomAnchor = { x: 0, y: 0 };
 
   /** dataset bounds in pos2 space; fit is deferred while the viewport is
    *  degenerate (booting in a hidden/zero-size tab) and applied on resize */
@@ -283,7 +304,7 @@ export class AtlasDriver implements SceneDriver {
     this.hoverClear();
   }
 
-  frame(_dt: number, t: number): void {
+  frame(dt: number, t: number): void {
     if (!this.dataset || !this.points) return;
     // never submit against a zero-size swapchain (hidden/collapsed tab)
     if (this.cam.viewportW < 2 || this.cam.viewportH < 2) return;
@@ -300,6 +321,8 @@ export class AtlasDriver implements SceneDriver {
       this.applyMorph();
       this.cameraDirty = true;
     }
+
+    this.stepNavigation(dt);
 
     if (this.hoverDirty || (this.cameraDirty && this.mouse)) {
       this.updateHover();
@@ -339,6 +362,79 @@ export class AtlasDriver implements SceneDriver {
 
     if (this.bloomOn && this.bloomPipe) this.bloomPipe.post.render();
     else this.renderer.render(this.scene, this.camera);
+  }
+
+  /** Per-frame navigation integrator: auto-orbit, release inertia, easing of
+   *  the rendered orbit angles toward their targets, and draining the pending
+   *  cursor-anchored wheel zoom. Marks the camera dirty while anything is
+   *  still in motion; reduced motion snaps instantly and never coasts. */
+  private stepNavigation(dtMs: number): void {
+    const dt = Math.min(dtMs / 1000, 0.1); // clamp tab-switch dt spikes
+    if (dt <= 0) return;
+
+    // auto-orbit (Settings → Appearance → Atlas): slow cinematic spin once
+    // the flythrough is up; any active gesture pauses it
+    const { orbitEnabled, orbitSpeed } = appStore.getState().appearance.atlas;
+    if (
+      orbitEnabled &&
+      this.morph > 0.5 &&
+      !this.orbiting &&
+      !this.dragging &&
+      !this.reducedMotion
+    ) {
+      this.orbitAzTarget += dt * AUTO_ORBIT_RAD_S * orbitSpeed;
+    }
+
+    // release inertia: the coast velocity keeps pushing the target, decaying
+    if (!this.orbiting) {
+      if (
+        Math.abs(this.orbitAzVel) > ORBIT_VEL_EPS ||
+        Math.abs(this.orbitElVel) > ORBIT_VEL_EPS
+      ) {
+        this.orbitAzTarget += this.orbitAzVel * dt;
+        this.orbitElTarget = Math.min(
+          Math.max(this.orbitElTarget + this.orbitElVel * dt, ORBIT_EL_MIN),
+          ORBIT_EL_MAX,
+        );
+        const decay = Math.exp(-dt / ORBIT_INERTIA_TAU_S);
+        this.orbitAzVel *= decay;
+        this.orbitElVel *= decay;
+      } else {
+        this.orbitAzVel = 0;
+        this.orbitElVel = 0;
+      }
+    }
+
+    // ease the rendered angles toward the targets
+    const dAz = this.orbitAzTarget - this.orbitAz;
+    const dEl = this.orbitElTarget - this.orbitEl;
+    if (Math.abs(dAz) > ORBIT_SETTLE_EPS || Math.abs(dEl) > ORBIT_SETTLE_EPS) {
+      if (this.reducedMotion) {
+        this.orbitAz = this.orbitAzTarget;
+        this.orbitEl = this.orbitElTarget;
+      } else {
+        const k = 1 - Math.exp(-dt / ORBIT_EASE_TAU_S);
+        this.orbitAz += dAz * k;
+        this.orbitEl += dEl * k;
+        // snap the last hair so the loop actually settles
+        if (Math.abs(this.orbitAzTarget - this.orbitAz) < ORBIT_SETTLE_EPS)
+          this.orbitAz = this.orbitAzTarget;
+        if (Math.abs(this.orbitElTarget - this.orbitEl) < ORBIT_SETTLE_EPS)
+          this.orbitEl = this.orbitElTarget;
+      }
+      this.cameraDirty = true;
+    }
+
+    // drain the pending wheel zoom, anchored where the cursor last was
+    if (this.zoomPending !== 0) {
+      const k = 1 - Math.exp(-dt / ZOOM_TAU_S);
+      let step = this.zoomPending * k;
+      if (Math.abs(this.zoomPending - step) < 1e-4) step = this.zoomPending;
+      this.zoomPending -= step;
+      this.cam.zoomAt(this.zoomAnchor.x, this.zoomAnchor.y, Math.exp(step));
+      this.cameraDirty = true;
+      this.hoverDirty = true;
+    }
   }
 
   resize(width: number, height: number, dpr: number): void {
@@ -577,6 +673,9 @@ export class AtlasDriver implements SceneDriver {
           c.setPointerCapture(e.pointerId);
           this.orbiting = true;
           this.orbitLast = { x: e.clientX, y: e.clientY };
+          this.orbitAzVel = 0;
+          this.orbitElVel = 0;
+          this.orbitMoveAt = performance.now();
           this.hoverClear();
           c.style.cursor = "move";
           return;
@@ -604,11 +703,19 @@ export class AtlasDriver implements SceneDriver {
           if (this.morph <= 0.02 && appStore.getState().dims !== 3) {
             appStore.getState().setDims(3);
           }
-          this.orbitAz += (e.clientX - this.orbitLast.x) * ORBIT_AZ_SPEED;
-          this.orbitEl = Math.min(
-            Math.max(this.orbitEl + (e.clientY - this.orbitLast.y) * ORBIT_EL_SPEED, ORBIT_EL_MIN),
+          const dAz = (e.clientX - this.orbitLast.x) * ORBIT_AZ_SPEED;
+          const dEl = (e.clientY - this.orbitLast.y) * ORBIT_EL_SPEED;
+          this.orbitAzTarget += dAz;
+          this.orbitElTarget = Math.min(
+            Math.max(this.orbitElTarget + dEl, ORBIT_EL_MIN),
             ORBIT_EL_MAX,
           );
+          // EMA of the live velocity — becomes the coast speed on release
+          const now = performance.now();
+          const dtS = Math.max((now - this.orbitMoveAt) / 1000, 1e-3);
+          this.orbitAzVel = this.orbitAzVel * 0.7 + (dAz / dtS) * 0.3;
+          this.orbitElVel = this.orbitElVel * 0.7 + (dEl / dtS) * 0.3;
+          this.orbitMoveAt = now;
           this.orbitLast = { x: e.clientX, y: e.clientY };
           this.cameraDirty = true;
           return;
@@ -650,6 +757,12 @@ export class AtlasDriver implements SceneDriver {
           this.orbiting = false;
           this.orbitLast = null;
           c.style.cursor = "";
+          // a pause before release means "stop here" — don't fling from a
+          // velocity that's already stale
+          if (performance.now() - this.orbitMoveAt > 90 || this.reducedMotion) {
+            this.orbitAzVel = 0;
+            this.orbitElVel = 0;
+          }
           return;
         }
         const wasDrag = this.dragging;
@@ -689,12 +802,18 @@ export class AtlasDriver implements SceneDriver {
         // in 3-D, a horizontal-dominant trackpad swipe orbits the azimuth;
         // pinch-zoom (ctrlKey) and vertical scroll / mouse-wheel keep zooming
         if (this.morph > 0.02 && !e.ctrlKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
-          this.orbitAz += e.deltaX * WHEEL_ORBIT_AZ;
+          this.orbitAzTarget += e.deltaX * WHEEL_ORBIT_AZ;
           this.cameraDirty = true;
           return;
         }
-        const factor = Math.exp(e.deltaY * 0.0012);
-        this.cam.zoomAt(e.clientX, e.clientY, factor);
+        // accumulate in log space, drained over ~120 ms in stepNavigation so
+        // discrete wheel ticks read as one continuous glide
+        if (this.reducedMotion) {
+          this.cam.zoomAt(e.clientX, e.clientY, Math.exp(e.deltaY * 0.0012));
+        } else {
+          this.zoomPending += e.deltaY * 0.0012;
+          this.zoomAnchor = { x: e.clientX, y: e.clientY };
+        }
         this.cameraDirty = true;
         this.hoverDirty = true;
       },
