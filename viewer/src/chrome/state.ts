@@ -7,6 +7,7 @@ import {
   appStore,
   type Appearance,
   type CompareUI,
+  type InterpSelection,
   type InterpUI,
   type Page,
   type Probing,
@@ -16,6 +17,7 @@ import {
   type Settings,
   type SnapshotState,
   type Toggles,
+  type TourRef,
   type ViewMode,
 } from "../app/store";
 import type { Capabilities } from "../app/capabilities";
@@ -43,6 +45,8 @@ export const $page = signal<Page>(s.page);
 export const $snapshot = signal<SnapshotState>(s.snapshot);
 export const $sessions = signal<SessionsState>(s.sessions);
 export const $interp = signal<InterpUI>(s.interp);
+export const $interpSelection = signal<InterpSelection | null>(s.interpSelection);
+export const $tour = signal<TourRef | null>(s.tour);
 export const $compareData = signal<CompareData | null>(s.compareData);
 export const $compare = signal<CompareUI>(s.compare);
 
@@ -65,6 +69,9 @@ appStore.subscribe((st) => {
   if (st.snapshot !== $snapshot.value) $snapshot.value = st.snapshot;
   if (st.sessions !== $sessions.value) $sessions.value = st.sessions;
   if (st.interp !== $interp.value) $interp.value = st.interp;
+  if (st.interpSelection !== $interpSelection.value)
+    $interpSelection.value = st.interpSelection;
+  if (st.tour !== $tour.value) $tour.value = st.tour;
   if (st.compareData !== $compareData.value) $compareData.value = st.compareData;
   if (st.compare !== $compare.value) $compare.value = st.compare;
 });

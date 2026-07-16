@@ -15,6 +15,7 @@
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
+import type { InterpSelection } from "../../app/store";
 import {
   type CofireBundle,
   type CofireChip,
@@ -22,6 +23,8 @@ import {
   loadCofire,
   loadSAE,
 } from "../../data/interp";
+import { ACCENT, AXIS_RGBA, crosshair, dashedSegment, MARKER_HOT, withAlpha } from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 import { LAYER_COLORS } from "./NeuronFieldDriver";
 
@@ -35,7 +38,6 @@ const VW = 240; // px — venn panel width (wide layouts)
 const VH = 150; // px — venn band height (narrow layouts)
 
 const AMBER: [number, number, number] = [245, 195, 59];
-const GUIDE: [number, number, number, number] = [118, 126, 158, 130];
 const CIRC_A: [number, number, number] = [96, 165, 250];
 const CIRC_B: [number, number, number] = [244, 114, 182];
 
@@ -72,7 +74,7 @@ export class CofireDriver implements InterpDriver {
   private deck: Deck<OrthographicView[]> | null = null;
   private layersMod!: LayersModule;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private chipRoot!: HTMLElement;
 
@@ -86,6 +88,8 @@ export class CofireDriver implements InterpDriver {
   private layoutGen = 0;
   private hover: number | null = null; // pair index
   private sel: { i: number; j: number } | null = null;
+  /** feature id the global cross-view selection pinned a pair for */
+  private linked: number | null = null;
   private xMin = -0.2;
   private xMax = 1;
   private yMin = -2;
@@ -112,10 +116,7 @@ export class CofireDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-neuron-labels";
     overlay.appendChild(this.labelRoot);
@@ -320,19 +321,22 @@ export class CofireDriver implements InterpDriver {
     const { ScatterplotLayer, LineLayer, PolygonLayer } = this.layersMod;
     const cof = this.cof;
 
-    // guides: PMI = 0 (independence — where the shuffle lands) and cos = 0
-    const guides: Seg[] = [
-      {
-        source: [GL, this.yOf(0)],
-        target: [GL + this.plotW(), this.yOf(0)],
-      },
-    ];
+    // guides: PMI = 0 (independence — where the shuffle lands) and cos = 0 —
+    // dashed hairlines now (req 5), the structure whispers under the points
+    const guides: Seg[] = [...dashedSegment([GL, this.yOf(0)], [GL + this.plotW(), this.yOf(0)])];
     if (this.xMin < 0) {
-      guides.push({
-        source: [this.xOf(0), GT],
-        target: [this.xOf(0), GT + this.plotH()],
-      });
+      guides.push(...dashedSegment([this.xOf(0), GT], [this.xOf(0), GT + this.plotH()]));
     }
+    // ACCENT crosshair snapping onto the hovered pair (req 4)
+    const cross: Seg[] =
+      this.hover != null
+        ? crosshair(this.px[this.hover * 2] ?? 0, this.px[this.hover * 2 + 1] ?? 0, {
+            x0: GL,
+            y0: GT,
+            x1: GL + this.plotW(),
+            y1: GT + this.plotH(),
+          })
+        : [];
 
     const rings: { k: number; hov: boolean }[] = [];
     if (this.sel) {
@@ -359,15 +363,27 @@ export class CofireDriver implements InterpDriver {
           data: guides,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: GUIDE,
+          getColor: AXIS_RGBA,
           getWidth: 1,
           widthUnits: "pixels",
           updateTriggers: { getSourcePosition: this.layoutGen, getTargetPosition: this.layoutGen },
           pickable: false,
         }),
+        new LineLayer<Seg>({
+          id: "cofire-crosshair",
+          data: cross,
+          getSourcePosition: (e) => [e.source[0], e.source[1], 0],
+          getTargetPosition: (e) => [e.target[0], e.target[1], 0],
+          getColor: withAlpha(ACCENT, 0.5),
+          getWidth: 1,
+          widthUnits: "pixels",
+          pickable: false,
+        }),
         new ScatterplotLayer<Pt>({
           id: "cofire-pts",
           data: this.pts,
+          // the point field dims to defer to the focused pair on hover (req 3)
+          opacity: this.hover != null ? 0.4 : 1,
           getPosition: (p) => [this.px[p.k * 2] ?? 0, this.px[p.k * 2 + 1] ?? 0, 0],
           getFillColor: (p) => {
             const [r, g, b] = this.ramp(this.countT(cof.c[p.k] ?? 1));
@@ -383,7 +399,10 @@ export class CofireDriver implements InterpDriver {
           data: rings,
           getPosition: (r) => [this.px[r.k * 2] ?? 0, this.px[r.k * 2 + 1] ?? 0, 0],
           getFillColor: [0, 0, 0, 0],
-          getLineColor: (r) => (r.hov ? [255, 255, 255, 220] : [AMBER[0], AMBER[1], AMBER[2], 230]),
+          getLineColor: (r) =>
+            r.hov
+              ? [MARKER_HOT[0], MARKER_HOT[1], MARKER_HOT[2], 230]
+              : [AMBER[0], AMBER[1], AMBER[2], 230],
           getRadius: 5,
           radiusUnits: "pixels",
           stroked: true,
@@ -661,7 +680,7 @@ export class CofireDriver implements InterpDriver {
       this.pushLayers();
     }
     if (k == null) {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
@@ -672,35 +691,31 @@ export class CofireDriver implements InterpDriver {
     const c = cof.c[k] ?? 0;
     const ev = (ni * nj) / cof.N;
     const lift = (c * cof.N) / (ni * nj);
-    this.tooltip.innerHTML = "";
-    const add = (cls: string, text: string) => {
-      const el = document.createElement("div");
-      el.className = cls;
-      el.textContent = text;
-      this.tooltip.appendChild(el);
-    };
-    add(
-      "point-tooltip-label",
-      `#${i} × #${j} — co-fire ${c}× (expected ${ev.toFixed(1)}, lift ${lift.toFixed(lift >= 100 ? 0 : 1)}×)`,
-    );
-    add(
-      "point-tooltip-conf",
-      `PMI ${(this.pmi[k] ?? 0) >= 0 ? "+" : ""}${(this.pmi[k] ?? 0).toFixed(2)} · G² ${g2Of(c, ni, nj, cof.N).toFixed(0)} · decoder cos ${(cof.cos[k] ?? 0).toFixed(4)}`,
-    );
-    add(
-      "point-tooltip-conf",
-      `top co-token “${vis(cof.ctok_strs[cof.tt[k] ?? 0] ?? "")}” — ${((cof.tshare[k] ?? 0) * 100).toFixed(1)}% of co-firings`,
-    );
-    add("point-tooltip-conf", `#${i} ↑“${vis(sae.top_tok[i] ?? "")}” · fires ${ni}×`);
-    add(
-      "point-tooltip-conf",
-      `#${j} ↑“${vis(sae.top_tok[j] ?? "")}” · fires ${nj}× · click to pin`,
-    );
-    this.tooltip.style.visibility = "visible";
+    // swatch = the exact count-ramp color this point was drawn with
+    const [sr, sg, sb] = this.ramp(this.countT(cof.c[k] ?? 1));
+    const rows: TipRow[] = [
+      {
+        kind: "label",
+        text: `#${i} × #${j} — co-fire ${c}× (expected ${ev.toFixed(1)}, lift ${lift.toFixed(lift >= 100 ? 0 : 1)}×)`,
+        swatch: [sr, sg, sb],
+      },
+      {
+        text: "PMI",
+        value: `${(this.pmi[k] ?? 0) >= 0 ? "+" : ""}${(this.pmi[k] ?? 0).toFixed(2)}`,
+        hot: true,
+      },
+      {
+        text: `G² ${g2Of(c, ni, nj, cof.N).toFixed(0)} · decoder cos ${(cof.cos[k] ?? 0).toFixed(4)}`,
+      },
+      {
+        text: `top co-token “${vis(cof.ctok_strs[cof.tt[k] ?? 0] ?? "")}” — ${((cof.tshare[k] ?? 0) * 100).toFixed(1)}% of co-firings`,
+      },
+      { text: `#${i} ↑“${vis(sae.top_tok[i] ?? "")}” · fires ${ni}×` },
+      { text: `#${j} ↑“${vis(sae.top_tok[j] ?? "")}” · fires ${nj}× · click to pin` },
+    ];
+    this.tooltip.show(rows);
     const rect = this.canvas.getBoundingClientRect();
-    const px = Math.min(e.clientX - rect.left + 14, this.cssW - 340);
-    const py = Math.min(e.clientY - rect.top + 14, this.cssH - 140);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    this.tooltip.move(e.clientX - rect.left, e.clientY - rect.top, this.cssW, this.cssH);
     this.canvas.style.cursor = "pointer";
   }
 
@@ -717,12 +732,40 @@ export class CofireDriver implements InterpDriver {
     this.positionLabels();
   }
 
+  /** Cross-view link (follow-only): pin the first exported co-firing pair
+   *  containing the selected feature. A pair click stays local — publishing
+   *  ONE of its two features would be an arbitrary choice. */
+  setSelection(sel: InterpSelection | null): void {
+    const cof = this.cof;
+    if (!cof) return;
+    const id = sel?.kind === "saeFeature" ? sel.id : null;
+    if (id === this.linked) return;
+    const prev = this.linked;
+    this.linked = id;
+    if (id !== null) {
+      const k = cof.pi.findIndex((a, m) => a === id || cof.pj[m] === id);
+      if (k < 0) return; // feature not in any exported pair — nothing to show
+      const i = cof.pi[k] ?? 0;
+      const j = cof.pj[k] ?? 0;
+      if (this.sel?.i === i && this.sel?.j === j) return;
+      this.sel = { i, j };
+    } else if (prev !== null && (this.sel?.i === prev || this.sel?.j === prev)) {
+      // only clear a pin the link itself created/mirrors
+      this.sel = null;
+    } else {
+      return;
+    }
+    this.buildChips();
+    this.pushLayers();
+    this.positionLabels();
+  }
+
   private onLeave(): void {
     if (this.hover != null) {
       this.hover = null;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -750,7 +793,7 @@ export class CofireDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.chipRoot?.remove();
     this.deck?.finalize();

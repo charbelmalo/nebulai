@@ -18,6 +18,17 @@
 import type { Deck, OrthographicView } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
 import { loadTrace, type TraceBundle } from "../../data/interp";
+import {
+  ACCENT,
+  AXIS_RGBA,
+  crosshair,
+  dashedSegment,
+  GRID_RGBA,
+  MARKER_HOT,
+  type Seg as ThemeSeg,
+  withAlpha,
+} from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -55,7 +66,7 @@ export class LogitLensTunnelDriver implements InterpDriver {
   private makeView!: () => OrthographicView;
   private canvas!: HTMLCanvasElement;
   private overlay!: HTMLElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
 
   private bundle: TraceBundle | null = null;
@@ -88,10 +99,7 @@ export class LogitLensTunnelDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-lens-labels";
     overlay.appendChild(this.labelRoot);
@@ -177,11 +185,46 @@ export class LogitLensTunnelDriver implements InterpDriver {
     return [rr, gg, bb, a];
   };
 
+  /** World units per screen pixel — dashes/crosshair are authored in pixels for
+   *  a consistent on-screen size, then scaled into this driver's world space. */
+  private worldPerPx(): number {
+    return 1 / this.zoomPx();
+  }
+
   private pushLayers(): void {
     if (!this.deck) return;
     const { PolygonLayer, LineLayer } = this.layersMod;
     const rows = Array.from({ length: this.nRows }, (_, r) => r);
     const h = this.barHalf();
+    const wpp = this.worldPerPx();
+    // probability gridlines at 0 / .25 / .5 / .75 / 1 — now subtle DASHED
+    // hairlines (req 5): 0 and 1 are the AXIS baseline, the interior ticks GRID.
+    const gridAxis: ThemeSeg[] = [];
+    const gridInner: ThemeSeg[] = [];
+    for (const t of TICKS) {
+      const gx = this.xOf(t);
+      const segs = dashedSegment([gx, YBOT - 0.05], [gx, YTOP + 0.05], 3 * wpp, 6 * wpp);
+      if (t === 0 || t === 1) gridAxis.push(...segs);
+      else gridInner.push(...segs);
+    }
+    // hovered cell: MARKER_HOT reticle outline + ACCENT crosshair through the
+    // cell centre — the tunnel is a clean rectilinear (prob × layer) plot (req 4).
+    const hoverSeg = this.hoverKey
+      ? this.segs.find((s) => `${s.r}:${s.rank}` === this.hoverKey)
+      : undefined;
+    const rect = hoverSeg ? this.cellRect(hoverSeg) : null;
+    const edges: { source: [number, number]; target: [number, number] }[] = rect
+      ? rect.map((p, i) => ({ source: p, target: rect[(i + 1) % rect.length] as [number, number] }))
+      : [];
+    const cross: ThemeSeg[] = hoverSeg
+      ? crosshair(
+          (this.xOf(hoverSeg.c0) + this.xOf(hoverSeg.c0 + hoverSeg.prob)) / 2,
+          this.rowY(hoverSeg.r),
+          { x0: X0, y0: YBOT, x1: X1, y1: YTOP },
+          3 * wpp,
+          4 * wpp,
+        )
+      : [];
     this.deck.setProps({
       layers: [
         // faint full-width track (probability 0..1) — the unfilled part is the
@@ -201,18 +244,27 @@ export class LogitLensTunnelDriver implements InterpDriver {
           getFillColor: [255, 255, 255, 8],
           stroked: true,
           filled: true,
-          getLineColor: [255, 255, 255, 26],
+          getLineColor: GRID_RGBA,
           lineWidthUnits: "pixels",
           getLineWidth: 1,
           pickable: false,
         }),
-        // probability gridlines at 0 / .25 / .5 / .75 / 1
-        new LineLayer<number>({
+        new LineLayer<ThemeSeg>({
           id: "ll-grid",
-          data: TICKS,
-          getSourcePosition: (t) => [this.xOf(t), YBOT - 0.05],
-          getTargetPosition: (t) => [this.xOf(t), YTOP + 0.05],
-          getColor: (t) => [255, 255, 255, t === 0 || t === 1 ? 60 : 26],
+          data: gridInner,
+          getSourcePosition: (e) => [e.source[0], e.source[1], 0],
+          getTargetPosition: (e) => [e.target[0], e.target[1], 0],
+          getColor: GRID_RGBA,
+          getWidth: 1,
+          widthUnits: "pixels",
+          pickable: false,
+        }),
+        new LineLayer<ThemeSeg>({
+          id: "ll-axis",
+          data: gridAxis,
+          getSourcePosition: (e) => [e.source[0], e.source[1], 0],
+          getTargetPosition: (e) => [e.target[0], e.target[1], 0],
+          getColor: AXIS_RGBA,
           getWidth: 1,
           widthUnits: "pixels",
           pickable: false,
@@ -231,6 +283,26 @@ export class LogitLensTunnelDriver implements InterpDriver {
           lineWidthMinPixels: 1,
           pickable: true,
           updateTriggers: { getFillColor: this.hoverKey ?? "none" },
+        }),
+        new LineLayer<ThemeSeg>({
+          id: "ll-crosshair",
+          data: cross,
+          getSourcePosition: (e) => [e.source[0], e.source[1], 0],
+          getTargetPosition: (e) => [e.target[0], e.target[1], 0],
+          getColor: withAlpha(ACCENT, 0.5),
+          getWidth: 1,
+          widthUnits: "pixels",
+          pickable: false,
+        }),
+        new LineLayer<{ source: [number, number]; target: [number, number] }>({
+          id: "ll-hover",
+          data: edges,
+          getSourcePosition: (e) => [e.source[0], e.source[1], 0],
+          getTargetPosition: (e) => [e.target[0], e.target[1], 0],
+          getColor: withAlpha(MARKER_HOT, 0.86),
+          getWidth: 1.2,
+          widthUnits: "pixels",
+          pickable: false,
         }),
       ],
     });
@@ -333,25 +405,22 @@ export class LogitLensTunnelDriver implements InterpDriver {
       this.hideTip();
       return;
     }
-    this.tooltip.innerHTML = "";
-    const l1 = document.createElement("div");
-    l1.className = "point-tooltip-label";
-    l1.textContent = `${seg.r === 0 ? "embed" : `layer ${seg.layer}`} · “${fmtTok(seg.token)}”`;
-    const l2 = document.createElement("div");
-    l2.className = "point-tooltip-conf";
-    l2.textContent = `p = ${seg.prob.toFixed(4)} · rank ${seg.rank + 1} of ${this.k}${
-      seg.isAns ? " · final answer" : ""
-    }`;
-    this.tooltip.append(l1, l2);
-    this.tooltip.style.visibility = "visible";
-    const px = Math.min(x + 14, this.cssW - 260);
-    const py = Math.min(y + 14, this.cssH - 54);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    const rows: TipRow[] = [
+      {
+        kind: "label",
+        text: `${seg.r === 0 ? "embed" : `layer ${seg.layer}`} · “${fmtTok(seg.token)}”`,
+        swatch: seg.isAns ? GOLD : STEEL,
+      },
+      { text: "p", value: seg.prob.toFixed(4), hot: true },
+      { text: `rank ${seg.rank + 1} of ${this.k}${seg.isAns ? " · final answer" : ""}` },
+    ];
+    this.tooltip.show(rows);
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
   }
 
   private hideTip(): void {
-    if (this.tooltip) this.tooltip.style.visibility = "hidden";
+    this.tooltip?.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -375,7 +444,7 @@ export class LogitLensTunnelDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.deck?.finalize();
     this.deck = null;

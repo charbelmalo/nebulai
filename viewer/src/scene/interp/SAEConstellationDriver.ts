@@ -19,7 +19,18 @@
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
+import { appStore, type InterpSelection } from "../../app/store";
 import { type SAEBundle, loadSAE } from "../../data/interp";
+import {
+  ACCENT,
+  crosshair,
+  MARKER_HOT,
+  markerPoly,
+  type Seg as ThemeSeg,
+  type Vec2,
+  withAlpha,
+} from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -80,7 +91,7 @@ export class SAEConstellationDriver implements InterpDriver {
   private deck: Deck<OrthographicView[]> | null = null;
   private layersMod!: LayersModule;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private chipRoot!: HTMLElement;
 
@@ -97,6 +108,8 @@ export class SAEConstellationDriver implements InterpDriver {
   private minY = 0;
   private maxY = 1;
   private hover: FeaturePt | null = null;
+  /** feature id the global cross-view selection marks here */
+  private linked: number | null = null;
 
   private cssW = 1;
   private cssH = 1;
@@ -118,10 +131,7 @@ export class SAEConstellationDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-neuron-labels";
     overlay.appendChild(this.labelRoot);
@@ -131,11 +141,14 @@ export class SAEConstellationDriver implements InterpDriver {
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onLeave = () => this.onLeave();
+    const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("click", onClick);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("click", onClick);
     });
   }
 
@@ -242,9 +255,46 @@ export class SAEConstellationDriver implements InterpDriver {
 
   private pushLayers(): void {
     if (!this.deck || !this.pts.length) return;
-    const { ScatterplotLayer } = this.layersMod;
+    const { ScatterplotLayer, LineLayer, SolidPolygonLayer } = this.layersMod;
     const active = this.bandPts[this.band];
     const dimmed = this.bandDim[this.band];
+
+    // markers/crosshair live in world (PC) space, so pixel-authored sizes are
+    // scaled by world-units-per-pixel (mirrors the WeightSpectrum template).
+    const wpp = 1 / this.zoomPx();
+    const bounds = { x0: this.minX, y0: this.minY, x1: this.maxX, y1: this.maxY };
+    // crosshair guides snap onto the hovered feature (req 4)
+    const cross: ThemeSeg[] = this.hover
+      ? crosshair(this.hover.position[0], this.hover.position[1], bounds, 3 * wpp, 4 * wpp)
+      : [];
+    // hover LED diamond (translucent glow under a full-alpha core) replaces the
+    // old white outline ring (req 4)
+    interface Marker {
+      poly: Vec2[];
+      color: [number, number, number, number];
+    }
+    const mr = this.hover ? (this.radiusOf(this.hover) + 2) * wpp : 0;
+    const marks: Marker[] = this.hover
+      ? [
+          {
+            poly: markerPoly(this.hover.position[0], this.hover.position[1], mr * 2.1),
+            color: withAlpha(MARKER_HOT, 0.22),
+          },
+          {
+            poly: markerPoly(this.hover.position[0], this.hover.position[1], mr),
+            color: withAlpha(MARKER_HOT, 1),
+          },
+        ]
+      : [];
+    // cross-view linked feature — a steady ACCENT diamond under the hover marker
+    const lp = this.linked !== null ? this.pts[this.linked] : undefined;
+    if (lp) {
+      const lr = (this.radiusOf(lp) + 2.2) * wpp;
+      marks.unshift(
+        { poly: markerPoly(lp.position[0], lp.position[1], lr * 2.4), color: withAlpha(ACCENT, 0.2) },
+        { poly: markerPoly(lp.position[0], lp.position[1], lr), color: withAlpha(ACCENT, 0.95) },
+      );
+    }
 
     this.deck.setProps({
       layers: [
@@ -260,6 +310,8 @@ export class SAEConstellationDriver implements InterpDriver {
         new ScatterplotLayer<FeaturePt>({
           id: "sae-active",
           data: active,
+          // the field dims to defer to the focused marker on hover (req 3)
+          opacity: this.hover ? 0.38 : 1,
           getPosition: (p) => [p.position[0], p.position[1], 0],
           getFillColor: (p) => {
             const [r, g, bl] = this.colorOf(p);
@@ -269,17 +321,21 @@ export class SAEConstellationDriver implements InterpDriver {
           radiusUnits: "pixels",
           pickable: true,
         }),
-        new ScatterplotLayer<FeaturePt>({
-          id: "sae-hover",
-          data: this.hover ? [this.hover] : [],
-          getPosition: (p) => [p.position[0], p.position[1], 0],
-          getFillColor: [255, 255, 255, 235],
-          getLineColor: [12, 14, 22, 235],
-          stroked: true,
-          lineWidthUnits: "pixels",
-          getLineWidth: 1.4,
-          getRadius: (p) => this.radiusOf(p) + 1.6,
-          radiusUnits: "pixels",
+        new LineLayer<ThemeSeg>({
+          id: "sae-crosshair",
+          data: cross,
+          getSourcePosition: (e) => [e.source[0], e.source[1], 0],
+          getTargetPosition: (e) => [e.target[0], e.target[1], 0],
+          getColor: withAlpha(ACCENT, 0.5),
+          getWidth: 1,
+          widthUnits: "pixels",
+          pickable: false,
+        }),
+        new SolidPolygonLayer<Marker>({
+          id: "sae-marker",
+          data: marks,
+          getPolygon: (m) => m.poly,
+          getFillColor: (m) => m.color,
           pickable: false,
         }),
       ],
@@ -305,7 +361,7 @@ export class SAEConstellationDriver implements InterpDriver {
       btn.addEventListener("click", () => {
         this.band = this.band === band ? "all" : band;
         this.hover = null;
-        this.tooltip.style.visibility = "hidden";
+        this.tooltip.hide();
         this.buildChips();
         this.pushLayers();
       });
@@ -408,30 +464,47 @@ export class SAEConstellationDriver implements InterpDriver {
       this.pushLayers();
     }
     if (!p) {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
-    this.tooltip.innerHTML = "";
-    const add = (cls: string, text: string) => {
-      const el = document.createElement("div");
-      el.className = cls;
-      el.textContent = text;
-      this.tooltip.appendChild(el);
-    };
-    add("point-tooltip-label", `SAE feature ${p.id}`);
-    add(
-      "point-tooltip-conf",
-      `PC1 ${p.position[0].toFixed(2)} · PC2 ${p.position[1].toFixed(2)} · PC3 ${p.z.toFixed(2)}`,
-    );
-    add("point-tooltip-conf", sparsityLine(p.logSp));
-    add("point-tooltip-conf", `promotes “${fmtTok(p.topTok)}” · Δlogit +${p.topVal.toFixed(2)}`);
-    add("point-tooltip-conf", `suppresses “${fmtTok(p.botTok)}” · Δlogit ${p.botVal.toFixed(2)}`);
-    this.tooltip.style.visibility = "visible";
-    const px = Math.min(x + 14, this.cssW - 250);
-    const py = Math.min(y + 14, this.cssH - 96);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    const lc = this.colorOf(p);
+    const rows: TipRow[] = [
+      { kind: "label", text: `SAE feature ${p.id}`, swatch: [lc[0], lc[1], lc[2]] },
+      {
+        text: `PC1 ${p.position[0].toFixed(2)} · PC2 ${p.position[1].toFixed(2)} · PC3 ${p.z.toFixed(2)}`,
+      },
+      { text: sparsityLine(p.logSp) },
+      { text: `promotes “${fmtTok(p.topTok)}” · Δlogit +${p.topVal.toFixed(2)}` },
+      { text: `suppresses “${fmtTok(p.botTok)}” · Δlogit ${p.botVal.toFixed(2)}` },
+    ];
+    this.tooltip.show(rows);
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
+  }
+
+  private onClick(e: PointerEvent): void {
+    if (!this.deck) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const info = this.deck.pickObject({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+      radius: 5,
+      layerIds: ["sae-active"],
+    }) as PickingInfo | null;
+    const p = (info?.object as FeaturePt | undefined) ?? null;
+    if (!p) return;
+    // toggle publish as the global cross-view SAE-feature selection
+    const same = this.linked === p.id;
+    appStore.getState().setInterpSelection(same ? null : { kind: "saeFeature", id: p.id });
+  }
+
+  /** Cross-view link: mark the selected feature with a steady accent diamond. */
+  setSelection(sel: InterpSelection | null): void {
+    const id = sel?.kind === "saeFeature" && sel.id < this.pts.length ? sel.id : null;
+    if (id === this.linked) return;
+    this.linked = id;
+    if (this.pts.length) this.pushLayers();
   }
 
   private onLeave(): void {
@@ -439,7 +512,7 @@ export class SAEConstellationDriver implements InterpDriver {
       this.hover = null;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -463,7 +536,7 @@ export class SAEConstellationDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.chipRoot?.remove();
     this.deck?.finalize();

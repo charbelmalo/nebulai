@@ -15,7 +15,10 @@
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
+import { appStore, type InterpSelection } from "../../app/store";
 import { type InductionBundle, loadInduction } from "../../data/interp";
+import { AXIS_RGBA, dashedSegment, HOT, MARKER_HOT, type RGB, withAlpha } from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -55,7 +58,7 @@ export class InductionDriver implements InterpDriver {
   private deck: Deck<OrthographicView[]> | null = null;
   private layersMod!: LayersModule;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private chipRoot!: HTMLElement;
 
@@ -86,10 +89,7 @@ export class InductionDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-neuron-labels";
     overlay.appendChild(this.labelRoot);
@@ -288,15 +288,16 @@ export class InductionDriver implements InterpDriver {
         { source: [x0, y0 + g], target: [x0, y0] },
       );
     }
-    // layout guide: where the second repeat begins (row/col period+1)
+    // layout guide: where the second repeat begins (row/col period+1) —
+    // DASHED hairlines now (req 5) so the structure whispers under the stripe
     const guides: Seg[] = [];
     if (this.stripeCells.length) {
       const { x0, y0, s } = this.stripeBox();
       const T = b.meta.T;
       const at = (b.meta.period + 1) * s;
       guides.push(
-        { source: [x0 + at, y0], target: [x0 + at, y0 + T * s] },
-        { source: [x0, y0 + at], target: [x0 + T * s, y0 + at] },
+        ...dashedSegment([x0 + at, y0], [x0 + at, y0 + T * s]),
+        ...dashedSegment([x0, y0 + at], [x0 + T * s, y0 + at]),
       );
     }
 
@@ -323,7 +324,7 @@ export class InductionDriver implements InterpDriver {
           data: guides,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: [118, 126, 158, 110],
+          getColor: AXIS_RGBA,
           getWidth: 1,
           widthUnits: "pixels",
           pickable: false,
@@ -333,7 +334,7 @@ export class InductionDriver implements InterpDriver {
           data: selEdges,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: [245, 195, 59, 230],
+          getColor: withAlpha(HOT, 230 / 255),
           getWidth: 1.4,
           widthUnits: "pixels",
           pickable: false,
@@ -343,7 +344,7 @@ export class InductionDriver implements InterpDriver {
           data: hoverEdges,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: [255, 255, 255, 220],
+          getColor: withAlpha(MARKER_HOT, 0.86),
           getWidth: 1.2,
           widthUnits: "pixels",
           pickable: false,
@@ -376,7 +377,7 @@ export class InductionDriver implements InterpDriver {
         if (metric === this.metric) return;
         this.metric = metric;
         this.hover = null;
-        this.tooltip.style.visibility = "hidden";
+        this.tooltip.hide();
         this.buildChips();
         this.pushLayers();
         this.positionLabels();
@@ -522,41 +523,38 @@ export class InductionDriver implements InterpDriver {
       this.pushLayers();
     }
     if (!c) {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
-    this.tooltip.innerHTML = "";
-    const add = (cls: string, text: string) => {
-      const el = document.createElement("div");
-      el.className = cls;
-      el.textContent = text;
-      this.tooltip.appendChild(el);
-    };
+    const rows: TipRow[] = [];
     if ("layer" in c) {
       const v = this.scoreOf(c.layer, c.head, this.metric);
-      add(
-        "point-tooltip-label",
-        `L${c.layer}H${c.head} — ${this.metricLabel(this.metric, true)} ${v.toFixed(4)} (${(v / b.meta.floor).toFixed(1)}× floor)`,
-      );
-      add(
-        "point-tooltip-conf",
-        `seed ${b.meta.seed_b}: ${this.scoreOf(c.layer, c.head, this.metric, true).toFixed(4)} · ` +
+      const gc = this.gridColor(c.layer, c.head);
+      const swatch: RGB = [gc[0], gc[1], gc[2]];
+      rows.push({
+        kind: "label",
+        text: `L${c.layer}H${c.head} — ${this.metricLabel(this.metric, true)} ${v.toFixed(4)} (${(v / b.meta.floor).toFixed(1)}× floor)`,
+        swatch,
+      });
+      rows.push({
+        text:
+          `seed ${b.meta.seed_b}: ${this.scoreOf(c.layer, c.head, this.metric, true).toFixed(4)} · ` +
           `ind ${this.scoreOf(c.layer, c.head, "ind").toFixed(4)} · dup ${this.scoreOf(c.layer, c.head, "dup").toFixed(4)} · ` +
           `prev ${this.scoreOf(c.layer, c.head, "prev").toFixed(4)}`,
-      );
-      add(
-        "point-tooltip-conf",
-        b.patterns.some((p) => p.layer === c.layer && p.head === c.head)
+      });
+      rows.push({
+        text: b.patterns.some((p) => p.layer === c.layer && p.head === c.head)
           ? "click to inspect the full attention pattern"
           : `pattern not exported (top-${b.patterns.length} by score only) — click shows why`,
-      );
+      });
     } else {
       const P = b.meta.period;
-      add(
-        "point-tooltip-label",
-        `attn ${c.v.toFixed(4)} — from ${c.from} “${vis(b.token_strs[c.from] ?? "")}” → ${c.to} “${vis(b.token_strs[c.to] ?? "")}”`,
-      );
+      rows.push({
+        kind: "label",
+        text: `attn ${c.v.toFixed(4)} — from ${c.from} “${vis(b.token_strs[c.from] ?? "")}” → ${c.to} “${vis(b.token_strs[c.to] ?? "")}”`,
+        swatch: AMBER,
+      });
       const tag =
         c.to === c.from - (P - 1)
           ? `induction target (t−${P - 1}): the token AFTER this one's previous occurrence`
@@ -569,14 +567,12 @@ export class InductionDriver implements InterpDriver {
                 : c.to === 0
                   ? "<|endoftext|> — the attention sink"
                   : "off-target";
-      add("point-tooltip-conf", tag);
-      add("point-tooltip-conf", `post-softmax attention, stored at 4 dp · seed ${b.meta.seed_a}`);
+      rows.push({ text: tag });
+      rows.push({ text: `post-softmax attention, stored at 4 dp · seed ${b.meta.seed_a}` });
     }
-    this.tooltip.style.visibility = "visible";
+    this.tooltip.show(rows);
     const rect = this.canvas.getBoundingClientRect();
-    const px = Math.min(e.clientX - rect.left + 14, this.cssW - 330);
-    const py = Math.min(e.clientY - rect.top + 14, this.cssH - 96);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    this.tooltip.move(e.clientX - rect.left, e.clientY - rect.top, this.cssW, this.cssH);
     this.canvas.style.cursor = "layer" in c ? "pointer" : "crosshair";
   }
 
@@ -584,10 +580,26 @@ export class InductionDriver implements InterpDriver {
     const c = this.pick(e);
     if (!c || !("layer" in c)) return;
     if (this.sel && this.sel.layer === c.layer && this.sel.head === c.head) return;
-    this.sel = { layer: c.layer, head: c.head };
+    this.selectHead(c.layer, c.head);
+    // publish the inspected head as the global cross-view selection
+    appStore.getState().setInterpSelection({ kind: "head", layer: c.layer, head: c.head });
+  }
+
+  private selectHead(layer: number, head: number): void {
+    this.sel = { layer, head };
     this.layoutStripe();
     this.pushLayers();
     this.positionLabels();
+  }
+
+  /** Cross-view link: follow a global head selection by inspecting that head.
+   *  A cleared selection keeps the current head — this view always shows one. */
+  setSelection(sel: InterpSelection | null): void {
+    const b = this.bundle;
+    if (!b || sel?.kind !== "head") return;
+    if (sel.layer >= b.meta.n_layer || sel.head >= b.meta.n_head) return;
+    if (this.sel && this.sel.layer === sel.layer && this.sel.head === sel.head) return;
+    this.selectHead(sel.layer, sel.head);
   }
 
   private onLeave(): void {
@@ -595,7 +607,7 @@ export class InductionDriver implements InterpDriver {
       this.hover = null;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -623,7 +635,7 @@ export class InductionDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.chipRoot?.remove();
     this.deck?.finalize();

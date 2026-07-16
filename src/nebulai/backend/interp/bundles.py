@@ -387,6 +387,86 @@ def compute_sae(m: GPT2Numpy, repo: str = SAE_REPO, hook: str = SAE_HOOK, dims: 
     }
 
 
+def load_sae_weights(
+    repo: str = SAE_REPO, hook: str = SAE_HOOK
+) -> tuple[dict, dict, np.ndarray]:
+    """Fetch the res-jb SAE release for one hook point: (cfg, tensors, sparsity).
+
+    tensors holds W_enc (d_in, d_sae), b_enc, W_dec (d_sae, d_in), b_dec.
+    Shared by the offline bundle writer and the live server (which keeps the
+    result resident so /live/sae pays the download/mmap once)."""
+    from huggingface_hub import hf_hub_download
+    from safetensors.numpy import load_file
+
+    cfg = json.loads(open(hf_hub_download(repo, f"{hook}/cfg.json")).read())
+    t = load_file(hf_hub_download(repo, f"{hook}/sae_weights.safetensors"))
+    sp = load_file(hf_hub_download(repo, f"{hook}/sparsity.safetensors"))
+    d_sae, d_in = int(cfg["d_sae"]), int(cfg["d_in"])
+    assert t["W_enc"].shape == (d_in, d_sae), f"W_enc shape {t['W_enc'].shape}"
+    return cfg, t, sp["sparsity"].astype(np.float64)
+
+
+def sae_trace_for_prompt(
+    m: GPT2Numpy,
+    prompt: str,
+    t: dict,
+    sparsity: np.ndarray,
+    layer: int,
+    top_k: int = 32,
+) -> dict:
+    """One prompt's SAE piano-roll trace — the loop body of compute_sae_acts,
+    extracted so /live/sae produces byte-identical rows for typed prompts."""
+    W_enc, b_enc = t["W_enc"], t["b_enc"]
+    W_dec, b_dec = t["W_dec"], t["b_dec"]
+
+    tr: Trace = m.forward(prompt)
+    x = tr.resid[layer].astype(np.float32)  # (T, d) = blocks.L.hook_resid_pre
+    xc = x - x.mean(axis=1, keepdims=True)  # TL center_writing_weights basis
+    acts = np.maximum((xc - b_dec) @ W_enc + b_enc, 0.0)  # (T, d_sae)
+    recon = acts @ W_dec + b_dec
+    cos = (recon * xc).sum(axis=1) / (
+        np.linalg.norm(recon, axis=1) * np.linalg.norm(xc, axis=1) + 1e-12
+    )
+    l0 = (acts > 0).sum(axis=1)
+
+    def rows_for(ids: np.ndarray) -> list[dict]:
+        top_tok, top_val, _, _ = _unembed_readout(W_dec[ids].astype(np.float32), m)
+        return [
+            {
+                "id": int(fid),
+                "log_sparsity": round(float(sparsity[fid]), 3),
+                "top_tok": top_tok[k],
+                "top_val": top_val[k],
+                "max": round(float(acts[:, fid].max()), 3),
+                "acts": [round(float(a), 3) for a in acts[:, fid]],
+            }
+            for k, fid in enumerate(ids)
+        ]
+
+    # Main board: ranked by peak over positions ≥ 1. The first position
+    # carries GPT-2's massive-activation outlier (‖x‖ ≈ 3000 vs ~100) and a
+    # handful of SAE features fire 60–100× everything else there and ~0
+    # elsewhere; ranked raw they'd fill the board with redundant rows.
+    # They're real, so they ship too — as a separate labeled band.
+    peak = acts[1:].max(axis=0) if acts.shape[0] > 1 else acts.max(axis=0)
+    ids = np.argsort(-peak)[:top_k]
+    ids = ids[peak[ids] > 0]
+    sink_ids = np.argsort(-acts[0])[:4]
+    sink_ids = sink_ids[acts[0][sink_ids] > 0]
+    sink_ids = sink_ids[~np.isin(sink_ids, ids)]
+
+    return {
+        "slug": _slug(prompt),
+        "prompt": prompt,
+        "token_strs": tr.token_strs,
+        "T": len(tr.tokens),
+        "l0": [int(v) for v in l0],
+        "cos": [round(float(v), 4) for v in cos],
+        "features": rows_for(ids),
+        "sink_features": rows_for(sink_ids),
+    }
+
+
 def compute_sae_acts(
     m: GPT2Numpy,
     prompts: list[str] | None = None,
@@ -417,71 +497,13 @@ def compute_sae_acts(
     how much of the stream the SAE actually explains), plus the top_k features
     by peak activation with their FULL activation rows, each labeled with its
     direct-path top token and the release's measured global log-sparsity."""
-    from huggingface_hub import hf_hub_download
-    from safetensors.numpy import load_file
-
     prompts = prompts or DEFAULT_PROMPTS
-    cfg = json.loads(open(hf_hub_download(repo, f"{hook}/cfg.json")).read())
-    t = load_file(hf_hub_download(repo, f"{hook}/sae_weights.safetensors"))
-    sp = load_file(hf_hub_download(repo, f"{hook}/sparsity.safetensors"))
-    W_enc, b_enc = t["W_enc"], t["b_enc"]
-    W_dec, b_dec = t["W_dec"], t["b_dec"]
+    cfg, t, sparsity = load_sae_weights(repo, hook)
     d_sae, d_in = int(cfg["d_sae"]), int(cfg["d_in"])
     layer = int(cfg["hook_point_layer"])
-    assert W_enc.shape == (d_in, d_sae), f"W_enc shape {W_enc.shape}"
     assert d_in == m.d, f"SAE d_in {d_in} != model d {m.d}"
-    sparsity = sp["sparsity"].astype(np.float64)
 
-    traces = []
-    for prompt in prompts:
-        tr: Trace = m.forward(prompt)
-        x = tr.resid[layer].astype(np.float32)  # (T, d) = blocks.L.hook_resid_pre
-        xc = x - x.mean(axis=1, keepdims=True)  # TL center_writing_weights basis
-        acts = np.maximum((xc - b_dec) @ W_enc + b_enc, 0.0)  # (T, d_sae)
-        recon = acts @ W_dec + b_dec
-        cos = (recon * xc).sum(axis=1) / (
-            np.linalg.norm(recon, axis=1) * np.linalg.norm(xc, axis=1) + 1e-12
-        )
-        l0 = (acts > 0).sum(axis=1)
-
-        def rows_for(ids: np.ndarray) -> list[dict]:
-            top_tok, top_val, _, _ = _unembed_readout(W_dec[ids].astype(np.float32), m)
-            return [
-                {
-                    "id": int(fid),
-                    "log_sparsity": round(float(sparsity[fid]), 3),
-                    "top_tok": top_tok[k],
-                    "top_val": top_val[k],
-                    "max": round(float(acts[:, fid].max()), 3),
-                    "acts": [round(float(a), 3) for a in acts[:, fid]],
-                }
-                for k, fid in enumerate(ids)
-            ]
-
-        # Main board: ranked by peak over positions ≥ 1. The first position
-        # carries GPT-2's massive-activation outlier (‖x‖ ≈ 3000 vs ~100) and a
-        # handful of SAE features fire 60–100× everything else there and ~0
-        # elsewhere; ranked raw they'd fill the board with redundant rows.
-        # They're real, so they ship too — as a separate labeled band.
-        peak = acts[1:].max(axis=0) if acts.shape[0] > 1 else acts.max(axis=0)
-        ids = np.argsort(-peak)[:top_k]
-        ids = ids[peak[ids] > 0]
-        sink_ids = np.argsort(-acts[0])[:4]
-        sink_ids = sink_ids[acts[0][sink_ids] > 0]
-        sink_ids = sink_ids[~np.isin(sink_ids, ids)]
-
-        traces.append(
-            {
-                "slug": _slug(prompt),
-                "prompt": prompt,
-                "token_strs": tr.token_strs,
-                "T": len(tr.tokens),
-                "l0": [int(v) for v in l0],
-                "cos": [round(float(v), 4) for v in cos],
-                "features": rows_for(ids),
-                "sink_features": rows_for(sink_ids),
-            }
-        )
+    traces = [sae_trace_for_prompt(m, p, t, sparsity, layer, top_k) for p in prompts]
 
     return {
         "meta": {

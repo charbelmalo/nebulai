@@ -30,11 +30,15 @@ from typing import Any
 
 import numpy as np
 
+from .bundles import SAE_HOOK, SAE_REPO, compute_trace, load_sae_weights, sae_trace_for_prompt
 from .gpt2_numpy import GPT2Numpy, _layernorm
 
 # A typed prompt is short; cap the forward so one request can't queue seconds
 # of matmuls behind it. The cap is disclosed in the response (`truncated`).
 MAX_TOKENS = 96
+# /live/trace returns the full (n_layer, n_head, T, T) attention tensor —
+# payload grows as T², so its cap is tighter (T=64 ≈ 4–5 MB of JSON).
+MAX_TRACE_TOKENS = 64
 
 
 def live_forward(m: GPT2Numpy, text: str, max_tokens: int = MAX_TOKENS) -> dict[str, Any]:
@@ -115,6 +119,74 @@ def live_forward(m: GPT2Numpy, text: str, max_tokens: int = MAX_TOKENS) -> dict[
     }
 
 
+def live_trace(m: GPT2Numpy, text: str, max_tokens: int = MAX_TRACE_TOKENS) -> dict[str, Any]:
+    """One real forward serialized EXACTLY like an offline trace_<slug>.json
+    (same producer: bundles.compute_trace), so every trace-driven viewer
+    feature renders a typed prompt with zero driver changes. Pure function —
+    verifiable without HTTP. Extra top-level keys (`ms`, `truncated`,
+    `max_tokens`) ride alongside the bundle shape, never inside it."""
+    ids = m.encode(text)
+    if not ids:
+        raise ValueError("empty prompt (tokenizes to zero tokens)")
+    truncated = len(ids) > max_tokens
+    if truncated:
+        # GPT-2 BPE round-trips exactly: decode of the kept ids re-encodes to
+        # the same ids, so compute_trace sees precisely the truncated tokens
+        text = "".join(m.decode1(int(i)) for i in ids[:max_tokens])
+    t0 = time.perf_counter()
+    out = compute_trace(m, text)
+    out["ms"] = round((time.perf_counter() - t0) * 1000.0, 1)
+    out["truncated"] = truncated
+    out["max_tokens"] = max_tokens
+    return out
+
+
+# res-jb SAE weights, loaded lazily on the first /live/sae and kept resident
+# (~150 MB of float32; the download is HF-cached from the offline bundle run).
+_sae_cache: tuple[dict, dict, np.ndarray] | None = None
+
+
+def _sae() -> tuple[dict, dict, np.ndarray]:
+    global _sae_cache
+    if _sae_cache is None:
+        t0 = time.perf_counter()
+        print(f"[live] loading SAE {SAE_REPO} @ {SAE_HOOK}…")
+        _sae_cache = load_sae_weights()
+        print(f"[live] SAE resident in {time.perf_counter() - t0:.1f}s")
+    return _sae_cache
+
+
+def live_sae(m: GPT2Numpy, text: str, max_tokens: int = MAX_TRACE_TOKENS) -> dict[str, Any]:
+    """The res-jb SAE encoder run on a typed prompt's real residual stream,
+    serialized EXACTLY like one trace of the offline sae_acts.json (same
+    producer: bundles.sae_trace_for_prompt), so the Piano-Roll renders it with
+    the offline code path. Pure function — verifiable without HTTP."""
+    ids = m.encode(text)
+    if not ids:
+        raise ValueError("empty prompt (tokenizes to zero tokens)")
+    truncated = len(ids) > max_tokens
+    if truncated:
+        # GPT-2 BPE round-trips exactly (see live_trace)
+        text = "".join(m.decode1(int(i)) for i in ids[:max_tokens])
+    cfg, t, sparsity = _sae()
+    d_in = int(cfg["d_in"])
+    if d_in != m.d:
+        raise ValueError(f"SAE d_in {d_in} != model d {m.d} — the res-jb release is gpt2-only")
+    t0 = time.perf_counter()
+    trace = sae_trace_for_prompt(m, text, t, sparsity, int(cfg["hook_point_layer"]))
+    return {
+        "model": m.model_id,
+        "sae_repo": SAE_REPO,
+        "hook_point": SAE_HOOK,
+        "hook_layer": int(cfg["hook_point_layer"]),
+        "d_sae": int(cfg["d_sae"]),
+        "ms": round((time.perf_counter() - t0) * 1000.0, 1),
+        "truncated": truncated,
+        "max_tokens": max_tokens,
+        "trace": trace,
+    }
+
+
 class _Handler(BaseHTTPRequestHandler):
     m: GPT2Numpy  # set by serve()
     lock: threading.Lock
@@ -146,13 +218,17 @@ class _Handler(BaseHTTPRequestHandler):
                     "d_model": self.m.d,
                     "vocab": self.m.V,
                     "max_tokens": MAX_TOKENS,
+                    "max_trace_tokens": MAX_TRACE_TOKENS,
+                    "sae_repo": SAE_REPO,
+                    "sae_hook": SAE_HOOK,
+                    "sae_loaded": _sae_cache is not None,
                 },
             )
         else:
             self._send(404, {"error": f"unknown path {self.path}"})
 
     def do_POST(self) -> None:
-        if self.path != "/live/forward":
+        if self.path not in ("/live/forward", "/live/trace", "/live/sae"):
             self._send(404, {"error": f"unknown path {self.path}"})
             return
         try:
@@ -164,7 +240,12 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             # serialize forwards — concurrent numpy matmuls only fight for RAM
             with self.lock:
-                out = live_forward(self.m, text)
+                if self.path == "/live/trace":
+                    out = live_trace(self.m, text)
+                elif self.path == "/live/sae":
+                    out = live_sae(self.m, text)
+                else:
+                    out = live_forward(self.m, text)
             self._send(200, out)
         except ValueError as e:
             self._send(400, {"error": str(e)})
@@ -183,7 +264,11 @@ def serve(model_id: str = "gpt2", host: str = "127.0.0.1", port: int = 8123) -> 
     _Handler.m = m
     _Handler.lock = threading.Lock()
     srv = ThreadingHTTPServer((host, port), _Handler)
-    print(f"[live] serving on http://{host}:{port}  (health: /live/health, forward: POST /live/forward)")
+    print(
+        f"[live] serving on http://{host}:{port}  "
+        "(health: /live/health, forward: POST /live/forward, trace: POST /live/trace, "
+        "sae: POST /live/sae)"
+    )
     srv.serve_forever()
 
 

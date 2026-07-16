@@ -33,7 +33,7 @@ function serveOut(): Plugin {
 export default defineConfig({
   base: "./",
   plugins: [preact(), serveOut()],
-  server: { port: 5173 },
+  server: { port: Number(process.env.PORT) || 5173 },
   build: { target: "es2022" },
   // tests/e2e belongs to Playwright, not vitest
   test: { include: ["tests/unit/**/*.test.ts"] },

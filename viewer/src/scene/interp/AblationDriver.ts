@@ -15,7 +15,10 @@
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
+import { appStore, type InterpSelection } from "../../app/store";
 import { type AblationBundle, loadAblation } from "../../data/interp";
+import { AXIS_RGBA, dashedSegment, MARKER_HOT, withAlpha } from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -61,7 +64,7 @@ export class AblationDriver implements InterpDriver {
   private deck: Deck<OrthographicView[]> | null = null;
   private layersMod!: LayersModule;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private chipRoot!: HTMLElement;
 
@@ -96,10 +99,7 @@ export class AblationDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-neuron-labels";
     overlay.appendChild(this.labelRoot);
@@ -340,12 +340,13 @@ export class AblationDriver implements InterpDriver {
         { source: [sx, sy + g], target: [sx, sy] },
       );
     }
-    // axes + the scored-window bounds (guides, not data)
+    // axes + the scored-window bounds (guides, not data) — dashed hairlines now
+    // (req 5): the y-axis, the baseline foot, and the scored-window bounds
     const guides: Seg[] = [
-      { source: [x0, y0], target: [x0, y0 + ch] },
-      { source: [x0, y0 + ch], target: [x0 + cw, y0 + ch] },
-      { source: [this.xOf(w0), y0], target: [this.xOf(w0), y0 + ch] },
-      { source: [this.xOf(w1), y0], target: [this.xOf(w1), y0 + ch] },
+      ...dashedSegment([x0, y0], [x0, y0 + ch]),
+      ...dashedSegment([x0, y0 + ch], [x0 + cw, y0 + ch]),
+      ...dashedSegment([this.xOf(w0), y0], [this.xOf(w0), y0 + ch]),
+      ...dashedSegment([this.xOf(w1), y0], [this.xOf(w1), y0 + ch]),
     ];
 
     this.deck.setProps({
@@ -370,7 +371,7 @@ export class AblationDriver implements InterpDriver {
           data: guides,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: [118, 126, 158, 110],
+          getColor: AXIS_RGBA,
           getWidth: 1,
           widthUnits: "pixels",
           pickable: false,
@@ -419,7 +420,7 @@ export class AblationDriver implements InterpDriver {
           data: hoverSegs,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: [255, 255, 255, 200],
+          getColor: withAlpha(MARKER_HOT, 0.86),
           getWidth: 1.2,
           widthUnits: "pixels",
           pickable: false,
@@ -449,7 +450,7 @@ export class AblationDriver implements InterpDriver {
         if (mode === this.mode) return;
         this.mode = mode;
         this.hover = null;
-        this.tooltip.style.visibility = "hidden";
+        this.tooltip.hide();
         this.layoutCurves();
         this.buildChips();
         this.pushLayers();
@@ -472,7 +473,7 @@ export class AblationDriver implements InterpDriver {
         if (this.sel?.kind === "combo" && this.sel.idx === idx) return;
         this.sel = { kind: "combo", idx };
         this.hover = null;
-        this.tooltip.style.visibility = "hidden";
+        this.tooltip.hide();
         this.layoutCurves();
         this.buildChips();
         this.pushLayers();
@@ -614,56 +615,51 @@ export class AblationDriver implements InterpDriver {
       this.pushLayers();
     }
     if (!c) {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
-    this.tooltip.innerHTML = "";
-    const add = (cls: string, text: string) => {
-      const el = document.createElement("div");
-      el.className = cls;
-      el.textContent = text;
-      this.tooltip.appendChild(el);
-    };
     const signed = (v: number, dp = 4) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(dp)}`;
+    const rows: TipRow[] = [];
     if ("layer" in c) {
       const dz = this.dOf(c.layer, c.head, "zero");
       const dm = this.dOf(c.layer, c.head, "mean");
       const cur = this.mode === "zero" ? dz : dm;
-      add(
-        "point-tooltip-label",
-        `L${c.layer}H${c.head} — ${this.mode}-ablation Δ ${signed(cur)} nats ` +
-          `(window ${b.meta.base_window.toFixed(4)} → ${(b.meta.base_window + cur).toFixed(4)})`,
+      const cc = this.gridColor(c.layer, c.head);
+      rows.push(
+        { kind: "label", text: `L${c.layer}H${c.head} · ${this.mode}-ablation`, swatch: [cc[0], cc[1], cc[2]] },
+        { text: "Δ", value: `${signed(cur)} nats`, hot: true },
+        { text: `window ${b.meta.base_window.toFixed(4)} → ${(b.meta.base_window + cur).toFixed(4)}` },
+        {
+          text: `zero ${signed(dz)} · mean ${signed(dm)} · induction score ${this.indOf(c.layer, c.head).toFixed(4)} (this run)`,
+        },
+        { text: "click to draw its ghost curve" },
       );
-      add(
-        "point-tooltip-conf",
-        `zero ${signed(dz)} · mean ${signed(dm)} · induction score ${this.indOf(c.layer, c.head).toFixed(4)} (this run)`,
-      );
-      add("point-tooltip-conf", "click to draw its ghost curve");
     } else {
       const base = b.nll_base[c.j - 1] ?? 0;
       const inWin = c.j >= b.meta.window[0] && c.j <= b.meta.window[1];
-      add(
-        "point-tooltip-label",
-        `j=${c.j} “${vis(b.token_strs[c.j] ?? "")}” — baseline NLL ${base.toFixed(4)}`,
+      rows.push(
+        {
+          kind: "label",
+          text: `j=${c.j} “${vis(b.token_strs[c.j] ?? "")}”`,
+          swatch: [BASE_GREY[0], BASE_GREY[1], BASE_GREY[2]],
+        },
+        { text: "baseline NLL", value: base.toFixed(4), hot: true },
       );
       if (this.sel) {
         const gv = this.selCurve(this.sel, this.mode)[c.j - 1] ?? 0;
-        add(
-          "point-tooltip-conf",
-          `${this.selLabel(this.sel)} ${this.mode}-ablated: ${gv.toFixed(4)} (Δ ${signed(gv - base)})`,
-        );
+        rows.push({
+          text: `${this.selLabel(this.sel)} ${this.mode}-ablated`,
+          value: `${gv.toFixed(4)} (Δ ${signed(gv - base)})`,
+        });
       }
-      add(
-        "point-tooltip-conf",
-        `−log p(s_j | s_<j), nats · ${inWin ? "inside" : "outside"} the scored window`,
-      );
+      rows.push({
+        text: `−log p(s_j | s_<j), nats · ${inWin ? "inside" : "outside"} the scored window`,
+      });
     }
-    this.tooltip.style.visibility = "visible";
+    this.tooltip.show(rows);
     const rect = this.canvas.getBoundingClientRect();
-    const px = Math.min(e.clientX - rect.left + 14, this.cssW - 330);
-    const py = Math.min(e.clientY - rect.top + 14, this.cssH - 96);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    this.tooltip.move(e.clientX - rect.left, e.clientY - rect.top, this.cssW, this.cssH);
     this.canvas.style.cursor = "layer" in c ? "pointer" : "crosshair";
   }
 
@@ -671,11 +667,28 @@ export class AblationDriver implements InterpDriver {
     const c = this.pick(e);
     if (!c || !("layer" in c)) return;
     if (this.sel?.kind === "head" && this.sel.layer === c.layer && this.sel.head === c.head) return;
-    this.sel = { kind: "head", layer: c.layer, head: c.head };
+    this.selectHead(c.layer, c.head);
+    // publish the ghosted head as the global cross-view selection
+    appStore.getState().setInterpSelection({ kind: "head", layer: c.layer, head: c.head });
+  }
+
+  private selectHead(layer: number, head: number): void {
+    this.sel = { kind: "head", layer, head };
     this.layoutCurves();
     this.buildChips();
     this.pushLayers();
     this.positionLabels();
+  }
+
+  /** Cross-view link: follow a global head selection by drawing that head's
+   *  ghost. A cleared selection keeps the current ghost — the view always
+   *  shows one (the default combo). */
+  setSelection(sel: InterpSelection | null): void {
+    const b = this.bundle;
+    if (!b || sel?.kind !== "head") return;
+    if (sel.layer >= b.meta.n_layer || sel.head >= b.meta.n_head) return;
+    if (this.sel?.kind === "head" && this.sel.layer === sel.layer && this.sel.head === sel.head) return;
+    this.selectHead(sel.layer, sel.head);
   }
 
   private onLeave(): void {
@@ -683,7 +696,7 @@ export class AblationDriver implements InterpDriver {
       this.hover = null;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -711,7 +724,7 @@ export class AblationDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.chipRoot?.remove();
     this.deck?.finalize();

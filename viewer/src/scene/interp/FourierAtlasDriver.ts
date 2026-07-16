@@ -19,6 +19,16 @@
 import type { Deck, OrthographicView } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
 import { loadFourier, type FourierBundle } from "../../data/interp";
+import {
+  dashedSegment,
+  DIM_ALPHA,
+  GRID_RGBA,
+  MARKER_HOT,
+  markerPoly,
+  type Vec2,
+  withAlpha,
+} from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -50,7 +60,7 @@ export class FourierAtlasDriver implements InterpDriver {
   private layersMod!: LayersModule;
   private makeView!: () => OrthographicView;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private axisRoot!: HTMLElement;
 
   private bundle: FourierBundle | null = null;
@@ -60,6 +70,7 @@ export class FourierAtlasDriver implements InterpDriver {
   private logMax = 1;
   private nFreq = 0;
   private nCtx = 1024;
+  private hoverF: number | null = null; // illuminated frequency under the cursor
 
   private cssW = 1;
   private cssH = 1;
@@ -82,10 +93,7 @@ export class FourierAtlasDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.axisRoot = document.createElement("div");
     this.axisRoot.className = "interp-axis";
     overlay.appendChild(this.axisRoot);
@@ -145,10 +153,17 @@ export class FourierAtlasDriver implements InterpDriver {
     return INNER_R + Math.max(0, Math.min(1, t)) * (OUTER_R - INNER_R);
   }
 
+  /** World units per screen pixel — pixel-authored dashes/markers scaled to world. */
+  private worldPerPx(): number {
+    return 1 / this.zoomPx();
+  }
+
   private pushLayers(): void {
     if (!this.deck || !this.bundle) return;
-    const { PathLayer } = this.layersMod;
+    const { PathLayer, SolidPolygonLayer } = this.layersMod;
     const b = this.bundle;
+    const wpp = this.worldPerPx();
+    const hf = this.hoverF;
 
     const power: Spoke[] = [];
     const dims: Spoke[] = [];
@@ -167,7 +182,9 @@ export class FourierAtlasDriver implements InterpDriver {
       }
     }
 
-    // concentric power-decade rings + the baseline ring
+    // concentric power-decade rings + the baseline ring — subtle DASHED
+    // hairlines now (req 5): the radius legend whispers, the spokes speak. Each
+    // ring is broken into pixel-scaled dashes around its circumference.
     const rings: { path: [number, number][] }[] = [];
     const ringAt = (r: number) => {
       const pts: [number, number][] = [];
@@ -175,12 +192,41 @@ export class FourierAtlasDriver implements InterpDriver {
         const a = (i / 96) * Math.PI * 2;
         pts.push([r * Math.cos(a), r * Math.sin(a)]);
       }
-      return pts;
+      for (let i = 0; i < pts.length - 1; i++) {
+        for (const s of dashedSegment(pts[i]!, pts[i + 1]!, 3 * wpp, 6 * wpp)) {
+          rings.push({ path: [s.source, s.target] });
+        }
+      }
     };
-    rings.push({ path: ringAt(INNER_R) });
+    ringAt(INNER_R);
     const kLo = Math.ceil(this.logMin);
     const kHi = Math.floor(this.logMax);
-    for (let k = kLo; k <= kHi; k++) rings.push({ path: ringAt(this.powerRadius(10 ** k)) });
+    for (let k = kLo; k <= kHi; k++) ringAt(this.powerRadius(10 ** k));
+
+    // focus/dim (req 3): on hover, the focused frequency's spokes illuminate to
+    // full strength while every other frequency recedes to a faint trace.
+    const powerAlpha = (d: Spoke) => {
+      const base = Math.round(60 + 190 * d.v);
+      if (hf == null) return base;
+      return d.f === hf ? 255 : Math.round(base * DIM_ALPHA);
+    };
+    const dimAlpha = (d: Spoke) => {
+      const base = Math.round(55 + 165 * d.v);
+      if (hf == null) return base;
+      return d.f === hf ? 255 : Math.round(base * DIM_ALPHA);
+    };
+    // sharp LED marker locked onto the hovered frequency's power-spoke tip (req 4)
+    const marks: { poly: Vec2[]; color: [number, number, number, number] }[] = [];
+    if (hf != null) {
+      const a = this.angleOf(hf);
+      const rp = this.powerRadius(b.power_mean[hf]!);
+      const tx = rp * Math.cos(a);
+      const ty = rp * Math.sin(a);
+      marks.push(
+        { poly: markerPoly(tx, ty, 8 * wpp), color: withAlpha(MARKER_HOT, 0.22) },
+        { poly: markerPoly(tx, ty, 4 * wpp), color: withAlpha(MARKER_HOT, 1) },
+      );
+    }
 
     this.deck.setProps({
       layers: [
@@ -188,7 +234,7 @@ export class FourierAtlasDriver implements InterpDriver {
           id: "fa-rings",
           data: rings,
           getPath: (d) => d.path,
-          getColor: [150, 142, 168, 40],
+          getColor: GRID_RGBA,
           getWidth: 1,
           widthUnits: "pixels",
           pickable: false,
@@ -197,18 +243,27 @@ export class FourierAtlasDriver implements InterpDriver {
           id: "fa-dims",
           data: dims,
           getPath: (d) => d.path,
-          getColor: (d) => [CYAN[0], CYAN[1], CYAN[2], Math.round(55 + 165 * d.v)],
-          getWidth: (d) => 1 + 1.1 * d.v,
+          getColor: (d) => [CYAN[0], CYAN[1], CYAN[2], dimAlpha(d)],
+          getWidth: (d) => (hf === d.f ? 2.2 : 1 + 1.1 * d.v),
           widthUnits: "pixels",
+          updateTriggers: { getColor: hf, getWidth: hf },
           pickable: false,
         }),
         new PathLayer<Spoke>({
           id: "fa-power",
           data: power,
           getPath: (d) => d.path,
-          getColor: (d) => [GOLD[0], GOLD[1], GOLD[2], Math.round(60 + 190 * d.v)],
-          getWidth: (d) => 1 + 1.7 * d.v,
+          getColor: (d) => [GOLD[0], GOLD[1], GOLD[2], powerAlpha(d)],
+          getWidth: (d) => (hf === d.f ? 2.8 : 1 + 1.7 * d.v),
           widthUnits: "pixels",
+          updateTriggers: { getColor: hf, getWidth: hf },
+          pickable: false,
+        }),
+        new SolidPolygonLayer<{ poly: Vec2[]; color: [number, number, number, number] }>({
+          id: "fa-marker",
+          data: marks,
+          getPolygon: (d) => d.poly,
+          getFillColor: (d) => d.color,
           pickable: false,
         }),
       ],
@@ -307,27 +362,28 @@ export class FourierAtlasDriver implements InterpDriver {
     const period = this.nCtx / f;
     const dimCount = this.counts[f]!;
 
-    this.tooltip.innerHTML = "";
-    const l1 = document.createElement("div");
-    l1.className = "point-tooltip-label";
-    l1.textContent = `f = ${f} cyc/window`;
-    const l2 = document.createElement("div");
-    l2.className = "point-tooltip-conf";
-    l2.textContent = `period ${period.toFixed(1)} tokens · P(f) = ${power.toPrecision(4)}`;
-    const l3 = document.createElement("div");
-    l3.className = "point-tooltip-conf";
-    l3.textContent = `${dimCount} of ${this.bundle.per_dim_dominant.length} dims peak here`;
-    this.tooltip.append(l1, l2, l3);
-    this.tooltip.style.visibility = "visible";
-    const px = Math.min(x + 14, this.cssW - 250);
-    const py = Math.min(y + 14, this.cssH - 60);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    if (f !== this.hoverF) {
+      this.hoverF = f;
+      this.pushLayers();
+    }
+    const rows: TipRow[] = [
+      { kind: "label", text: `f = ${f} cyc/window`, swatch: GOLD },
+      { text: "P(f)", value: power.toPrecision(4), hot: true },
+      { text: "period", value: `${period.toFixed(1)} tokens` },
+      { text: `${dimCount} of ${this.bundle.per_dim_dominant.length} dims peak here` },
+    ];
+    this.tooltip.show(rows);
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
   }
 
   private hideTip(): void {
-    if (this.tooltip) this.tooltip.style.visibility = "hidden";
+    this.tooltip?.hide();
     this.canvas.style.cursor = "";
+    if (this.hoverF != null) {
+      this.hoverF = null;
+      this.pushLayers();
+    }
   }
 
   private viewState() {
@@ -356,7 +412,7 @@ export class FourierAtlasDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.axisRoot?.remove();
     this.deck?.finalize();
     this.deck = null;

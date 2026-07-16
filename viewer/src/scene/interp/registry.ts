@@ -191,10 +191,12 @@ export const INTERP_FEATURES: InterpFeature[] = [
     ],
     note: "x is a measured sample (5 prompts, 40 rows — stated) · y is pure weights",
     legendCorner: "br",
+    linksTo: ["head"],
     create: () => new HeadFingerprintDriver(),
   },
   {
     id: "ov-eigen",
+    linksTo: ["head"],
     n: 2,
     label: "OV Eigenvalue Constellation",
     group: "weights",
@@ -233,6 +235,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
   },
   {
     id: "comp-web",
+    linksTo: ["head"],
     n: 2,
     label: "Composition Web",
     group: "weights",
@@ -273,6 +276,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
   },
   {
     id: "induction-microscope",
+    linksTo: ["head"],
     n: 2,
     label: "Induction Microscope",
     group: "forward",
@@ -315,6 +319,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
   },
   {
     id: "ablation-ghosts",
+    linksTo: ["head"],
     n: 17,
     label: "Ablation Ghosts",
     group: "forward",
@@ -534,6 +539,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
   },
   {
     id: "logit-attrib",
+    linksTo: ["head"],
     n: 13,
     label: "Logit Attribution",
     group: "forward",
@@ -658,6 +664,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
   },
   {
     id: "sae-decoder",
+    linksTo: ["saeFeature"],
     n: 5,
     label: "SAE Decoder Constellation",
     group: "sae",
@@ -693,6 +700,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
   },
   {
     id: "sae-piano-roll",
+    linksTo: ["saeFeature"],
     n: 4,
     label: "SAE Firing Piano-Roll",
     group: "sae",
@@ -731,6 +739,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
   },
   {
     id: "decoder-cosine-web",
+    linksTo: ["saeFeature"],
     n: 12,
     label: "Decoder Cosine Web",
     group: "sae",
@@ -772,6 +781,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
   },
   {
     id: "direction-compass",
+    linksTo: ["saeFeature"],
     n: 22,
     label: "Direction Compass",
     group: "sae",
@@ -818,6 +828,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
   },
   {
     id: "cofire-venn",
+    linksTo: ["saeFeature"],
     n: 24,
     label: "Co-Firing Venn",
     group: "sae",

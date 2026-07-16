@@ -18,6 +18,16 @@
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
 import { loadTrace, type TraceBundle } from "../../data/interp";
+import {
+  GRID_RGBA,
+  MARKER_HOT,
+  markerPoly,
+  type RGB,
+  type Vec2,
+  withAlpha,
+  dashedSegment,
+} from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -65,7 +75,7 @@ export class ResidualRibbonDriver implements InterpDriver {
   private makeView!: () => OrthographicView;
   private canvas!: HTMLCanvasElement;
   private overlay!: HTMLElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private axisRoot!: HTMLElement;
 
@@ -77,6 +87,7 @@ export class ResidualRibbonDriver implements InterpDriver {
   private logMin = 0;
   private logMax = 1;
   private hoverTok = -1;
+  private hoverMark: Vec2 | null = null; // world point of the hovered (token,layer) node
 
   private cssW = 1;
   private cssH = 1;
@@ -100,10 +111,7 @@ export class ResidualRibbonDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-rs-labels";
     overlay.appendChild(this.labelRoot);
@@ -196,23 +204,36 @@ export class ResidualRibbonDriver implements InterpDriver {
 
   private pushLayers(): void {
     if (!this.deck) return;
-    const { PathLayer, PolygonLayer, ScatterplotLayer } = this.layersMod;
+    const { PathLayer, PolygonLayer, ScatterplotLayer, SolidPolygonLayer } = this.layersMod;
     const hv = this.hoverTok;
-    // decade gridlines at norm = 10^k inside the data range
+    const wpp = this.worldPerPx();
+    // decade gridlines at norm = 10^k inside the data range — subtle DASHED
+    // hairlines now (req 5); dash geometry authored in px, scaled to world.
     const grid: { path: [number, number][] }[] = [];
     const kLo = Math.ceil(this.logMin);
     const kHi = Math.floor(this.logMax);
     for (let k = kLo; k <= kHi; k++) {
       const y = this.yAt(10 ** k);
-      grid.push({ path: [[0, y], [SPAN_X, y]] });
+      for (const s of dashedSegment([0, y], [SPAN_X, y], 3 * wpp, 6 * wpp)) {
+        grid.push({ path: [s.source, s.target] });
+      }
     }
-    // per-layer vertical guides
+    // per-layer vertical guides, likewise dashed
     const nAxis = this.nLayer;
     const vguides: { path: [number, number][] }[] = [];
     for (let l = 0; l <= nAxis; l++) {
       const x = this.xAt(l, nAxis);
-      vguides.push({ path: [[x, 0], [x, SPAN_Y]] });
+      for (const s of dashedSegment([x, 0], [x, SPAN_Y], 3 * wpp, 6 * wpp)) {
+        vguides.push({ path: [s.source, s.target] });
+      }
     }
+    // sharp LED marker locked onto the hovered (token, layer) node (req 4)
+    const marks = this.hoverMark
+      ? [
+          { poly: markerPoly(this.hoverMark[0], this.hoverMark[1], 8 * wpp), color: withAlpha(MARKER_HOT, 0.22) },
+          { poly: markerPoly(this.hoverMark[0], this.hoverMark[1], 4 * wpp), color: withAlpha(MARKER_HOT, 1) },
+        ]
+      : [];
 
     // Fill only the hovered ribbon — overlapping translucent areas would merge
     // into a muddy mass and misrepresent individual values. By default the chart
@@ -228,7 +249,7 @@ export class ResidualRibbonDriver implements InterpDriver {
           id: "rs-vguides",
           data: vguides,
           getPath: (d) => d.path,
-          getColor: [140, 150, 175, 20],
+          getColor: GRID_RGBA,
           getWidth: 1,
           widthUnits: "pixels",
           pickable: false,
@@ -237,7 +258,7 @@ export class ResidualRibbonDriver implements InterpDriver {
           id: "rs-grid",
           data: grid,
           getPath: (d) => d.path,
-          getColor: [148, 140, 165, 40],
+          getColor: GRID_RGBA,
           getWidth: 1,
           widthUnits: "pixels",
           pickable: false,
@@ -279,8 +300,20 @@ export class ResidualRibbonDriver implements InterpDriver {
           pickable: true,
           updateTriggers: { getFillColor: hv, getRadius: hv },
         }),
+        new SolidPolygonLayer<{ poly: Vec2[]; color: [number, number, number, number] }>({
+          id: "rs-marker",
+          data: marks,
+          getPolygon: (d) => d.poly,
+          getFillColor: (d) => d.color,
+          pickable: false,
+        }),
       ],
     });
+  }
+
+  /** World units per screen pixel — pixel-authored dashes/markers scaled to world. */
+  private worldPerPx(): number {
+    return 1 / this.zoomPx();
   }
 
   // ---- layout (asymmetric gutters; world box centered in the plot area) ------
@@ -420,38 +453,44 @@ export class ResidualRibbonDriver implements InterpDriver {
       layer = Math.max(0, Math.min(this.nLayer, Math.round((wx / SPAN_X) * this.nLayer)));
       norm = this.bundle.resid_norm[layer]![tok]!;
     }
+    const mark: Vec2 = [this.xAt(layer, this.nLayer), this.yAt(norm)];
+    const markChanged =
+      !this.hoverMark || this.hoverMark[0] !== mark[0] || this.hoverMark[1] !== mark[1];
     if (tok !== this.hoverTok) {
       this.hoverTok = tok;
+      this.hoverMark = mark;
       this.pushLayers();
       this.positionLabels();
+    } else if (markChanged) {
+      this.hoverMark = mark;
+      this.pushLayers();
     }
     const rb = this.ribbons[tok]!;
     const growth = rb.embedNorm > 0 ? rb.finalNorm / rb.embedNorm : 0;
-    this.tooltip.innerHTML = "";
-    const l1 = document.createElement("div");
-    l1.className = "point-tooltip-label";
-    l1.textContent = `“${rb.tokenStr}” · ${layer === 0 ? "embedding" : `after block ${layer}`}`;
-    const l2 = document.createElement("div");
-    l2.className = "point-tooltip-conf";
-    l2.textContent = `‖x‖₂ = ${norm.toFixed(2)}`;
-    const l3 = document.createElement("div");
-    l3.className = "point-tooltip-conf";
-    l3.textContent = `embed ${rb.embedNorm.toFixed(1)} → final ${rb.finalNorm.toFixed(1)} (×${growth.toFixed(1)}) · peak ${rb.peakNorm.toFixed(0)} @ ${rb.peakLayer === 0 ? "emb" : `L${rb.peakLayer}`}`;
-    this.tooltip.append(l1, l2, l3);
-    this.tooltip.style.visibility = "visible";
-    const px = Math.min(x + 14, this.cssW - 280);
-    const py = Math.min(y + 14, this.cssH - 66);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    const swatch: RGB = [rb.rgb[0], rb.rgb[1], rb.rgb[2]];
+    this.tooltip.show([
+      {
+        kind: "label",
+        text: `“${rb.tokenStr}” · ${layer === 0 ? "embedding" : `after block ${layer}`}`,
+        swatch,
+      },
+      { text: "‖x‖₂", value: norm.toFixed(2), hot: true },
+      {
+        text: `embed ${rb.embedNorm.toFixed(1)} → final ${rb.finalNorm.toFixed(1)} (×${growth.toFixed(1)}) · peak ${rb.peakNorm.toFixed(0)} @ ${rb.peakLayer === 0 ? "emb" : `L${rb.peakLayer}`}`,
+      },
+    ]);
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
   }
 
   private onLeave(): void {
     if (this.hoverTok !== -1) {
       this.hoverTok = -1;
+      this.hoverMark = null;
       this.pushLayers();
       this.positionLabels();
     }
-    if (this.tooltip) this.tooltip.style.visibility = "hidden";
+    this.tooltip?.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -476,7 +515,7 @@ export class ResidualRibbonDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.axisRoot?.remove();
     this.deck?.finalize();

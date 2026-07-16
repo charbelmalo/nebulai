@@ -13,7 +13,19 @@
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
+import { appStore, type InterpSelection } from "../../app/store";
 import { type SAEBundle, type SAEWebBundle, loadSAE, loadSAEWeb } from "../../data/interp";
+import {
+  AXIS_RGBA,
+  dashedSegment,
+  HOT,
+  MARKER_HOT,
+  markerPoly,
+  type RGB,
+  type Vec2,
+  withAlpha,
+} from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -23,9 +35,10 @@ const GR = 16;
 const GT = 96; // px — header summary
 const GB = 92; // px — twin-pair chips + collapsed legend pill
 
-const AMBER: [number, number, number] = [245, 195, 59];
+// mutual-pair points use the warm scene highlight (== ramp-0 / --data-hot);
+// non-mutual features are slate. Categorical, so slate stays a local literal.
+const AMBER: RGB = HOT;
 const SLATE: [number, number, number] = [138, 146, 178];
-const GUIDE: [number, number, number, number] = [118, 126, 158, 130];
 
 interface Pt {
   i: number; // feature index
@@ -41,7 +54,7 @@ export class SAEWebDriver implements InterpDriver {
   private deck: Deck<OrthographicView[]> | null = null;
   private layersMod!: LayersModule;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private chipRoot!: HTMLElement;
 
@@ -52,6 +65,8 @@ export class SAEWebDriver implements InterpDriver {
   private layoutGen = 0; // bumped per layout — updateTrigger for accessors
   private hover: number | null = null; // feature index
   private sel: [number, number] | null = null; // pinned pair
+  /** feature id the global cross-view selection pinned here (as [id, nn]) */
+  private linked: number | null = null;
 
   private cssW = 1;
   private cssH = 1;
@@ -73,10 +88,7 @@ export class SAEWebDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-neuron-labels";
     overlay.appendChild(this.labelRoot);
@@ -188,7 +200,7 @@ export class SAEWebDriver implements InterpDriver {
 
   private pushLayers(): void {
     if (!this.deck || !this.web) return;
-    const { ScatterplotLayer, LineLayer } = this.layersMod;
+    const { ScatterplotLayer, LineLayer, SolidPolygonLayer } = this.layersMod;
     const web = this.web;
     const b = web.meta.baseline;
 
@@ -199,19 +211,32 @@ export class SAEWebDriver implements InterpDriver {
     const selSegs: Seg[] = this.sel ? [pair(this.sel[0], this.sel[1])] : [];
     const hovSegs: Seg[] =
       this.hover != null ? [pair(this.hover, web.nn_idx[this.hover] ?? this.hover)] : [];
-    const rings: { i: number; hov: boolean }[] = [];
-    if (this.sel) rings.push({ i: this.sel[0], hov: false }, { i: this.sel[1], hov: false });
-    if (this.hover != null) {
-      rings.push(
-        { i: this.hover, hov: true },
-        { i: web.nn_idx[this.hover] ?? this.hover, hov: true },
-      );
+    // active markers: pinned pair in amber, hovered pair in red LED — sharp
+    // diamonds (glow + core) replacing the old stroked outline rings (req 4).
+    interface Marker {
+      poly: Vec2[];
+      color: [number, number, number, number];
     }
-    // measured random-pair baseline guides — the yardstick lines
-    const guides: Seg[] = [b.mean, b.p99, b.p999].map((v) => ({
-      source: [GL, this.yOf(v)],
-      target: [GL + this.plotW(), this.yOf(v)],
-    }));
+    const marks: Marker[] = [];
+    const led = (i: number, rgb: RGB) => {
+      const cx = this.px[i * 2] ?? 0;
+      const cy = this.px[i * 2 + 1] ?? 0;
+      marks.push({ poly: markerPoly(cx, cy, 5 * 2.1), color: withAlpha(rgb, 0.22) });
+      marks.push({ poly: markerPoly(cx, cy, 5), color: withAlpha(rgb, 1) });
+    };
+    if (this.sel) {
+      led(this.sel[0], AMBER);
+      led(this.sel[1], AMBER);
+    }
+    if (this.hover != null) {
+      led(this.hover, MARKER_HOT);
+      led(web.nn_idx[this.hover] ?? this.hover, MARKER_HOT);
+    }
+    // measured random-pair baseline guides — the yardstick lines, now DASHED
+    // hairlines (req 5) in the stronger axis hairline color.
+    const guides: Seg[] = [b.mean, b.p99, b.p999].flatMap((v) =>
+      dashedSegment([GL, this.yOf(v)], [GL + this.plotW(), this.yOf(v)]),
+    );
 
     this.deck.setProps({
       layers: [
@@ -220,7 +245,7 @@ export class SAEWebDriver implements InterpDriver {
           data: guides,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: GUIDE,
+          getColor: AXIS_RGBA,
           getWidth: 1,
           widthUnits: "pixels",
           updateTriggers: { getSourcePosition: this.layoutGen, getTargetPosition: this.layoutGen },
@@ -229,6 +254,8 @@ export class SAEWebDriver implements InterpDriver {
         new ScatterplotLayer<Pt>({
           id: "web-pts",
           data: this.pts,
+          // field defers to the focused pair on hover (req 3)
+          opacity: this.hover != null ? 0.4 : 1,
           getPosition: (p) => [this.px[p.i * 2] ?? 0, this.px[p.i * 2 + 1] ?? 0, 0],
           getFillColor: (p) =>
             web.mutual[p.i]
@@ -254,23 +281,16 @@ export class SAEWebDriver implements InterpDriver {
           data: hovSegs,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: [255, 255, 255, 200],
+          getColor: withAlpha(MARKER_HOT, 0.85),
           getWidth: 1.2,
           widthUnits: "pixels",
           pickable: false,
         }),
-        new ScatterplotLayer<{ i: number; hov: boolean }>({
+        new SolidPolygonLayer<Marker>({
           id: "web-rings",
-          data: rings,
-          getPosition: (r) => [this.px[r.i * 2] ?? 0, this.px[r.i * 2 + 1] ?? 0, 0],
-          getFillColor: [0, 0, 0, 0],
-          getLineColor: (r) => (r.hov ? [255, 255, 255, 220] : [AMBER[0], AMBER[1], AMBER[2], 230]),
-          getRadius: 5,
-          radiusUnits: "pixels",
-          stroked: true,
-          filled: false,
-          getLineWidth: 1.4,
-          lineWidthUnits: "pixels",
+          data: marks,
+          getPolygon: (m) => m.poly,
+          getFillColor: (m) => m.color,
           pickable: false,
         }),
       ],
@@ -451,39 +471,30 @@ export class SAEWebDriver implements InterpDriver {
       this.pushLayers();
     }
     if (i == null) {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
     const j = web.nn_idx[i] ?? i;
-    this.tooltip.innerHTML = "";
-    const add = (cls: string, text: string) => {
-      const el = document.createElement("div");
-      el.className = cls;
-      el.textContent = text;
-      this.tooltip.appendChild(el);
-    };
-    add(
-      "point-tooltip-label",
-      `#${i} — nn cos ${(web.nn_cos[i] ?? 0).toFixed(4)} → #${j}${web.mutual[i] ? " · mutual" : ""}`,
-    );
-    add(
-      "point-tooltip-conf",
-      `#${i}: fires ${pct(sae.log_sparsity[i] ?? -10)} · ↑“${vis(sae.top_tok[i] ?? "")}” ${(sae.top_val[i] ?? 0).toFixed(2)}`,
-    );
-    add(
-      "point-tooltip-conf",
-      `#${j}: fires ${pct(sae.log_sparsity[j] ?? -10)} · ↑“${vis(sae.top_tok[j] ?? "")}” ${(sae.top_val[j] ?? 0).toFixed(2)}`,
-    );
-    add(
-      "point-tooltip-conf",
-      `random-pair mean ${this.web?.meta.baseline.mean} · p99.9 ${this.web?.meta.baseline.p999} · click to pin the pair`,
-    );
-    this.tooltip.style.visibility = "visible";
+    const rows: TipRow[] = [
+      {
+        kind: "label",
+        text: `#${i} — nn cos ${(web.nn_cos[i] ?? 0).toFixed(4)} → #${j}${web.mutual[i] ? " · mutual" : ""}`,
+        swatch: web.mutual[i] ? AMBER : SLATE,
+      },
+      {
+        text: `#${i}: fires ${pct(sae.log_sparsity[i] ?? -10)} · ↑“${vis(sae.top_tok[i] ?? "")}” ${(sae.top_val[i] ?? 0).toFixed(2)}`,
+      },
+      {
+        text: `#${j}: fires ${pct(sae.log_sparsity[j] ?? -10)} · ↑“${vis(sae.top_tok[j] ?? "")}” ${(sae.top_val[j] ?? 0).toFixed(2)}`,
+      },
+      {
+        text: `random-pair mean ${this.web?.meta.baseline.mean} · p99.9 ${this.web?.meta.baseline.p999} · click to pin the pair`,
+      },
+    ];
+    this.tooltip.show(rows);
     const rect = this.canvas.getBoundingClientRect();
-    const px = Math.min(e.clientX - rect.left + 14, this.cssW - 330);
-    const py = Math.min(e.clientY - rect.top + 14, this.cssH - 110);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    this.tooltip.move(e.clientX - rect.left, e.clientY - rect.top, this.cssW, this.cssH);
     this.canvas.style.cursor = "pointer";
   }
 
@@ -495,6 +506,31 @@ export class SAEWebDriver implements InterpDriver {
     const j = web.nn_idx[i] ?? i;
     const same = this.sel && this.sel[0] === i && this.sel[1] === j;
     this.sel = same ? null : [i, j];
+    // publish the pinned feature as the global cross-view selection
+    appStore.getState().setInterpSelection(same ? null : { kind: "saeFeature", id: i });
+    this.buildChips();
+    this.pushLayers();
+    this.positionLabels();
+  }
+
+  /** Cross-view link: follow a global SAE-feature selection by pinning that
+   *  feature with its nearest neighbor (the same pair a direct click pins). */
+  setSelection(sel: InterpSelection | null): void {
+    const web = this.web;
+    if (!web) return;
+    const id = sel?.kind === "saeFeature" && sel.id < web.nn_idx.length ? sel.id : null;
+    if (id === this.linked && (id === null || this.sel?.[0] === id)) return;
+    const prev = this.linked;
+    this.linked = id;
+    if (id !== null) {
+      if (this.sel?.[0] === id) return;
+      this.sel = [id, web.nn_idx[id] ?? id];
+    } else if (prev !== null && this.sel?.[0] === prev) {
+      // only clear a pin the link itself created/mirrors
+      this.sel = null;
+    } else {
+      return;
+    }
     this.buildChips();
     this.pushLayers();
     this.positionLabels();
@@ -505,7 +541,7 @@ export class SAEWebDriver implements InterpDriver {
       this.hover = null;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -533,7 +569,7 @@ export class SAEWebDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.chipRoot?.remove();
     this.deck?.finalize();

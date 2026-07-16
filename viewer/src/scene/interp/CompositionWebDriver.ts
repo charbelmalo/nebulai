@@ -16,7 +16,10 @@
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
+import { appStore, type InterpSelection } from "../../app/store";
 import { type CompBundle, loadComp } from "../../data/interp";
+import { HOT, MARKER_HOT } from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -55,7 +58,7 @@ export class CompositionWebDriver implements InterpDriver {
   private deck: Deck<OrthographicView[]> | null = null;
   private layersMod!: LayersModule;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private chipRoot!: HTMLElement;
 
@@ -69,6 +72,8 @@ export class CompositionWebDriver implements InterpDriver {
   private nodes: Node[] = [];
   private arcs: Arc[] = [];
   private isolate: Node | null = null; // click-pinned head
+  /** head the global cross-view selection pinned here (isolate = follow) */
+  private linked: Node | null = null;
   private hoverArc: Arc | null = null;
   private hoverNode: Node | null = null;
 
@@ -92,10 +97,7 @@ export class CompositionWebDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-neuron-labels";
     overlay.appendChild(this.labelRoot);
@@ -244,7 +246,6 @@ export class CompositionWebDriver implements InterpDriver {
   private pushLayers(): void {
     if (!this.deck || !this.bundle) return;
     const { PathLayer, ScatterplotLayer } = this.layersMod;
-    const focus = this.isolate ?? this.hoverNode;
     // participation at the current threshold is data-derived, so it may show
     const active = new Set<string>();
     for (const a of this.arcs) {
@@ -274,7 +275,10 @@ export class CompositionWebDriver implements InterpDriver {
           radiusUnits: "pixels",
           getFillColor: (n) => {
             const on = active.has(`${n.layer}:${n.head}`);
-            if (this.sameNode(n, focus)) return [255, 255, 255, 240];
+            // pinned head → warm HOT core; transient hover → red LED (req 3/4),
+            // so a click-pin reads distinctly from a passing hover
+            if (this.sameNode(n, this.isolate)) return [HOT[0], HOT[1], HOT[2], 240];
+            if (this.sameNode(n, this.hoverNode)) return [MARKER_HOT[0], MARKER_HOT[1], MARKER_HOT[2], 240];
             return on ? [166, 173, 200, 200] : [118, 126, 158, 80];
           },
           pickable: true,
@@ -334,7 +338,7 @@ export class CompositionWebDriver implements InterpDriver {
   private reflow(): void {
     this.hoverArc = null;
     this.hoverNode = null;
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.layout();
     this.buildChips();
     this.pushLayers();
@@ -417,40 +421,38 @@ export class CompositionWebDriver implements InterpDriver {
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    this.tooltip.innerHTML = "";
-    const add = (cls: string, text: string) => {
-      const el = document.createElement("div");
-      el.className = cls;
-      el.textContent = text;
-      this.tooltip.appendChild(el);
-    };
+    const rows: TipRow[] = [];
     if (arc) {
-      add("point-tooltip-label", `L${arc.i}H${arc.h1} → L${arc.j}H${arc.h2}`);
-      add("point-tooltip-conf", `${this.type.toUpperCase()}-comp ${arc.s.toFixed(4)} · ${arc.ratio.toFixed(1)}× random floor`);
+      const cc = this.arcColor(arc);
       const pi = b.layer_pairs.findIndex(([i, j]) => i === arc.i && j === arc.j);
       const others = (["q", "k", "v"] as CompType[]).filter((t) => t !== this.type);
-      add(
-        "point-tooltip-conf",
-        others.map((t) => `${t.toUpperCase()} ${(b[t][this.flatIdx(pi, arc.h1, arc.h2)] ?? 0).toFixed(4)}`).join(" · "),
+      rows.push(
+        { kind: "label", text: `L${arc.i}H${arc.h1} → L${arc.j}H${arc.h2}`, swatch: [cc[0], cc[1], cc[2]] },
+        { text: `${this.type.toUpperCase()}-comp`, value: arc.s.toFixed(4), hot: true },
+        { text: "× random floor", value: `${arc.ratio.toFixed(1)}×` },
+        {
+          text: others.map((t) => `${t.toUpperCase()} ${(b[t][this.flatIdx(pi, arc.h1, arc.h2)] ?? 0).toFixed(4)}`).join(" · "),
+        },
       );
     } else if (node) {
-      add("point-tooltip-label", `L${node.layer} · head ${node.head}`);
       const { best, count } = this.strongest(node);
-      add("point-tooltip-conf", `${count} arc${count === 1 ? "" : "s"} at ≥${this.thresh}× floor (${this.type.toUpperCase()})`);
+      const swatch = this.sameNode(this.isolate, node) ? HOT : MARKER_HOT;
+      rows.push(
+        { kind: "label", text: `L${node.layer} · head ${node.head}`, swatch },
+        { text: `arcs ≥${this.thresh}× floor (${this.type.toUpperCase()})`, value: String(count), hot: true },
+      );
       if (best) {
         const dir = best.i === node.layer && best.h1 === node.head ? `→ L${best.j}H${best.h2}` : `← L${best.i}H${best.h1}`;
-        add("point-tooltip-conf", `strongest ${dir} · ${best.s.toFixed(4)} (${best.ratio.toFixed(1)}×)`);
+        rows.push({ text: `strongest ${dir}`, value: `${best.s.toFixed(4)} (${best.ratio.toFixed(1)}×)` });
       }
-      add("point-tooltip-conf", this.sameNode(this.isolate, node) ? "click to release" : "click to isolate");
+      rows.push({ text: this.sameNode(this.isolate, node) ? "click to release" : "click to isolate" });
     } else {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
-    this.tooltip.style.visibility = "visible";
-    const px = Math.min(x + 14, this.cssW - 300);
-    const py = Math.min(y + 14, this.cssH - 100);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    this.tooltip.show(rows);
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "pointer";
   }
 
@@ -474,6 +476,33 @@ export class CompositionWebDriver implements InterpDriver {
     } else {
       return;
     }
+    // publish the pin as the global cross-view head selection
+    appStore
+      .getState()
+      .setInterpSelection(this.isolate ? { kind: "head", layer: this.isolate.layer, head: this.isolate.head } : null);
+    this.buildChips();
+    this.pushLayers();
+  }
+
+  /** Cross-view link: follow a global head selection by pinning that node. */
+  setSelection(sel: InterpSelection | null): void {
+    const node: Node | null =
+      sel?.kind === "head" && sel.layer < this.nL && sel.head < this.nH
+        ? { layer: sel.layer, head: sel.head, position: this.nodeXY(sel.layer, sel.head) }
+        : null;
+    if (this.sameNode(node, this.linked) && (node === null || this.sameNode(this.isolate, node))) return;
+    const prev = this.linked;
+    this.linked = node;
+    if (node) {
+      if (!this.sameNode(this.isolate, node)) this.isolate = node;
+      else return;
+    } else if (prev && this.sameNode(this.isolate, prev)) {
+      // only clear an isolate the link itself created/mirrors
+      this.isolate = null;
+    } else {
+      return;
+    }
+    if (!this.bundle) return;
     this.buildChips();
     this.pushLayers();
   }
@@ -484,7 +513,7 @@ export class CompositionWebDriver implements InterpDriver {
       this.hoverNode = null;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -513,7 +542,7 @@ export class CompositionWebDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.chipRoot?.remove();
     this.deck?.finalize();

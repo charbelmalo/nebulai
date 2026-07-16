@@ -18,6 +18,8 @@
 import type { Deck, OrthographicView } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
 import { loadTrace, type TraceBundle } from "../../data/interp";
+import { ACCENT, crosshair, MARKER_HOT, withAlpha } from "./chart-theme";
+import { InterpTooltip } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -52,7 +54,7 @@ export class AttentionRolloutDriver implements InterpDriver {
   private makeView!: () => OrthographicView;
   private canvas!: HTMLCanvasElement;
   private overlay!: HTMLElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private ctrlRoot!: HTMLElement;
 
@@ -89,10 +91,7 @@ export class AttentionRolloutDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-roll-labels";
     overlay.appendChild(this.labelRoot);
@@ -194,8 +193,31 @@ export class AttentionRolloutDriver implements InterpDriver {
 
   private pushLayers(): void {
     if (!this.deck) return;
-    const { PolygonLayer } = this.layersMod;
+    const { PolygonLayer, PathLayer } = this.layersMod;
     const T = this.T;
+    // hovered cell: a crisp MARKER_HOT reticle around the tile plus an ACCENT
+    // crosshair through its centre (req 4). Dashes are authored in pixels and
+    // scaled into this driver's world space (1 world unit = 1 cell).
+    const hover = this.hover;
+    const wpp = 1 / this.zoomPx();
+    const hoverPath: { path: [number, number][] }[] = [];
+    const cross: { path: [number, number][] }[] = [];
+    if (hover) {
+      const x = hover.j;
+      const y = T - hover.i - 1;
+      hoverPath.push({
+        path: [
+          [x, y],
+          [x + 1, y],
+          [x + 1, y + 1],
+          [x, y + 1],
+          [x, y],
+        ],
+      });
+      for (const s of crosshair(x + 0.5, y + 0.5, { x0: 0, y0: 0, x1: T, y1: T }, 4 * wpp, 5 * wpp)) {
+        cross.push({ path: [s.source, s.target] });
+      }
+    }
     this.deck.setProps({
       layers: [
         new PolygonLayer<Cell>({
@@ -222,6 +244,24 @@ export class AttentionRolloutDriver implements InterpDriver {
           updateTriggers: {
             getFillColor: `${this.depth}|${this.selRow}|${this.hover ? `${this.hover.i},${this.hover.j}` : "x"}`,
           },
+        }),
+        new PathLayer<{ path: [number, number][] }>({
+          id: "roll-crosshair",
+          data: cross,
+          getPath: (d) => d.path,
+          getColor: withAlpha(ACCENT, 0.5),
+          getWidth: 1,
+          widthUnits: "pixels",
+          pickable: false,
+        }),
+        new PathLayer<{ path: [number, number][] }>({
+          id: "roll-hover",
+          data: hoverPath,
+          getPath: (d) => d.path,
+          getColor: withAlpha(MARKER_HOT, 0.86),
+          getWidth: 1.4,
+          widthUnits: "pixels",
+          pickable: false,
         }),
       ],
     });
@@ -386,27 +426,30 @@ export class AttentionRolloutDriver implements InterpDriver {
     const v = this.valOf(cell.i, cell.j);
     const dst = fmtTok(b.token_strs[cell.i] ?? "");
     const src = fmtTok(b.token_strs[cell.j] ?? "");
-    this.tooltip.innerHTML = "";
-    const l1 = document.createElement("div");
-    l1.className = "point-tooltip-label";
-    l1.textContent = `dst “${dst}” ← src “${src}”`;
-    const l2 = document.createElement("div");
-    l2.className = "point-tooltip-conf";
-    l2.textContent = `rollout = ${v.toFixed(4)} · through L${this.depth} · pos ${cell.j}→${cell.i}`;
-    this.tooltip.append(l1, l2);
-    this.tooltip.style.visibility = "visible";
+    // swatch = the exact log-normalized ramp color this cell was drawn with
+    const t =
+      v <= LOG_FLOOR
+        ? 0
+        : Math.min(1, (Math.log10(v) - Math.log10(LOG_FLOOR)) / -Math.log10(LOG_FLOOR));
+    const [sr, sg, sb] = ramp(t);
+    this.tooltip.show([
+      { kind: "label", text: `dst “${dst}” ← src “${src}”`, swatch: [sr, sg, sb] },
+      { text: "rollout", value: v.toFixed(4), hot: true },
+      { text: "through", value: `L${this.depth}` },
+      { text: "pos", value: `${cell.j}→${cell.i}` },
+    ]);
     const rect = this.canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const px = Math.min(x + 14, this.cssW - 250);
-    const py = Math.min(y + 14, this.cssH - 52);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    this.tooltip.move(e.clientX - rect.left, e.clientY - rect.top, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
   }
 
   private hideTip(): void {
-    if (this.tooltip) this.tooltip.style.visibility = "hidden";
+    this.tooltip?.hide();
     this.canvas.style.cursor = "";
+    if (this.hover) {
+      this.hover = null;
+      this.pushLayers();
+    }
   }
 
   frame(_dt: number, _t: number): void {
@@ -430,7 +473,7 @@ export class AttentionRolloutDriver implements InterpDriver {
     this.stopPlay();
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.ctrlRoot?.remove();
     this.deck?.finalize();

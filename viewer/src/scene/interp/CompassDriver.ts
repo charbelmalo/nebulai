@@ -15,7 +15,24 @@
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
+import { appStore, type InterpSelection } from "../../app/store";
 import { type CompassBundle, type SAEBundle, loadCompass, loadSAE } from "../../data/interp";
+import {
+  ACCENT,
+  AXIS_RGBA,
+  crosshair,
+  dashedSegment,
+  GRID_RGBA,
+  HOT,
+  MARKER_HOT,
+  markerPoly,
+  markerRing,
+  type RGB,
+  type Seg as ThemeSeg,
+  type Vec2,
+  withAlpha,
+} from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 import { LAYER_COLORS } from "./NeuronFieldDriver";
 
@@ -26,17 +43,8 @@ const GR = 16;
 const GT = 96; // px — header summary
 const GB = 92; // px — exemplar chips + collapsed legend pill
 
-const AMBER: [number, number, number] = [245, 195, 59];
-const GUIDE: [number, number, number, number] = [118, 126, 158, 130];
-const DIAG: [number, number, number, number] = [138, 146, 178, 90];
-
 interface Pt {
   i: number; // feature index
-}
-
-interface Seg {
-  source: [number, number];
-  target: [number, number];
 }
 
 export class CompassDriver implements InterpDriver {
@@ -44,7 +52,7 @@ export class CompassDriver implements InterpDriver {
   private deck: Deck<OrthographicView[]> | null = null;
   private layersMod!: LayersModule;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private chipRoot!: HTMLElement;
 
@@ -55,6 +63,8 @@ export class CompassDriver implements InterpDriver {
   private layoutGen = 0;
   private hover: number | null = null; // feature index
   private sel: number | null = null; // pinned feature
+  /** feature id the global cross-view selection pinned here */
+  private linked: number | null = null;
   private nAsNeuron = 0; // nc > 0.9
   private nInBox = 0; // both cosines below the random p99
   private aboveFrac = 0; // fraction with nc > tc (above the diagonal)
@@ -79,10 +89,7 @@ export class CompassDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-neuron-labels";
     overlay.appendChild(this.labelRoot);
@@ -179,60 +186,102 @@ export class CompassDriver implements InterpDriver {
 
   private pushLayers(): void {
     if (!this.deck || !this.com) return;
-    const { ScatterplotLayer, LineLayer } = this.layersMod;
+    const { ScatterplotLayer, LineLayer, SolidPolygonLayer } = this.layersMod;
     const com = this.com;
     const b = com.meta.baseline;
+    const plotBounds = {
+      x0: GL,
+      y0: GT,
+      x1: GL + this.plotW(),
+      y1: GT + this.plotH(),
+    };
 
     // measured random-direction baselines: horizontal for the neuron family,
-    // vertical for the token family — the box near the origin is "random"
-    const guides: Seg[] = [
-      ...[b.neuron.mean, b.neuron.p99].map(
-        (v): Seg => ({
-          source: [GL, this.yOf(v)],
-          target: [GL + this.plotW(), this.yOf(v)],
-        }),
+    // vertical for the token family — the box near the origin is "random".
+    // Rendered as low-opacity DASHED hairlines so the structure never competes
+    // with the point field (req 5).
+    const guides: ThemeSeg[] = [
+      ...[b.neuron.mean, b.neuron.p99].flatMap((v) =>
+        dashedSegment([GL, this.yOf(v)], [GL + this.plotW(), this.yOf(v)]),
       ),
-      ...[b.token.mean, b.token.p99].map(
-        (v): Seg => ({
-          source: [this.xOf(v), GT],
-          target: [this.xOf(v), GT + this.plotH()],
-        }),
+      ...[b.token.mean, b.token.p99].flatMap((v) =>
+        dashedSegment([this.xOf(v), GT], [this.xOf(v), GT + this.plotH()]),
       ),
     ];
-    const diag: Seg[] = [
-      { source: [this.xOf(0), this.yOf(0)], target: [this.xOf(1), this.yOf(1)] },
-    ];
-    const rings: { i: number; hov: boolean }[] = [];
-    if (this.sel != null) rings.push({ i: this.sel, hov: false });
-    if (this.hover != null) rings.push({ i: this.hover, hov: true });
+    const diag: ThemeSeg[] = dashedSegment([this.xOf(0), this.yOf(0)], [this.xOf(1), this.yOf(1)]);
+    // crosshair guides snapping onto the hovered point (req 4)
+    const cross: ThemeSeg[] =
+      this.hover != null
+        ? crosshair(this.px[this.hover * 2] ?? 0, this.px[this.hover * 2 + 1] ?? 0, plotBounds)
+        : [];
+
+    // active markers: pinned in amber, hovered in the red LED — sharp diamonds,
+    // not soft circles (req 4). Each is a bright core over a translucent glow.
+    interface Marker {
+      cx: number;
+      cy: number;
+      color: RGB;
+      r: number;
+    }
+    const markers: Marker[] = [];
+    if (this.sel != null) {
+      markers.push({ cx: this.px[this.sel * 2] ?? 0, cy: this.px[this.sel * 2 + 1] ?? 0, color: HOT, r: 4 });
+    }
+    if (this.hover != null) {
+      markers.push({ cx: this.px[this.hover * 2] ?? 0, cy: this.px[this.hover * 2 + 1] ?? 0, color: MARKER_HOT, r: 5 });
+    }
+    const seg3 = (e: ThemeSeg) => ({ source: e.source, target: e.target });
+    // hollow reticle ring framing each LED core (the target-lock look): the
+    // marker outline drawn a hair larger than the core, as line segments.
+    const ringSegs: { source: Vec2; target: Vec2; color: [number, number, number, number] }[] =
+      markers.flatMap((m) => {
+        const ring = markerRing(m.cx, m.cy, m.r * 1.7);
+        const out: { source: Vec2; target: Vec2; color: [number, number, number, number] }[] = [];
+        for (let k = 0; k < ring.length - 1; k++) {
+          out.push({ source: ring[k]!, target: ring[k + 1]!, color: withAlpha(m.color, 0.9) });
+        }
+        return out;
+      });
 
     this.deck.setProps({
       layers: [
-        new LineLayer<Seg>({
+        new LineLayer<ThemeSeg>({
           id: "compass-diag",
           data: diag,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: DIAG,
+          getColor: GRID_RGBA,
           getWidth: 1,
           widthUnits: "pixels",
           updateTriggers: { getSourcePosition: this.layoutGen, getTargetPosition: this.layoutGen },
           pickable: false,
         }),
-        new LineLayer<Seg>({
+        new LineLayer<ThemeSeg>({
           id: "compass-guides",
           data: guides,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: GUIDE,
+          getColor: AXIS_RGBA,
           getWidth: 1,
           widthUnits: "pixels",
           updateTriggers: { getSourcePosition: this.layoutGen, getTargetPosition: this.layoutGen },
+          pickable: false,
+        }),
+        new LineLayer<ThemeSeg>({
+          id: "compass-crosshair",
+          data: cross.map(seg3),
+          getSourcePosition: (e) => [e.source[0], e.source[1], 0],
+          getTargetPosition: (e) => [e.target[0], e.target[1], 0],
+          getColor: withAlpha(ACCENT, 0.5),
+          getWidth: 1,
+          widthUnits: "pixels",
           pickable: false,
         }),
         new ScatterplotLayer<Pt>({
           id: "compass-pts",
           data: this.pts,
+          // the field dims to defer to the focused marker on hover (req 3)
+          opacity: this.hover != null ? 0.38 : 1,
           getPosition: (p) => [this.px[p.i * 2] ?? 0, this.px[p.i * 2 + 1] ?? 0, 0],
           getFillColor: (p) => {
             const [r, g, bl] = LAYER_COLORS[this.layerOf(p.i)] ?? [205, 210, 224];
@@ -243,19 +292,28 @@ export class CompassDriver implements InterpDriver {
           updateTriggers: { getPosition: this.layoutGen },
           pickable: true,
         }),
-        new ScatterplotLayer<{ i: number; hov: boolean }>({
-          id: "compass-rings",
-          data: rings,
-          getPosition: (r) => [this.px[r.i * 2] ?? 0, this.px[r.i * 2 + 1] ?? 0, 0],
-          getFillColor: [0, 0, 0, 0],
-          getLineColor: (r) => (r.hov ? [255, 255, 255, 220] : [AMBER[0], AMBER[1], AMBER[2], 230]),
-          getRadius: 5,
-          radiusUnits: "pixels",
-          stroked: true,
-          filled: false,
-          getLineWidth: 1.4,
-          lineWidthUnits: "pixels",
-          updateTriggers: { getPosition: this.layoutGen },
+        new SolidPolygonLayer<Marker>({
+          id: "compass-marker-glow",
+          data: markers,
+          getPolygon: (m) => markerPoly(m.cx, m.cy, m.r * 2.1),
+          getFillColor: (m) => withAlpha(m.color, 0.22),
+          pickable: false,
+        }),
+        new SolidPolygonLayer<Marker>({
+          id: "compass-marker-core",
+          data: markers,
+          getPolygon: (m) => markerPoly(m.cx, m.cy, m.r),
+          getFillColor: (m) => withAlpha(m.color, 1),
+          pickable: false,
+        }),
+        new LineLayer<{ source: Vec2; target: Vec2; color: [number, number, number, number] }>({
+          id: "compass-marker-ring",
+          data: ringSegs,
+          getSourcePosition: (e) => [e.source[0], e.source[1], 0],
+          getTargetPosition: (e) => [e.target[0], e.target[1], 0],
+          getColor: (e) => e.color,
+          getWidth: 1.2,
+          widthUnits: "pixels",
           pickable: false,
         }),
       ],
@@ -481,39 +539,32 @@ export class CompassDriver implements InterpDriver {
       this.pushLayers();
     }
     if (i == null) {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
     const L = this.layerOf(i);
     const unit = (com.ni[i] ?? 0) % com.meta.d_mlp;
     const tok = vis(com.tok_strs[com.ti_u[i] ?? 0] ?? "");
-    this.tooltip.innerHTML = "";
-    const add = (cls: string, text: string) => {
-      const el = document.createElement("div");
-      el.className = cls;
-      el.textContent = text;
-      this.tooltip.appendChild(el);
-    };
-    add(
-      "point-tooltip-label",
-      `#${i} — best neuron L${L}/${unit} · cos ${(com.nc[i] ?? 0).toFixed(4)}`,
-    );
-    if (L >= 8) add("point-tooltip-conf", `L${L} writes AFTER the hook — geometric only, not a source`);
-    add("point-tooltip-conf", `best token “${tok}” · cos ${(com.tc[i] ?? 0).toFixed(4)}`);
-    add(
-      "point-tooltip-conf",
-      `↑“${vis(sae.top_tok[i] ?? "")}” ${(sae.top_val[i] ?? 0).toFixed(2)} · fires ${pct(sae.log_sparsity[i] ?? -10)}`,
-    );
-    add(
-      "point-tooltip-conf",
-      `rand-dir mean: n ${com.meta.baseline.neuron.mean} · t ${com.meta.baseline.token.mean} · click to pin`,
-    );
-    this.tooltip.style.visibility = "visible";
+    const layerColor = LAYER_COLORS[L] ?? [205, 210, 224];
+    const rows: TipRow[] = [
+      {
+        kind: "label",
+        text: `#${i} — best neuron L${L}/${unit} · cos ${(com.nc[i] ?? 0).toFixed(4)}`,
+        swatch: [layerColor[0], layerColor[1], layerColor[2]],
+      },
+    ];
+    if (L >= 8) rows.push({ text: `L${L} writes AFTER the hook — geometric only, not a source` });
+    rows.push({ text: `best token “${tok}” · cos ${(com.tc[i] ?? 0).toFixed(4)}` });
+    rows.push({
+      text: `↑“${vis(sae.top_tok[i] ?? "")}” ${(sae.top_val[i] ?? 0).toFixed(2)} · fires ${pct(sae.log_sparsity[i] ?? -10)}`,
+    });
+    rows.push({
+      text: `rand-dir mean: n ${com.meta.baseline.neuron.mean} · t ${com.meta.baseline.token.mean} · click to pin`,
+    });
+    this.tooltip.show(rows);
     const rect = this.canvas.getBoundingClientRect();
-    const px = Math.min(e.clientX - rect.left + 14, this.cssW - 330);
-    const py = Math.min(e.clientY - rect.top + 14, this.cssH - 120);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    this.tooltip.move(e.clientX - rect.left, e.clientY - rect.top, this.cssW, this.cssH);
     this.canvas.style.cursor = "pointer";
   }
 
@@ -522,6 +573,29 @@ export class CompassDriver implements InterpDriver {
     const i = this.pick(e);
     if (i == null) return;
     this.sel = this.sel === i ? null : i;
+    // publish the pin as the global cross-view SAE-feature selection
+    appStore.getState().setInterpSelection(this.sel === null ? null : { kind: "saeFeature", id: this.sel });
+    this.buildChips();
+    this.pushLayers();
+    this.positionLabels();
+  }
+
+  /** Cross-view link: follow a global SAE-feature selection by pinning it. */
+  setSelection(sel: InterpSelection | null): void {
+    const id = sel?.kind === "saeFeature" && sel.id < (this.com?.meta.d_sae ?? 0) ? sel.id : null;
+    if (id === this.linked && (id === null || this.sel === id)) return;
+    const prev = this.linked;
+    this.linked = id;
+    if (id !== null) {
+      if (this.sel === id) return;
+      this.sel = id;
+    } else if (prev !== null && this.sel === prev) {
+      // only clear a pin the link itself created/mirrors
+      this.sel = null;
+    } else {
+      return;
+    }
+    if (!this.com) return;
     this.buildChips();
     this.pushLayers();
     this.positionLabels();
@@ -532,7 +606,7 @@ export class CompassDriver implements InterpDriver {
       this.hover = null;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -560,7 +634,7 @@ export class CompassDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.chipRoot?.remove();
     this.deck?.finalize();

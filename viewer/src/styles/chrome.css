@@ -193,7 +193,7 @@ body {
   backdrop-filter: var(--glass-blur);
   box-shadow: var(--shadow-float);
   pointer-events: none;
-  will-change: transform;
+  will-change: transform, translate;
 }
 
 .point-tooltip-label {
@@ -868,6 +868,53 @@ body {
   outline-offset: 1px;
 }
 
+/* share/export tools — icon pills left of the settings entry */
+.topbar-tools {
+  position: absolute;
+  top: 24px;
+  right: 138px;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.topbar-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 33px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out);
+}
+
+.topbar-tool:hover,
+.topbar-tool:focus-visible {
+  color: var(--text);
+  border-color: var(--hairline-strong);
+}
+
+.topbar-tool:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.topbar-tool.is-flash {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.topbar-tool:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .sidebar-more {
   padding: 8px 12px;
   border: 1px dashed var(--hairline-strong);
@@ -1346,6 +1393,9 @@ body {
   }
   .topbar-settings span {
     display: none;
+  }
+  .topbar-tools {
+    right: 86px;
   }
 }
 
@@ -2208,6 +2258,172 @@ body.page-sessions #stage {
   color: var(--text);
 }
 
+/* 2a — cross-view linking chrome: the rail badge marks views that can follow
+   the current pick; the pill names the pick and clears it */
+.interp-feature-link {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.interp-linkpill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 14px 8px;
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font: 500 11px/1.2 var(--font-mono);
+  color: var(--text);
+}
+
+.interp-linkpill-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.interp-linkpill-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.interp-linkpill-clear {
+  flex: none;
+  margin-left: auto;
+  padding: 0 3px;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: 600 13px/1 var(--font-mono);
+  cursor: pointer;
+}
+
+/* 3a — guided tours: rail entries + the stage overlay bar */
+.interp-tour-btn .interp-feature-n {
+  color: var(--accent);
+  opacity: 0.75;
+}
+
+.interp-tours-hint {
+  margin: 2px 10px 6px;
+  font: 400 10.5px/1.5 var(--font-ui);
+  color: var(--text-faint);
+}
+
+.interp-tourbar {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 5;
+  width: min(560px, calc(100% - 32px));
+  padding: 12px 16px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--hairline));
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--bg-raise) 92%, var(--accent) 8%);
+  box-shadow: var(--shadow-card);
+}
+
+.interp-tourbar-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.interp-tourbar-tour {
+  font: 650 10px/1.2 var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.interp-tourbar-count {
+  margin-left: auto;
+  font: 500 10.5px/1.2 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+.interp-tourbar-exit {
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font: 500 15px/1 var(--font-ui);
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.interp-tourbar-exit:hover {
+  color: var(--text);
+}
+
+.interp-tourbar-title {
+  margin: 0 0 4px;
+  font: 650 13.5px/1.3 var(--font-ui);
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.interp-tourbar-caption {
+  margin: 0 0 10px;
+  font: 400 12px/1.55 var(--font-ui);
+  color: var(--text-dim);
+}
+
+.interp-tourbar-nav {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.interp-tourbar-nav button {
+  padding: 5px 13px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-pill);
+  color: var(--text-dim);
+  font: 600 11.5px/1.2 var(--font-ui);
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out);
+}
+
+.interp-tourbar-nav button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline));
+}
+
+.interp-tourbar-nav button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.interp-tourbar-nav button.is-primary {
+  color: var(--bg);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.interp-tourbar-nav button.is-primary:hover {
+  color: var(--bg);
+}
+
+.interp-linkpill-clear:hover {
+  color: var(--text);
+}
+
 .interp-stage {
   position: relative;
   min-width: 0;
@@ -2223,6 +2439,19 @@ body.page-sessions #stage {
   position: relative;
   flex: 1;
   min-height: 0;
+}
+
+/* req 10 — keyboard focus. The GPU canvas has no per-datum focus targets, so
+   the host is the tab stop; give it a clear neon focus ring (only on keyboard
+   focus, never on mouse) so a keyboard user can see which chart is active. */
+.interp-canvas-host:focus {
+  outline: none;
+}
+.interp-canvas-host:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .interp-canvas {
@@ -2257,8 +2486,97 @@ body.page-sessions #stage {
   overflow: hidden;
 }
 
-.interp-tooltip {
-  max-width: 300px;
+/* Obsidian frosted glass — the data tooltip reads as a pane of dark glass
+   floating over the plot (req 2). Deeper tint + stronger blur than the base
+   .point-tooltip, a hairline top-edge highlight to sell the "pane of glass"
+   read, and a fast rise-in so hover feels low-latency, not laggy. */
+.interp-tooltip,
+.session-tooltip {
+  max-width: 320px;
+  /* Inherit .point-tooltip's `position: absolute` — the tooltip is a floating
+     overlay anchored to the overlay's top-left and moved by JS. An earlier
+     `position: relative` here put it back in normal flow (fragile) and was not
+     needed for the ::before hairline, which already has the absolute tooltip as
+     its containing block. */
+  background: color-mix(in srgb, var(--bg) 66%, transparent);
+  backdrop-filter: blur(16px) saturate(1.4);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  border-color: var(--hairline-strong);
+  box-shadow:
+    var(--shadow-float),
+    inset 0 1px 0 rgba(244, 245, 247, 0.06);
+  animation: interp-tip-in 120ms var(--ease-out) both;
+}
+
+/* the bright hairline that catches "light" along the tooltip's top edge */
+.interp-tooltip::before,
+.session-tooltip::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(244, 245, 247, 0.22),
+    transparent
+  );
+  pointer-events: none;
+}
+
+@keyframes interp-tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .interp-tooltip,
+  .session-tooltip {
+    animation: none;
+  }
+}
+
+/* color swatch chip: ties a value row to the exact hue the driver drew, so the
+   glass tooltip doubles as a live legend key. LED-square, not a soft dot. */
+.point-tooltip-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 2px;
+  vertical-align: baseline;
+  box-shadow: 0 0 6px 0 currentColor;
+}
+
+/* key → value readout row: monospace, key dim + left, value bright + right,
+   tabular so a stack of them aligns like an instrument panel. The focused /
+   anomalous reading (.is-hot) pops out in the danger hue — the "one red value"
+   that tells you exactly what the cursor is locked onto. */
+.point-tooltip-kv {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+  font-family: var(--font-mono);
+}
+.point-tooltip-key {
+  color: var(--text-faint);
+}
+.point-tooltip-val {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.point-tooltip-val.is-hot {
+  color: var(--danger);
+  text-shadow: 0 0 8px color-mix(in srgb, var(--danger) 55%, transparent);
 }
 
 /* axis labels — positioned by the driver via transform, in the overlay */
@@ -2354,8 +2672,11 @@ body.page-sessions #stage {
   gap: 8px;
 }
 
-/* the one interactive element on the card — the card itself stays
-   pointer-events:none so hover picking works through it */
+/* the card's only interactive elements (collapse toggle + data download) —
+   the card itself stays pointer-events:none so hover picking works through it */
+.interp-legend-data {
+  margin-left: auto;
+}
 .interp-legend-toggle {
   pointer-events: auto;
   flex: none;
@@ -2614,6 +2935,70 @@ body.page-sessions #stage {
 .interp-trace.is-active {
   color: var(--bg);
   background: var(--text);
+}
+
+/* 2b — live (typed) prompt chips + the "+ your prompt" affordance */
+.interp-trace.is-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.interp-trace-livedot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.interp-trace.is-active .interp-trace-livedot {
+  background: var(--bg);
+}
+
+.interp-trace-add {
+  color: var(--accent);
+  border: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.interp-trace-add:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.interp-trace-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 220px;
+}
+
+.interp-trace-input {
+  flex: 1;
+  min-width: 160px;
+  padding: 6px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--hairline));
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  color: var(--text);
+  font: 500 11.5px/1.2 var(--font-ui);
+}
+
+.interp-trace-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.interp-tracebar-err {
+  flex: none;
+  max-width: 380px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 500 10.5px/1.3 var(--font-ui);
+  color: var(--danger);
 }
 
 /* Attention-Head Flow: token labels either side + the layer×head grid.
@@ -3324,6 +3709,15 @@ body.page-sessions #stage {
 .sessions-canvas-host {
   position: absolute;
   inset: 0;
+}
+/* req 10 — keyboard focus ring on the 3-D plot host (keyboard focus only). */
+.sessions-canvas-host:focus {
+  outline: none;
+}
+.sessions-canvas-host:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 .sessions-canvas {
   width: 100%;

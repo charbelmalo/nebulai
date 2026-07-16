@@ -8,6 +8,7 @@
  *  for their tooltip/labels and are keyed to a model id (not a Dataset). */
 
 import type { GpuTier } from "../../app/capabilities";
+import type { InterpSelection } from "../../app/store";
 
 export interface InterpDriver {
   /** When false, the host skips the per-frame RAF entirely — the view is static
@@ -22,6 +23,12 @@ export interface InterpDriver {
    *  pass to render); weight-group features ignore it. May reject if the model
    *  has no bundle for this feature — the host surfaces that honestly. */
   setModel(model: string, trace?: string): Promise<void>;
+  /** Cross-view entity link (optional opt-in): the host pushes the global
+   *  `interpSelection` here on mount and on every change. A driver that knows
+   *  the entity highlights it; publishing goes the other way — the driver
+   *  calls `appStore.getState().setInterpSelection(...)` on click. Views that
+   *  opt in declare it in the registry's `linksTo` so the rail can badge them. */
+  setSelection?(sel: InterpSelection | null): void;
   /** dt ms, t elapsed seconds (pinned at 0 under ?frozen for goldens). */
   frame(dt: number, t: number): void;
   resize(width: number, height: number, dpr: number): void;
@@ -76,5 +83,10 @@ export interface InterpFeature {
    *  data in every corner — the legend then defaults to its collapsed pill
    *  (the user's toggle still overrides, sticky for the session). */
   legendCollapsed?: boolean;
+  /** Entity kinds this view can follow via cross-view linking (implements
+   *  `setSelection`). Only list kinds the driver REALLY highlights — the rail
+   *  badges views that can follow the current pick, and a badge that does
+   *  nothing would be a lie. */
+  linksTo?: Array<InterpSelection["kind"]>;
   create: () => InterpDriver;
 }

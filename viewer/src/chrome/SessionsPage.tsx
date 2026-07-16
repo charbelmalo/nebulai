@@ -168,7 +168,21 @@ function SessionPlot(props: { analyses: SessionAnalysis[] }) {
   }, [dimmed, ready.value]);
 
   return (
-    <div class="sessions-canvas-host">
+    // req 10 — keyboard focus + ARIA readout for the 3-D GPU plot. The host is
+    // the tab stop (no per-node DOM); exact turn values are announced by the
+    // driver's aria-live tooltip on hover. Focus ring lives in CSS.
+    <div
+      class="sessions-canvas-host"
+      tabIndex={0}
+      role="img"
+      aria-label={
+        props.analyses.length
+          ? `3-D session trajectory plot: ${props.analyses.length} session${
+              props.analyses.length === 1 ? "" : "s"
+            }. Each turn is placed by wall-clock time, context size, and new context this turn. Hover a node for exact values.`
+          : "3-D session trajectory plot (no sessions loaded)"
+      }
+    >
       <canvas ref={canvasRef} class="sessions-canvas" />
       <div ref={overlayRef} class="sessions-overlay" />
     </div>

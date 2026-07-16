@@ -16,6 +16,17 @@
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
 import { type PatchBundle, type PatchPair, loadPatch } from "../../data/interp";
+import {
+  ACCENT,
+  crosshair,
+  dashedSegment,
+  HOT,
+  MARKER_HOT,
+  type RGB,
+  type Seg as ThemeSeg,
+  withAlpha,
+} from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -45,7 +56,7 @@ export class PatchingMapDriver implements InterpDriver {
   private deck: Deck<OrthographicView[]> | null = null;
   private layersMod!: LayersModule;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private chipRoot!: HTMLElement;
 
@@ -75,10 +86,7 @@ export class PatchingMapDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-neuron-labels";
     overlay.appendChild(this.labelRoot);
@@ -178,20 +186,27 @@ export class PatchingMapDriver implements InterpDriver {
     if (!this.deck || !this.cells.length) return;
     const { SolidPolygonLayer, LineLayer } = this.layersMod;
     const hover = this.hover;
+    const rh = this.rowH();
+    const cw = this.cellW();
+    // hovered cell: keep the crisp outline but recolor to the danger LED, and
+    // snap an ACCENT row/column crosshair onto the cell centre (req 4)
     const edges = hover
       ? hover.poly.map((p, i) => ({
           source: p,
           target: hover.poly[(i + 1) % hover.poly.length] as [number, number],
         }))
       : [];
-    // vertical guide on the diff position(s): where the two prompts differ
+    // vertical guide on the diff position(s): where the two prompts differ —
+    // DASHED amber hairlines now (req 5), the semantic color kept
     const pr = this.pair;
-    const rh = this.rowH();
-    const cw = this.cellW();
-    const guides = (pr?.diff_pos ?? []).flatMap((p) => [
-      { source: [GL + p * cw, GT] as [number, number], target: [GL + p * cw, GT + this.nRows() * rh] as [number, number] },
-      { source: [GL + (p + 1) * cw, GT] as [number, number], target: [GL + (p + 1) * cw, GT + this.nRows() * rh] as [number, number] },
+    const guides: ThemeSeg[] = (pr?.diff_pos ?? []).flatMap((p) => [
+      ...dashedSegment([GL + p * cw, GT], [GL + p * cw, GT + this.nRows() * rh]),
+      ...dashedSegment([GL + (p + 1) * cw, GT], [GL + (p + 1) * cw, GT + this.nRows() * rh]),
     ]);
+    const plotBounds = { x0: GL, y0: GT, x1: GL + (pr?.T ?? 0) * cw, y1: GT + this.nRows() * rh };
+    const cross: ThemeSeg[] = hover
+      ? crosshair(GL + hover.pos * cw + cw / 2, GT + hover.row * rh + rh / 2, plotBounds)
+      : [];
 
     this.deck.setProps({
       layers: [
@@ -202,12 +217,22 @@ export class PatchingMapDriver implements InterpDriver {
           getFillColor: (c) => this.colorOf(c.r),
           pickable: true,
         }),
-        new LineLayer<{ source: [number, number]; target: [number, number] }>({
+        new LineLayer<ThemeSeg>({
           id: "patch-diff-guide",
           data: guides,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: [245, 195, 59, 90],
+          getColor: withAlpha(HOT, 90 / 255),
+          getWidth: 1,
+          widthUnits: "pixels",
+          pickable: false,
+        }),
+        new LineLayer<ThemeSeg>({
+          id: "patch-crosshair",
+          data: cross,
+          getSourcePosition: (e) => [e.source[0], e.source[1], 0],
+          getTargetPosition: (e) => [e.target[0], e.target[1], 0],
+          getColor: withAlpha(ACCENT, 0.5),
           getWidth: 1,
           widthUnits: "pixels",
           pickable: false,
@@ -217,7 +242,7 @@ export class PatchingMapDriver implements InterpDriver {
           data: edges,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: [255, 255, 255, 220],
+          getColor: withAlpha(MARKER_HOT, 0.86),
           getWidth: 1.2,
           widthUnits: "pixels",
           pickable: false,
@@ -247,7 +272,7 @@ export class PatchingMapDriver implements InterpDriver {
         if (pr === this.pair) return;
         this.pair = pr;
         this.hover = null;
-        this.tooltip.style.visibility = "hidden";
+        this.tooltip.hide();
         this.layout();
         this.buildChips();
         this.pushLayers();
@@ -365,32 +390,29 @@ export class PatchingMapDriver implements InterpDriver {
     }
     const pr = this.pair;
     if (!c || !pr) {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
-    this.tooltip.innerHTML = "";
-    const add = (cls: string, text: string) => {
-      const el = document.createElement("div");
-      el.className = cls;
-      el.textContent = text;
-      this.tooltip.appendChild(el);
-    };
-    add(
-      "point-tooltip-label",
-      `${this.rowName(c.row)} patch · pos ${c.pos} “${vis(pr.clean_strs[c.pos] ?? "")}”` +
-        (pr.diff_pos.includes(c.pos) ? ` (was “${vis(pr.corrupt_strs[c.pos] ?? "")}”)` : ""),
-    );
-    add("point-tooltip-conf", `r ${sgn(c.r, 4)} — ${sgn(c.r * 100, 1)}% of the LD gap recovered`);
-    add(
-      "point-tooltip-conf",
-      `LD patched ${sgn(c.ld, 4)} (clean ${sgn(pr.ld_clean, 4)} · corrupt ${sgn(pr.ld_corrupt, 4)})`,
-    );
-    add("point-tooltip-conf", this.rowMeaning(c.row));
-    this.tooltip.style.visibility = "visible";
-    const px = Math.min(x + 14, this.cssW - 320);
-    const py = Math.min(y + 14, this.cssH - 110);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    const cc = this.colorOf(c.r);
+    const swatch: RGB = [cc[0], cc[1], cc[2]];
+    const rows: TipRow[] = [
+      {
+        kind: "label",
+        text:
+          `${this.rowName(c.row)} patch · pos ${c.pos} “${vis(pr.clean_strs[c.pos] ?? "")}”` +
+          (pr.diff_pos.includes(c.pos) ? ` (was “${vis(pr.corrupt_strs[c.pos] ?? "")}”)` : ""),
+        swatch,
+      },
+      { text: "r", value: sgn(c.r, 4), hot: true },
+      { text: `${sgn(c.r * 100, 1)}% of the LD gap recovered` },
+      {
+        text: `LD patched ${sgn(c.ld, 4)} (clean ${sgn(pr.ld_clean, 4)} · corrupt ${sgn(pr.ld_corrupt, 4)})`,
+      },
+      { text: this.rowMeaning(c.row) },
+    ];
+    this.tooltip.show(rows);
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
   }
 
@@ -399,7 +421,7 @@ export class PatchingMapDriver implements InterpDriver {
       this.hover = null;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -427,7 +449,7 @@ export class PatchingMapDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.chipRoot?.remove();
     this.deck?.finalize();

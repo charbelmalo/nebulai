@@ -140,6 +140,12 @@ function GeneralTab() {
           format={(v) => `${v.toFixed(2)}×`}
           onChange={(v) => appStore.getState().setSetting("animationSpeed", v)}
         />
+        <ToggleRow
+          label="Cross-view linking (Internals)"
+          checked={settings.crossLink}
+          onChange={(v) => appStore.getState().setSetting("crossLink", v)}
+          hint="clicking a head / token / SAE feature highlights it in every view that shows the same unit"
+        />
       </SettingsSection>
 
       <SettingsSection title="Rendering" hint="Live-applied across all graph types.">

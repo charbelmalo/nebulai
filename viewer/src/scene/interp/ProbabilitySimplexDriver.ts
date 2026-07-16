@@ -18,6 +18,15 @@
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
 import { loadTrace, type LensTopk, type TraceBundle } from "../../data/interp";
+import {
+  dashedSegment,
+  GRID_RGBA,
+  MARKER_HOT,
+  markerRing,
+  type Vec2,
+  withAlpha,
+} from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -48,7 +57,7 @@ export class ProbabilitySimplexDriver implements InterpDriver {
   private makeView!: () => OrthographicView;
   private canvas!: HTMLCanvasElement;
   private overlay!: HTMLElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private barRoot!: HTMLElement;
 
@@ -84,10 +93,7 @@ export class ProbabilitySimplexDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-simplex-labels";
     overlay.appendChild(this.labelRoot);
@@ -146,18 +152,28 @@ export class ProbabilitySimplexDriver implements InterpDriver {
 
     // ternary gridlines: iso-probability lines at 0.2..0.8 for each of the three
     // coordinates (constant p1 ∥ BC, constant p2 ∥ AC, constant p_rest ∥ AB).
+    // Rendered as subtle DASHED hairlines now (req 5); dash authored in px and
+    // scaled to world units so it holds a constant on-screen size.
+    const wpp = 1 / this.zoomPx();
     const grid: { path: [number, number][] }[] = [];
+    const gridSeg = (a: Vec2, b: Vec2) => {
+      for (const s of dashedSegment(a, b, 3 * wpp, 6 * wpp)) grid.push({ path: [s.source, s.target] });
+    };
     for (let g = 1; g <= 4; g++) {
       const c = g * 0.2;
       // constant p_rest = c (horizontal)
-      grid.push({ path: [this.bary(1 - c, 0, c), this.bary(0, 1 - c, c)] });
+      gridSeg(this.bary(1 - c, 0, c), this.bary(0, 1 - c, c));
       // constant p1 = c
-      grid.push({ path: [this.bary(c, 1 - c, 0), this.bary(c, 0, 1 - c)] });
+      gridSeg(this.bary(c, 1 - c, 0), this.bary(c, 0, 1 - c));
       // constant p2 = c
-      grid.push({ path: [this.bary(1 - c, c, 0), this.bary(0, c, 1 - c)] });
+      gridSeg(this.bary(1 - c, c, 0), this.bary(0, c, 1 - c));
     }
 
     const pt = this.bary(this.p1, this.p2, this.prest);
+    // hover reticle: a MARKER_HOT ring framing the distribution point (req 4).
+    // A crosshair is skipped — on a barycentric triangle rectilinear guides read
+    // as false axes, so the LED reticle alone marks the locked datum.
+    const ring = this.hoverPoint ? [{ path: markerRing(pt[0], pt[1], 8 * wpp) }] : [];
 
     this.deck.setProps({
       layers: [
@@ -174,7 +190,7 @@ export class ProbabilitySimplexDriver implements InterpDriver {
           id: "simplex-grid",
           data: grid,
           getPath: (d) => d.path,
-          getColor: [150, 156, 180, 30],
+          getColor: GRID_RGBA,
           getWidth: 1,
           widthUnits: "pixels",
           pickable: false,
@@ -221,6 +237,15 @@ export class ProbabilitySimplexDriver implements InterpDriver {
           getRadius: 5.5,
           radiusUnits: "pixels",
           pickable: true,
+        }),
+        new PathLayer<{ path: [number, number][] }>({
+          id: "simplex-reticle",
+          data: ring,
+          getPath: (d) => d.path,
+          getColor: withAlpha(MARKER_HOT, 0.9),
+          getWidth: 1.2,
+          widthUnits: "pixels",
+          pickable: false,
         }),
       ],
     });
@@ -371,27 +396,22 @@ export class ProbabilitySimplexDriver implements InterpDriver {
       this.pushLayers();
     }
     if (!over) {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
     const t1 = fmtTok(this.topk[0]?.[0] ?? "∅");
     const t2 = fmtTok(this.topk[1]?.[0] ?? "∅");
-    this.tooltip.innerHTML = "";
-    const l1 = document.createElement("div");
-    l1.className = "point-tooltip-label";
-    l1.textContent = "next-token distribution (exact)";
-    const l2 = document.createElement("div");
-    l2.className = "point-tooltip-conf";
-    l2.textContent = `${t1} ${(this.p1 * 100).toFixed(2)}% · ${t2} ${(this.p2 * 100).toFixed(2)}%`;
-    const l3 = document.createElement("div");
-    l3.className = "point-tooltip-conf";
-    l3.textContent = `all other ${(this.prest * 100).toFixed(2)}% · Σ = 1`;
-    this.tooltip.append(l1, l2, l3);
-    this.tooltip.style.visibility = "visible";
-    const px = Math.min(x + 14, this.cssW - 250);
-    const py = Math.min(y + 14, this.cssH - 60);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    // each row's swatch is the exact corner color the datum is drawn against;
+    // the top-1 probability is the hot reading (the confidence the point encodes)
+    const rows: TipRow[] = [
+      { kind: "label", text: "next-token distribution (exact)" },
+      { text: t1, value: `${(this.p1 * 100).toFixed(2)}%`, hot: true, swatch: GOLD },
+      { text: t2, value: `${(this.p2 * 100).toFixed(2)}%`, swatch: STEEL },
+      { text: "all other", value: `${(this.prest * 100).toFixed(2)}% · Σ = 1`, swatch: OTHER },
+    ];
+    this.tooltip.show(rows);
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
   }
 
@@ -400,7 +420,7 @@ export class ProbabilitySimplexDriver implements InterpDriver {
       this.hoverPoint = false;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -425,7 +445,7 @@ export class ProbabilitySimplexDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.barRoot?.remove();
     this.deck?.finalize();

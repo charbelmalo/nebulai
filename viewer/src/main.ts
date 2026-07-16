@@ -10,6 +10,7 @@ import { registerActions } from "./app/actions";
 import { probeCapabilities } from "./app/capabilities";
 import { appStore, type ViewMode } from "./app/store";
 import { mountChrome } from "./chrome/mount";
+import { applyUrlState, readUrlState, startUrlSync } from "./chrome/urlState";
 import { loadCompare } from "./data/compare";
 import { loadDataset, loadIndex } from "./data/loader";
 import { AtlasDriver } from "./scene/drivers/AtlasDriver";
@@ -77,7 +78,10 @@ async function boot() {
 
   const index = await loadIndex();
   appStore.getState().setDatasets(index.datasets);
-  const first = index.datasets[0];
+  // permalink: `#model=` picks the boot dataset; the rest of the hash state is
+  // applied after the app shell is wired (applyUrlState below)
+  const urlState = readUrlState();
+  const first = index.datasets.find((d) => d.id === urlState.model) ?? index.datasets[0];
   if (!first) {
     say("no datasets in out/index.json — run `uv run nebulai tokens` first");
     return;
@@ -266,6 +270,11 @@ async function boot() {
   } else if (deepView === "chord" || deepView === "hierarchy") {
     switchViewMode(deepView).catch(() => void 0);
   }
+
+  // permalink: apply the remaining hash state now that actions are registered,
+  // then keep the hash mirroring the store so every view is shareable
+  applyUrlState(urlState);
+  startUrlSync();
 
   window.__perf.bootMs = performance.now() - t0;
   console.info(

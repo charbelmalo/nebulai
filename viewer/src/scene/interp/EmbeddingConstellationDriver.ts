@@ -19,6 +19,16 @@
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
 import { type EmbedBundle, loadEmbed } from "../../data/interp";
+import {
+  ACCENT,
+  crosshair,
+  MARKER_HOT,
+  markerPoly,
+  type Seg as ThemeSeg,
+  type Vec2,
+  withAlpha,
+} from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -47,7 +57,7 @@ export class EmbeddingConstellationDriver implements InterpDriver {
   private layersMod!: LayersModule;
   private makeView!: () => OrthographicView;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
 
   private bundle: EmbedBundle | null = null;
@@ -82,10 +92,7 @@ export class EmbeddingConstellationDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-embed-labels";
     overlay.appendChild(this.labelRoot);
@@ -166,8 +173,36 @@ export class EmbeddingConstellationDriver implements InterpDriver {
 
   private pushLayers(): void {
     if (!this.deck || !this.stars.length) return;
-    const { ScatterplotLayer } = this.layersMod;
+    const { ScatterplotLayer, LineLayer, SolidPolygonLayer } = this.layersMod;
     const colorOf = (s: Star): [number, number, number] => (s.lead ? SPACE : NOSPACE);
+
+    // markers/crosshair live in world (PC) space, so pixel-authored sizes are
+    // scaled by world-units-per-pixel (mirrors the WeightSpectrum template).
+    const wpp = 1 / this.zoomPx();
+    const bounds = { x0: this.minX, y0: this.minY, x1: this.maxX, y1: this.maxY };
+    // crosshair guides snap onto the hovered star (req 4)
+    const cross: ThemeSeg[] = this.hover
+      ? crosshair(this.hover.position[0], this.hover.position[1], bounds, 3 * wpp, 4 * wpp)
+      : [];
+    // hover LED diamond (translucent glow under a full-alpha core) replaces the
+    // old white outline ring (req 4)
+    interface Marker {
+      poly: Vec2[];
+      color: [number, number, number, number];
+    }
+    const mr = this.hover ? (this.radiusOf(this.hover.norm) + 2) * wpp : 0;
+    const marks: Marker[] = this.hover
+      ? [
+          {
+            poly: markerPoly(this.hover.position[0], this.hover.position[1], mr * 2.1),
+            color: withAlpha(MARKER_HOT, 0.22),
+          },
+          {
+            poly: markerPoly(this.hover.position[0], this.hover.position[1], mr),
+            color: withAlpha(MARKER_HOT, 1),
+          },
+        ]
+      : [];
 
     this.deck.setProps({
       layers: [
@@ -189,6 +224,8 @@ export class EmbeddingConstellationDriver implements InterpDriver {
         new ScatterplotLayer<Star>({
           id: "embed-stars",
           data: this.stars,
+          // the field dims to defer to the focused marker on hover (req 3)
+          opacity: this.hover ? 0.38 : 1,
           getPosition: (s) => [s.position[0], s.position[1], 0],
           getFillColor: (s) => {
             const [r, g, bl] = colorOf(s);
@@ -198,18 +235,21 @@ export class EmbeddingConstellationDriver implements InterpDriver {
           radiusUnits: "pixels",
           pickable: true,
         }),
-        // hovered star: a bright ring so the picked token is unmistakable
-        new ScatterplotLayer<Star>({
-          id: "embed-hover",
-          data: this.hover ? [this.hover] : [],
-          getPosition: (s) => [s.position[0], s.position[1], 0],
-          getFillColor: [255, 255, 255, 235],
-          getLineColor: [12, 14, 22, 235],
-          stroked: true,
-          lineWidthUnits: "pixels",
-          getLineWidth: 1.4,
-          getRadius: (s) => this.radiusOf(s.norm) + 1.6,
-          radiusUnits: "pixels",
+        new LineLayer<ThemeSeg>({
+          id: "embed-crosshair",
+          data: cross,
+          getSourcePosition: (e) => [e.source[0], e.source[1], 0],
+          getTargetPosition: (e) => [e.target[0], e.target[1], 0],
+          getColor: withAlpha(ACCENT, 0.5),
+          getWidth: 1,
+          widthUnits: "pixels",
+          pickable: false,
+        }),
+        new SolidPolygonLayer<Marker>({
+          id: "embed-marker",
+          data: marks,
+          getPolygon: (m) => m.poly,
+          getFillColor: (m) => m.color,
           pickable: false,
         }),
       ],
@@ -309,25 +349,22 @@ export class EmbeddingConstellationDriver implements InterpDriver {
       this.pushLayers();
     }
     if (!s) {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
-    this.tooltip.innerHTML = "";
-    const l1 = document.createElement("div");
-    l1.className = "point-tooltip-label";
-    l1.textContent = `token “${fmtTok(s.str)}”`;
-    const l2 = document.createElement("div");
-    l2.className = "point-tooltip-conf";
-    l2.textContent = `PC1 ${s.position[0].toFixed(2)} · PC2 ${s.position[1].toFixed(2)} · PC3 ${s.z.toFixed(2)}`;
-    const l3 = document.createElement("div");
-    l3.className = "point-tooltip-conf";
-    l3.textContent = `‖W_E‖ = ${s.norm.toFixed(2)} · ${s.lead ? "leading space" : "no leading space"}`;
-    this.tooltip.append(l1, l2, l3);
-    this.tooltip.style.visibility = "visible";
-    const px = Math.min(x + 14, this.cssW - 240);
-    const py = Math.min(y + 14, this.cssH - 64);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    const [cr, cg, cb] = s.lead ? SPACE : NOSPACE;
+    const rows: TipRow[] = [
+      { kind: "label", text: `token “${fmtTok(s.str)}”`, swatch: [cr, cg, cb] },
+      {
+        text: `PC1 ${s.position[0].toFixed(2)} · PC2 ${s.position[1].toFixed(2)} · PC3 ${s.z.toFixed(2)}`,
+      },
+      {
+        text: `‖W_E‖ = ${s.norm.toFixed(2)} · ${s.lead ? "leading space" : "no leading space"}`,
+      },
+    ];
+    this.tooltip.show(rows);
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
   }
 
@@ -336,7 +373,7 @@ export class EmbeddingConstellationDriver implements InterpDriver {
       this.hover = null;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -360,7 +397,7 @@ export class EmbeddingConstellationDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.deck?.finalize();
     this.deck = null;

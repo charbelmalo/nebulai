@@ -16,7 +16,19 @@
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
-import { type AttribBundle, type AttribTrace, loadAttrib } from "../../data/interp";
+import { appStore, type InterpSelection } from "../../app/store";
+import { type AttribBundle, type AttribTrace, isLiveTrace, loadAttrib } from "../../data/interp";
+import {
+  ACCENT,
+  AXIS_RGBA,
+  crosshair,
+  dashedSegment,
+  MARKER_HOT,
+  type RGB,
+  type Seg as ThemeSeg,
+  withAlpha,
+} from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -54,7 +66,7 @@ export class LogitAttribDriver implements InterpDriver {
   private deck: Deck<OrthographicView[]> | null = null;
   private layersMod!: LayersModule;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
 
   private bundle: AttribBundle | null = null;
@@ -66,6 +78,8 @@ export class LogitAttribDriver implements InterpDriver {
   private cums: number[] = []; // cumulative margin after each layer
   private scale = 1; // symmetric color clamp = max |contribution| this trace
   private hover: Cell | null = null;
+  /** head cell the global cross-view selection outlines */
+  private linked: { layer: number; head: number } | null = null;
 
   private cssW = 1;
   private cssH = 1;
@@ -87,21 +101,21 @@ export class LogitAttribDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-neuron-labels";
     overlay.appendChild(this.labelRoot);
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onLeave = () => this.onLeave();
+    const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("click", onClick);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("click", onClick);
     });
   }
 
@@ -111,7 +125,15 @@ export class LogitAttribDriver implements InterpDriver {
     }
     this.nL = this.bundle.meta.n_layer;
     this.nH = this.bundle.meta.n_head;
-    const tr = this.bundle.traces.find((t) => t.slug === trace) ?? this.bundle.traces[0];
+    const found = this.bundle.traces.find((t) => t.slug === trace);
+    // typed prompts have no precomputed attribution — never silently swap in
+    // a bundled prompt under a live slug
+    if (!found && trace && isLiveTrace(trace))
+      throw new Error(
+        "logit attribution is precomputed per bundled prompt — custom prompts " +
+          "cover the forward-trace views only",
+      );
+    const tr = found ?? this.bundle.traces[0];
     if (!tr) throw new Error("attrib.json has no traces");
     this.tr = tr;
     this.hover = null;
@@ -233,20 +255,40 @@ export class LogitAttribDriver implements InterpDriver {
     if (!this.deck || !this.cells.length) return;
     const { SolidPolygonLayer, LineLayer } = this.layersMod;
     const hover = this.hover;
+    const rh = this.rowH();
+    const cw = this.cellW();
+    // hovered cell: keep the crisp outline but recolor it to the danger LED, and
+    // snap an ACCENT row/column crosshair onto the cell centre (req 4)
     const edges = hover
       ? hover.poly.map((p, i) => ({
           source: p,
           target: hover.poly[(i + 1) % hover.poly.length] as [number, number],
         }))
       : [];
-    // zero axis of the cumulative gutter
+    const plotBounds = { x0: GL, y0: GT, x1: GL + this.plotW(), y1: GT + this.nL * rh };
+    const cross: ThemeSeg[] = hover
+      ? crosshair(this.colX(hover.col) + cw / 2, GT + hover.layer * rh + rh / 2, plotBounds)
+      : [];
+    // zero axis of the cumulative gutter — a DASHED hairline now (req 5)
     const tr = this.tr;
     const vals = tr ? [0, tr.emb, tr.margin, ...this.cums] : [0];
     const lo = Math.min(...vals);
     const hi = Math.max(...vals);
     const bx0 = GL + this.plotW() + 14;
     const zx = bx0 + ((0 - lo) / Math.max(1e-9, hi - lo)) * (GR - 84);
-    const rh = this.rowH();
+    const axis: ThemeSeg[] = dashedSegment([zx, GT], [zx, GT + this.nL * rh]);
+    // cross-view linked head — a steady ACCENT outline on its cell
+    const linkEdges: ThemeSeg[] = [];
+    if (this.linked && this.linked.layer < this.nL && this.linked.head < this.nH) {
+      const lx = this.colX(this.linked.head);
+      const ly = GT + this.linked.layer * rh;
+      linkEdges.push(
+        { source: [lx, ly], target: [lx + cw, ly] },
+        { source: [lx + cw, ly], target: [lx + cw, ly + rh] },
+        { source: [lx + cw, ly + rh], target: [lx, ly + rh] },
+        { source: [lx, ly + rh], target: [lx, ly] },
+      );
+    }
 
     this.deck.setProps({
       layers: [
@@ -264,12 +306,32 @@ export class LogitAttribDriver implements InterpDriver {
           getFillColor: (b) => this.colorOf(b.cum >= 0 ? this.scale : -this.scale),
           pickable: false,
         }),
-        new LineLayer<{ source: [number, number]; target: [number, number] }>({
+        new LineLayer<ThemeSeg>({
           id: "attr-axis",
-          data: [{ source: [zx, GT] as [number, number], target: [zx, GT + this.nL * rh] as [number, number] }],
+          data: axis,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: [166, 173, 200, 70],
+          getColor: AXIS_RGBA,
+          getWidth: 1,
+          widthUnits: "pixels",
+          pickable: false,
+        }),
+        new LineLayer<ThemeSeg>({
+          id: "attr-link",
+          data: linkEdges,
+          getSourcePosition: (e) => [e.source[0], e.source[1], 0],
+          getTargetPosition: (e) => [e.target[0], e.target[1], 0],
+          getColor: withAlpha(ACCENT, 0.95),
+          getWidth: 1.6,
+          widthUnits: "pixels",
+          pickable: false,
+        }),
+        new LineLayer<ThemeSeg>({
+          id: "attr-crosshair",
+          data: cross,
+          getSourcePosition: (e) => [e.source[0], e.source[1], 0],
+          getTargetPosition: (e) => [e.target[0], e.target[1], 0],
+          getColor: withAlpha(ACCENT, 0.5),
           getWidth: 1,
           widthUnits: "pixels",
           pickable: false,
@@ -279,7 +341,7 @@ export class LogitAttribDriver implements InterpDriver {
           data: edges,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: [255, 255, 255, 220],
+          getColor: withAlpha(MARKER_HOT, 0.86),
           getWidth: 1.2,
           widthUnits: "pixels",
           pickable: false,
@@ -379,39 +441,61 @@ export class LogitAttribDriver implements InterpDriver {
     }
     const tr = this.tr;
     if (!c || !tr) {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
-    this.tooltip.innerHTML = "";
-    const add = (cls: string, text: string) => {
-      const el = document.createElement("div");
-      el.className = cls;
-      el.textContent = text;
-      this.tooltip.appendChild(el);
-    };
     const kind =
       c.col < this.nH ? `head ${c.col}` : c.col === this.nH ? "MLP block" : "attn out-proj bias b_o";
-    add("point-tooltip-label", `L${c.layer} · ${kind}`);
-    add(
-      "point-tooltip-conf",
-      `Δ(“${vis(tr.top1[0])}” − “${vis(tr.top2[0])}”) ${sgn(c.v, 4)} logits`,
-    );
+    const cc = this.colorOf(c.v);
+    const swatch: RGB = [cc[0], cc[1], cc[2]];
+    const rows: TipRow[] = [
+      { kind: "label", text: `L${c.layer} · ${kind}`, swatch },
+      {
+        text: `Δ(“${vis(tr.top1[0])}” − “${vis(tr.top2[0])}”)`,
+        value: `${sgn(c.v, 4)} logits`,
+        hot: true,
+      },
+    ];
     if (Math.abs(tr.margin) > 1e-6) {
-      add("point-tooltip-conf", `${sgn((c.v / tr.margin) * 100, 0)}% of the ${sgn(tr.margin, 4)} margin`);
+      rows.push({ text: `${sgn((c.v / tr.margin) * 100, 0)}% of the ${sgn(tr.margin, 4)} margin` });
     }
     if (c.col < this.nH) {
       const i = c.layer * this.nH + c.col;
-      add(
-        "point-tooltip-conf",
-        `reads “${vis(tr.attend_tok[i] ?? "")}” — ${(tr.attend_w[i] ?? 0).toFixed(2)} of final-row attention`,
-      );
+      rows.push({
+        text: `reads “${vis(tr.attend_tok[i] ?? "")}” — ${(tr.attend_w[i] ?? 0).toFixed(2)} of final-row attention`,
+      });
     }
-    this.tooltip.style.visibility = "visible";
-    const px = Math.min(x + 14, this.cssW - 300);
-    const py = Math.min(y + 14, this.cssH - 100);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    this.tooltip.show(rows);
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
+  }
+
+  private onClick(e: PointerEvent): void {
+    if (!this.deck) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const info = this.deck.pickObject({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+      radius: 1,
+      layerIds: ["attr-cells"],
+    }) as PickingInfo | null;
+    const c = (info?.object as Cell | undefined) ?? null;
+    if (!c || c.col >= this.nH) return; // MLP/b_o cells aren't heads
+    // toggle publish as the global cross-view head selection
+    const same = this.linked?.layer === c.layer && this.linked.head === c.col;
+    appStore.getState().setInterpSelection(same ? null : { kind: "head", layer: c.layer, head: c.col });
+  }
+
+  /** Cross-view link: outline the selected head's cell. */
+  setSelection(sel: InterpSelection | null): void {
+    const next = sel?.kind === "head" ? { layer: sel.layer, head: sel.head } : null;
+    const same =
+      (next === null && this.linked === null) ||
+      (next !== null && this.linked !== null && next.layer === this.linked.layer && next.head === this.linked.head);
+    if (same) return;
+    this.linked = next;
+    this.pushLayers();
   }
 
   private onLeave(): void {
@@ -419,7 +503,7 @@ export class LogitAttribDriver implements InterpDriver {
       this.hover = null;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -446,7 +530,7 @@ export class LogitAttribDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.deck?.finalize();
     this.deck = null;

@@ -771,9 +771,37 @@ export interface InterpIndex {
 
 const cache = new Map<string, unknown>();
 
+/** Live capture sets: while a set is registered, every bundle URL that passes
+ *  through fetchJSON (cache hits included) is recorded into it. The Internals
+ *  page wraps each driver load in one so its "download data" affordance can
+ *  offer exactly the files the active view was computed from — no guessing. */
+const captures = new Set<Set<string>>();
+
+export function startBundleCapture(): Set<string> {
+  const s = new Set<string>();
+  captures.add(s);
+  return s;
+}
+
+export function takeBundleCapture(s: Set<string>): string[] {
+  captures.delete(s);
+  return [...s].sort();
+}
+
+/** The parsed JSON for an already-loaded bundle URL (undefined if evicted). */
+export function cachedBundle(url: string): unknown {
+  return cache.get(url);
+}
+
 async function fetchJSON<T>(url: string): Promise<T> {
+  for (const s of captures) s.add(url);
   const hit = cache.get(url);
   if (hit) return hit as T;
+  // live:// URLs are cache-only — the payload was computed by the local live
+  // server and inserted via putLiveTrace; there is nothing to fetch. Missing
+  // means a permalink or reload outlived the in-memory result.
+  if (url.startsWith("live://"))
+    throw new Error("live trace not loaded — type the prompt again (results live in memory only)");
   const res = await fetch(url);
   if (!res.ok) throw new Error(`interp bundle missing: ${url} (${res.status})`);
   const json = (await res.json()) as T;
@@ -846,8 +874,56 @@ export const loadCofire = (model: string, base = "/out") =>
 export const loadHeads = (model: string, base = "/out") =>
   fetchJSON<HeadsBundle>(`${interpBase(model, base)}/heads.json`);
 
+/** 2b — custom prompts. A trace computed by the local live server
+ *  (POST /live/trace returns EXACTLY the offline trace_<slug>.json shape, same
+ *  producer function) is inserted into the same bundle cache under a synthetic
+ *  live:// URL, so every trace-driven driver — and the ⤓ data download —
+ *  works on typed prompts with zero driver changes. Live slugs are prefixed
+ *  so chrome can tell them from bundled ones (and keep them out of permalinks:
+ *  the payload lives in this tab's memory only). */
+export const LIVE_TRACE_PREFIX = "live-";
+
+export const isLiveTrace = (slug: string): boolean => slug.startsWith(LIVE_TRACE_PREFIX);
+
+export const liveTraceUrl = (model: string, slug: string): string =>
+  `live://${model}/trace_${slug}.json`;
+
+export function putLiveTrace(model: string, slug: string, bundle: TraceBundle): void {
+  cache.set(liveTraceUrl(model, slug), bundle);
+}
+
 export const loadTrace = (model: string, slug: string, base = "/out") =>
-  fetchJSON<TraceBundle>(`${interpBase(model, base)}/trace_${slug}.json`);
+  fetchJSON<TraceBundle>(
+    isLiveTrace(slug)
+      ? liveTraceUrl(model, slug)
+      : `${interpBase(model, base)}/trace_${slug}.json`,
+  );
+
+/** 2c — live SAE lens. The prompt text behind each live slug, so a driver that
+ *  needs a fresh live-server computation (the Piano-Roll's /live/sae) can make
+ *  it from the slug alone. Registered by the tracebar's runPrompt. */
+const livePrompts = new Map<string, string>();
+
+export function registerLivePrompt(model: string, slug: string, prompt: string): void {
+  livePrompts.set(`${model}/${slug}`, prompt);
+}
+
+export function livePromptFor(model: string, slug: string): string | undefined {
+  return livePrompts.get(`${model}/${slug}`);
+}
+
+/** One SAEActsTrace computed by POST /live/sae (same producer as the offline
+ *  sae_acts.json traces), cached under a live:// URL like putLiveTrace so the
+ *  ⤓ data download captures it too. */
+export const liveSAEActsUrl = (model: string, slug: string): string =>
+  `live://${model}/sae_acts_${slug}.json`;
+
+export function putLiveSAEActs(model: string, slug: string, trace: SAEActsTrace): void {
+  cache.set(liveSAEActsUrl(model, slug), trace);
+}
+
+export const loadLiveSAEActs = (model: string, slug: string) =>
+  fetchJSON<SAEActsTrace>(liveSAEActsUrl(model, slug));
 
 /** True if this model has interp bundles (feature nav gates on it, honestly —
  *  a model without bundles simply doesn't offer the interp views). */

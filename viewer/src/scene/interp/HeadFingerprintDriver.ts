@@ -21,7 +21,22 @@
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
+import { appStore, type InterpSelection } from "../../app/store";
 import { type HeadsBundle, loadHeads } from "../../data/interp";
+import {
+  ACCENT,
+  AXIS_RGBA,
+  crosshair,
+  dashedSegment,
+  GRID_RGBA,
+  MARKER_HOT,
+  markerPoly,
+  type RGB,
+  type Seg as ThemeSeg,
+  type Vec2,
+  withAlpha,
+} from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 import { LAYER_COLORS } from "./NeuronFieldDriver";
 
@@ -33,8 +48,6 @@ const GT = 78;
 const GB = 96; // x tick labels + the layer-isolate chip row
 
 const DIM_RGBA: [number, number, number, number] = [118, 126, 158, 30];
-const GRID_RGBA: [number, number, number, number] = [118, 126, 158, 26];
-const ZERO_RGBA: [number, number, number, number] = [166, 173, 200, 64];
 
 const X_TICKS = [0, 0.25, 0.5, 0.75, 1];
 const Y_TICKS = [-1, -0.5, 0, 0.5, 1];
@@ -66,7 +79,7 @@ export class HeadFingerprintDriver implements InterpDriver {
   private deck: Deck<OrthographicView[]> | null = null;
   private layersMod!: LayersModule;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private chipRoot!: HTMLElement;
 
@@ -79,6 +92,9 @@ export class HeadFingerprintDriver implements InterpDriver {
   private froMin = 0;
   private froMax = 1;
   private hover: HeadPt | null = null;
+  // cross-view link (2a): the globally selected head, rendered as an accent
+  // ring — identity only, no causal claim
+  private linked: { layer: number; head: number } | null = null;
 
   private cssW = 1;
   private cssH = 1;
@@ -103,10 +119,7 @@ export class HeadFingerprintDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-neuron-labels";
     overlay.appendChild(this.labelRoot);
@@ -116,12 +129,42 @@ export class HeadFingerprintDriver implements InterpDriver {
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onLeave = () => this.onLeave();
+    const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("click", onClick);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("click", onClick);
     });
+  }
+
+  /** Cross-view link: highlight the globally selected head (if any). */
+  setSelection(sel: InterpSelection | null): void {
+    const next = sel?.kind === "head" ? { layer: sel.layer, head: sel.head } : null;
+    if (next?.layer === this.linked?.layer && next?.head === this.linked?.head) return;
+    this.linked = next;
+    if (this.pts.length) this.pushLayers();
+  }
+
+  /** Click a head → publish it as the global cross-view selection (clicking
+   *  the already-selected head clears it). */
+  private onClick(e: PointerEvent): void {
+    if (!this.deck) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const info = this.deck.pickObject({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+      radius: 6,
+      layerIds: ["head-active"],
+    }) as PickingInfo | null;
+    const p = (info?.object as HeadPt | undefined) ?? null;
+    if (!p) return;
+    const same = this.linked?.layer === p.layer && this.linked?.head === p.head;
+    appStore
+      .getState()
+      .setInterpSelection(same ? null : { kind: "head", layer: p.layer, head: p.head });
   }
 
   async setModel(model: string, _trace?: string): Promise<void> {
@@ -230,22 +273,65 @@ export class HeadFingerprintDriver implements InterpDriver {
   }
 
   private gridLines(): GridLine[] {
+    // dashed hairlines (req 5): minor gridlines in GRID_RGBA, the copying = 0
+    // baseline in the stronger AXIS_RGBA.
     const lines: GridLine[] = [];
+    const push = (a: Vec2, b: Vec2, major: boolean) => {
+      for (const s of dashedSegment(a, b)) lines.push({ source: s.source, target: s.target, major });
+    };
     for (const t of X_TICKS) {
       const x = this.xPx(t);
-      lines.push({ source: [x, this.yPx(1)], target: [x, this.yPx(-1)], major: false });
+      push([x, this.yPx(1)], [x, this.yPx(-1)], false);
     }
     for (const t of Y_TICKS) {
       const y = this.yPx(t);
-      lines.push({ source: [this.xPx(0), y], target: [this.xPx(1), y], major: t === 0 });
+      push([this.xPx(0), y], [this.xPx(1), y], t === 0);
     }
     return lines;
   }
 
   private pushLayers(): void {
     if (!this.deck || !this.pts.length) return;
-    const { ScatterplotLayer, LineLayer } = this.layersMod;
+    const { ScatterplotLayer, LineLayer, SolidPolygonLayer } = this.layersMod;
     const active = this.isolate === null ? this.pts : (this.byLayer[this.isolate] ?? []);
+
+    // crosshair guides + red LED diamond marker locked onto the hovered head
+    // (req 4), replacing the old white outline ring.
+    const plotBounds = {
+      x0: this.xPx(0),
+      y0: this.yPx(1),
+      x1: this.xPx(1),
+      y1: this.yPx(-1),
+    };
+    const cross: ThemeSeg[] = this.hover
+      ? crosshair(this.hover.position[0], this.hover.position[1], plotBounds)
+      : [];
+    interface Marker {
+      poly: Vec2[];
+      color: [number, number, number, number];
+    }
+    const marks: Marker[] = this.hover
+      ? (() => {
+          const r = this.radiusOf(this.hover.froOv) + 1.6;
+          const [hx, hy] = this.hover.position;
+          return [
+            { poly: markerPoly(hx, hy, r * 2.1), color: withAlpha(MARKER_HOT, 0.22) },
+            { poly: markerPoly(hx, hy, r), color: withAlpha(MARKER_HOT, 1) },
+          ];
+        })()
+      : [];
+    // cross-view link marker: accent diamond on the globally selected head
+    const lp = this.linked
+      ? (this.pts.find((p) => p.layer === this.linked!.layer && p.head === this.linked!.head) ??
+        null)
+      : null;
+    if (lp) {
+      const r = this.radiusOf(lp.froOv) + 2.2;
+      marks.unshift(
+        { poly: markerPoly(lp.position[0], lp.position[1], r * 2.4), color: withAlpha(ACCENT, 0.2) },
+        { poly: markerPoly(lp.position[0], lp.position[1], r), color: withAlpha(ACCENT, 0.95) },
+      );
+    }
 
     this.deck.setProps({
       layers: [
@@ -254,7 +340,7 @@ export class HeadFingerprintDriver implements InterpDriver {
           data: this.gridLines(),
           getSourcePosition: (l) => [l.source[0], l.source[1], 0],
           getTargetPosition: (l) => [l.target[0], l.target[1], 0],
-          getColor: (l) => (l.major ? ZERO_RGBA : GRID_RGBA),
+          getColor: (l) => (l.major ? AXIS_RGBA : GRID_RGBA),
           getWidth: 1,
           widthUnits: "pixels",
           pickable: false,
@@ -271,6 +357,8 @@ export class HeadFingerprintDriver implements InterpDriver {
         new ScatterplotLayer<HeadPt>({
           id: "head-active",
           data: active,
+          // field defers to the focused head on hover (req 3)
+          opacity: this.hover ? 0.4 : 1,
           getPosition: (p) => [p.position[0], p.position[1], 0],
           getFillColor: (p) => {
             const [r, g, bl] = this.colorOf(p);
@@ -280,17 +368,21 @@ export class HeadFingerprintDriver implements InterpDriver {
           radiusUnits: "pixels",
           pickable: true,
         }),
-        new ScatterplotLayer<HeadPt>({
+        new LineLayer<ThemeSeg>({
+          id: "head-crosshair",
+          data: cross,
+          getSourcePosition: (s) => [s.source[0], s.source[1], 0],
+          getTargetPosition: (s) => [s.target[0], s.target[1], 0],
+          getColor: withAlpha(ACCENT, 0.5),
+          getWidth: 1,
+          widthUnits: "pixels",
+          pickable: false,
+        }),
+        new SolidPolygonLayer<Marker>({
           id: "head-hover",
-          data: this.hover ? [this.hover] : [],
-          getPosition: (p) => [p.position[0], p.position[1], 0],
-          getFillColor: [255, 255, 255, 235],
-          getLineColor: [12, 14, 22, 235],
-          stroked: true,
-          lineWidthUnits: "pixels",
-          getLineWidth: 1.4,
-          getRadius: (p) => this.radiusOf(p.froOv) + 1.8,
-          radiusUnits: "pixels",
+          data: marks,
+          getPolygon: (m) => m.poly,
+          getFillColor: (m) => m.color,
           pickable: false,
         }),
       ],
@@ -315,7 +407,7 @@ export class HeadFingerprintDriver implements InterpDriver {
         this.isolate = this.isolate === layer ? null : layer;
         this.dimPts = this.isolate === null ? [] : this.pts.filter((p) => p.layer !== this.isolate);
         this.hover = null;
-        this.tooltip.style.visibility = "hidden";
+        this.tooltip.hide();
         this.buildChips();
         this.pushLayers();
       });
@@ -388,39 +480,31 @@ export class HeadFingerprintDriver implements InterpDriver {
       this.pushLayers();
     }
     if (!p) {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
     const b = this.bundle;
-    this.tooltip.innerHTML = "";
-    const add = (cls: string, text: string) => {
-      const el = document.createElement("div");
-      el.className = cls;
-      el.textContent = text;
-      this.tooltip.appendChild(el);
-    };
     const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
     const im = p.eig1Im;
     const eig1 = im === 0 ? p.eig1Re.toFixed(2) : `${p.eig1Re.toFixed(2)}${im > 0 ? "+" : "−"}${Math.abs(im).toFixed(2)}i`;
-    add("point-tooltip-label", `L${p.layer} · head ${p.head}`);
-    add("point-tooltip-conf", `OV copying ${p.copying >= 0 ? "+" : ""}${p.copying.toFixed(3)} · λ₁ = ${eig1}`);
-    add("point-tooltip-conf", `‖OV‖_F ${p.froOv.toFixed(2)} · σ_max QK ${p.sigmaQk.toFixed(2)}`);
-    add(
-      "point-tooltip-conf",
-      `attends: prev ${pct(p.prev)} · first ${pct(p.sink)} · self ${pct(p.selfAttn)}`,
-    );
-    add("point-tooltip-conf", `entropy ${p.entropy.toFixed(3)} (0 = peaked, 1 = uniform)`);
+    const [cr, cg, cb] = this.colorOf(p);
+    const rows: TipRow[] = [
+      { kind: "label", text: `L${p.layer} · head ${p.head}`, swatch: [cr, cg, cb] as RGB },
+      {
+        text: `OV copying ${p.copying >= 0 ? "+" : ""}${p.copying.toFixed(3)} · λ₁ = ${eig1}`,
+      },
+      { text: `‖OV‖_F ${p.froOv.toFixed(2)} · σ_max QK ${p.sigmaQk.toFixed(2)}` },
+      { text: `attends: prev ${pct(p.prev)} · first ${pct(p.sink)} · self ${pct(p.selfAttn)}` },
+      { text: `entropy ${p.entropy.toFixed(3)} (0 = peaked, 1 = uniform)` },
+    ];
     if (b) {
-      add(
-        "point-tooltip-conf",
-        `measured over ${b.meta.prompts.length} prompts · ${b.meta.n_rows} query rows`,
-      );
+      rows.push({
+        text: `measured over ${b.meta.prompts.length} prompts · ${b.meta.n_rows} query rows`,
+      });
     }
-    this.tooltip.style.visibility = "visible";
-    const px = Math.min(x + 14, this.cssW - 280);
-    const py = Math.min(y + 14, this.cssH - 130);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    this.tooltip.show(rows);
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
   }
 
@@ -429,7 +513,7 @@ export class HeadFingerprintDriver implements InterpDriver {
       this.hover = null;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -462,7 +546,7 @@ export class HeadFingerprintDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.chipRoot?.remove();
     this.deck?.finalize();

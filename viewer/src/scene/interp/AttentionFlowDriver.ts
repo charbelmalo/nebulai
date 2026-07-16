@@ -18,6 +18,8 @@
 import type { Deck, OrthographicView } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
 import { loadTrace, type TraceBundle } from "../../data/interp";
+import { HOT } from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -30,7 +32,7 @@ const LABEL = 112; // px reserved for a token label beyond each column
 const PADY = 92;
 const MIN_W = 0.008; // don't draw lines below this weight (declutter, stated)
 
-const HOT: [number, number, number] = [245, 195, 59]; // query→key line
+// query→key line uses the shared warm token color (== --data-hot)
 const KEYC: [number, number, number] = [70, 200, 235]; // key-side accent
 
 interface Line {
@@ -46,7 +48,7 @@ export class AttentionFlowDriver implements InterpDriver {
   private makeView!: () => OrthographicView;
   private canvas!: HTMLCanvasElement;
   private overlay!: HTMLElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private gridRoot!: HTMLElement;
 
@@ -82,10 +84,7 @@ export class AttentionFlowDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-attn-labels";
     overlay.appendChild(this.labelRoot);
@@ -228,7 +227,7 @@ export class AttentionFlowDriver implements InterpDriver {
         cell.dataset.l = String(l);
         cell.dataset.h = String(h);
         const f = this.focus[l]?.[h] ?? 0;
-        cell.style.background = `rgba(245,195,59,${(0.08 + 0.92 * f).toFixed(3)})`;
+        cell.style.background = `rgba(${HOT[0]},${HOT[1]},${HOT[2]},${(0.08 + 0.92 * f).toFixed(3)})`;
         cell.title = `L${l} H${h} · focus ${f.toFixed(2)}`;
         cell.addEventListener("click", () => this.selectHead(l, h));
         grid.appendChild(cell);
@@ -315,23 +314,18 @@ export class AttentionFlowDriver implements InterpDriver {
     const b = this.bundle;
     const qi = fmtTok(b.token_strs[line.i] ?? "");
     const kj = fmtTok(b.token_strs[line.j] ?? "");
-    this.tooltip.innerHTML = "";
-    const l1 = document.createElement("div");
-    l1.className = "point-tooltip-label";
-    l1.textContent = `query “${qi}” → key “${kj}”`;
-    const l2 = document.createElement("div");
-    l2.className = "point-tooltip-conf";
-    l2.textContent = `attn = ${line.w.toFixed(4)} · pos ${line.i}→${line.j} · L${this.layer} H${this.head}`;
-    this.tooltip.append(l1, l2);
-    this.tooltip.style.visibility = "visible";
-    const px = Math.min(x + 14, this.cssW - 260);
-    const py = Math.min(y + 14, this.cssH - 54);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    const rows: TipRow[] = [
+      { kind: "label", text: `query “${qi}” → key “${kj}”`, swatch: HOT },
+      { text: "attn", value: line.w.toFixed(4), hot: true },
+      { text: `pos ${line.i}→${line.j} · L${this.layer} H${this.head}` },
+    ];
+    this.tooltip.show(rows);
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
   }
 
   private hideTip(): void {
-    if (this.tooltip) this.tooltip.style.visibility = "hidden";
+    this.tooltip?.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -356,7 +350,7 @@ export class AttentionFlowDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.gridRoot?.remove();
     this.deck?.finalize();

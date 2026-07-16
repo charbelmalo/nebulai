@@ -1,13 +1,47 @@
 /** Top-left brand mark, matching the video's logo + wordmark anatomy. The
  *  mark is a tiny nebula: three ramp-colored dots in orbit. A center nav
  *  switches between the semantic-cloud viewer and the Snapshot Map page.
- *  Top-right hosts the global gear that opens the full Settings page. */
+ *  Top-right hosts share/export tools and the global gear that opens the
+ *  full Settings page. */
 
+import { useSignal } from "@preact/signals";
 import { appStore, type Page } from "../app/store";
+import { downloadStagePng } from "./exportPng";
 import { $page } from "./state";
+import { shareUrl } from "./urlState";
 
 export function TopBar() {
   const page = $page.value;
+  const copied = useSignal(false);
+  const saving = useSignal(false);
+
+  const copyLink = async () => {
+    const url = shareUrl();
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      // clipboard API needs a secure context — fall back to a transient textarea
+      const ta = document.createElement("textarea");
+      ta.value = url;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    copied.value = true;
+    window.setTimeout(() => (copied.value = false), 1400);
+  };
+
+  const savePng = async () => {
+    if (saving.value) return;
+    saving.value = true;
+    try {
+      await downloadStagePng();
+    } finally {
+      saving.value = false;
+    }
+  };
+
   return (
     <>
       <header class="topbar">
@@ -27,6 +61,59 @@ export function TopBar() {
         <NavPill label="Snapshot Map" pageId="snapshot" active={page} />
         <NavPill label="Sessions" pageId="sessions" active={page} />
       </nav>
+      <div class="topbar-tools">
+        <button
+          type="button"
+          class={`topbar-tool${copied.value ? " is-flash" : ""}`}
+          aria-label="Copy link to this view"
+          title={copied.value ? "Link copied" : "Copy link to this view"}
+          onClick={copyLink}
+        >
+          {copied.value ? (
+            <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+              <path
+                d="M5 12.5l4.5 4.5L19 7.5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+              <path
+                d="M10 14a4.5 4.5 0 006.4 0l3.2-3.2a4.5 4.5 0 00-6.4-6.4l-1.7 1.7M14 10a4.5 4.5 0 00-6.4 0l-3.2 3.2a4.5 4.5 0 006.4 6.4l1.7-1.7"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+              />
+            </svg>
+          )}
+        </button>
+        {page !== "guide" && (
+          <button
+            type="button"
+            class="topbar-tool"
+            aria-label="Save view as PNG"
+            title="Save view as PNG"
+            disabled={saving.value}
+            onClick={savePng}
+          >
+            <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+              <path
+                d="M12 4v10m0 0l-4-4m4 4l4-4M5 18h14"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+        )}
+      </div>
       <button
         type="button"
         class="topbar-settings"

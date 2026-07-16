@@ -15,7 +15,15 @@
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
-import { type OcclusionBundle, type OcclusionPrompt, loadOcclusion } from "../../data/interp";
+import { type OcclusionBundle, type OcclusionPrompt, isLiveTrace, loadOcclusion } from "../../data/interp";
+import {
+  AXIS_RGBA,
+  dashedSegment,
+  MARKER_HOT,
+  type Seg as ThemeSeg,
+  withAlpha,
+} from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -27,7 +35,6 @@ const GB = 92; // px — mode chips + collapsed legend pill
 
 const AMBER: [number, number, number] = [245, 195, 59];
 const BLUE: [number, number, number] = [96, 165, 250];
-const GUIDE: [number, number, number, number] = [118, 126, 158, 110];
 
 type Mode = "sub" | "del";
 const MODES: Mode[] = ["sub", "del"];
@@ -51,7 +58,7 @@ export class OcclusionDriver implements InterpDriver {
   private deck: Deck<OrthographicView[]> | null = null;
   private layersMod!: LayersModule;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private chipRoot!: HTMLElement;
 
@@ -83,10 +90,7 @@ export class OcclusionDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-neuron-labels";
     overlay.appendChild(this.labelRoot);
@@ -108,8 +112,15 @@ export class OcclusionDriver implements InterpDriver {
     if (!this.bundle || this.bundle.meta.model !== model) {
       this.bundle = await loadOcclusion(model);
     }
-    this.entry =
-      this.bundle.prompts.find((e) => e.slug === trace) ?? this.bundle.prompts[0] ?? null;
+    const found = this.bundle.prompts.find((e) => e.slug === trace);
+    // live (typed) prompts have no precomputed occlusion runs — falling back
+    // to a bundled prompt while the trace bar shows the typed one would lie
+    if (!found && trace && isLiveTrace(trace))
+      throw new Error(
+        "occlusion needs T+1 precomputed forwards per prompt — custom prompts " +
+          "cover the forward-trace views only (bundled prompts work here)",
+      );
+    this.entry = found ?? this.bundle.prompts[0] ?? null;
     this.hover = null;
     this.layout();
     this.buildChips();
@@ -255,6 +266,10 @@ export class OcclusionDriver implements InterpDriver {
     const flipSegs: Seg[] = [];
     for (const bar of this.bars) if (bar.flipped) flipSegs.push(...outline(bar.poly));
     const hoverSegs: Seg[] = this.hover ? outline(this.hover.hoverPoly) : [];
+    // zero axis — a DASHED hairline now (req 5)
+    const axisSegs: ThemeSeg[] = this.axisSegs().flatMap((s) =>
+      dashedSegment(s.source, s.target),
+    );
 
     this.deck.setProps({
       layers: [
@@ -274,12 +289,12 @@ export class OcclusionDriver implements InterpDriver {
           getFillColor: [0, 0, 0, 1], // effectively invisible; exists for picking
           pickable: true,
         }),
-        new LineLayer<Seg>({
+        new LineLayer<ThemeSeg>({
           id: "occ-axis",
-          data: this.axisSegs(),
+          data: axisSegs,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: GUIDE,
+          getColor: AXIS_RGBA,
           getWidth: 1,
           widthUnits: "pixels",
           pickable: false,
@@ -300,7 +315,7 @@ export class OcclusionDriver implements InterpDriver {
           data: hoverSegs,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: [255, 255, 255, 160],
+          getColor: withAlpha(MARKER_HOT, 160 / 255),
           getWidth: 1,
           widthUnits: "pixels",
           pickable: false,
@@ -333,7 +348,7 @@ export class OcclusionDriver implements InterpDriver {
         if (mode === this.mode) return;
         this.mode = mode;
         this.hover = null;
-        this.tooltip.style.visibility = "hidden";
+        this.tooltip.hide();
         this.layout();
         this.buildChips();
         this.pushLayers();
@@ -505,17 +520,10 @@ export class OcclusionDriver implements InterpDriver {
       this.pushLayers();
     }
     if (!bar) {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
-    this.tooltip.innerHTML = "";
-    const add = (cls: string, text: string) => {
-      const el = document.createElement("div");
-      el.className = cls;
-      el.textContent = text;
-      this.tooltip.appendChild(el);
-    };
     const signed = (v: number, dp = 4) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(dp)}`;
     const i = bar.i;
     const dLp = e[this.mode].drop_lp[i] ?? 0;
@@ -523,29 +531,25 @@ export class OcclusionDriver implements InterpDriver {
     const [nt, ntP] = this.newTop(i);
     const other: Mode = this.mode === "sub" ? "del" : "sub";
     const [ont] = this.newTop(i, other);
-    add(
-      "point-tooltip-label",
-      `pos ${i} “${vis(e.token_strs[i] ?? "")}” — ${this.mode} drop ${signed(dLp)} nats (Δlogit ${signed(dLogit)})`,
-    );
-    add(
-      "point-tooltip-conf",
-      this.isFlip(i)
-        ? `top-1 FLIPS: “${vis(e.top1[0])}” → “${vis(nt)}” p ${ntP.toFixed(4)}`
-        : `occluded top-1 stays “${vis(nt)}” p ${ntP.toFixed(4)} (baseline p ${e.top1[1].toFixed(4)})`,
-    );
-    add(
-      "point-tooltip-conf",
-      `${other}: ${signed(e[other].drop_lp[i] ?? 0)} · top-1 “${vis(ont)}”${this.isFlip(i, other) ? " (flip)" : ""}`,
-    );
-    add(
-      "point-tooltip-conf",
-      "drop > 0 = this token supported the prediction · one real forward",
-    );
-    this.tooltip.style.visibility = "visible";
+    const rows: TipRow[] = [
+      {
+        kind: "label",
+        text: `pos ${i} “${vis(e.token_strs[i] ?? "")}” — ${this.mode} drop ${signed(dLp)} nats (Δlogit ${signed(dLogit)})`,
+        swatch: bar.v >= 0 ? AMBER : BLUE,
+      },
+      {
+        text: this.isFlip(i)
+          ? `top-1 FLIPS: “${vis(e.top1[0])}” → “${vis(nt)}” p ${ntP.toFixed(4)}`
+          : `occluded top-1 stays “${vis(nt)}” p ${ntP.toFixed(4)} (baseline p ${e.top1[1].toFixed(4)})`,
+      },
+      {
+        text: `${other}: ${signed(e[other].drop_lp[i] ?? 0)} · top-1 “${vis(ont)}”${this.isFlip(i, other) ? " (flip)" : ""}`,
+      },
+      { text: "drop > 0 = this token supported the prediction · one real forward" },
+    ];
+    this.tooltip.show(rows);
     const rect = this.canvas.getBoundingClientRect();
-    const px = Math.min(ev.clientX - rect.left + 14, this.cssW - 330);
-    const py = Math.min(ev.clientY - rect.top + 14, this.cssH - 110);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    this.tooltip.move(ev.clientX - rect.left, ev.clientY - rect.top, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
   }
 
@@ -554,7 +558,7 @@ export class OcclusionDriver implements InterpDriver {
       this.hover = null;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -582,7 +586,7 @@ export class OcclusionDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.chipRoot?.remove();
     this.deck?.finalize();

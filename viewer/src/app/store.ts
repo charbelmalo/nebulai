@@ -29,6 +29,38 @@ export interface InterpUI {
   traceSlug: string;
 }
 
+/** Cross-view entity selection (Internals). Clicking a head / token position /
+ *  SAE feature in one view publishes it here; every other mounted or later-
+ *  mounted view that knows the entity highlights it (registry `linksTo`
+ *  declares which). This is what turns 25 charts into one instrument: pick
+ *  L4H11 in Head Fingerprints and Composition Web / Induction / Ablation /
+ *  OV Eigen light the same head up. Selection is a claim about IDENTITY only
+ *  ("this is the same unit"), never about causality. */
+export type InterpSelection =
+  | { kind: "head"; layer: number; head: number }
+  | { kind: "token"; pos: number }
+  | { kind: "saeFeature"; id: number };
+
+/** Pointer into a guided tour (chrome/tours.ts owns the tour content — the
+ *  store only tracks WHERE the user is so chrome can render the overlay). */
+export interface TourRef {
+  id: string;
+  step: number;
+}
+
+export function sameInterpSelection(
+  a: InterpSelection | null,
+  b: InterpSelection | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "head" && b.kind === "head")
+    return a.layer === b.layer && a.head === b.head;
+  if (a.kind === "token" && b.kind === "token") return a.pos === b.pos;
+  if (a.kind === "saeFeature" && b.kind === "saeFeature") return a.id === b.id;
+  return false;
+}
+
 /** One saved topic filter — a named bag of keywords the snapshot map watches
  *  for in conversation logs. Ships with a couple of defaults (design,
  *  shaders). Users add more from either the Snapshot Map page or Settings. */
@@ -98,6 +130,9 @@ export interface Settings {
   labelDensity: number; // 0.2–2 — culling threshold multiplier for cluster labels
   animationSpeed: number; // 0.25–2 — global time-uniform multiplier
   reducedMotion: boolean; // manual override; caps.reducedMotion still wins on init
+  /** Internals cross-view linking: clicking a head/token/SAE feature in one
+   *  view highlights it in every other view that shows the same unit. */
+  crossLink: boolean;
 }
 
 /** Per-view appearance settings. Every graph type gets its own tab in the
@@ -200,6 +235,11 @@ export interface AppState {
   snapshot: SnapshotState;
   sessions: SessionsState;
   interp: InterpUI;
+  /** null = nothing picked. Cleared on model switch (unit ids are per-model). */
+  interpSelection: InterpSelection | null;
+  /** Active guided tour (Internals) — which tour and which step. null = none.
+   *  Cleared on model switch: tours quote model-specific bundle numbers. */
+  tour: TourRef | null;
 
   setCapabilities(c: Capabilities): void;
   setDatasets(d: DatasetEntry[]): void;
@@ -229,6 +269,8 @@ export interface AppState {
   setPage(p: Page): void;
   setInterpFeature(id: string): void;
   setInterpTrace(slug: string): void;
+  setInterpSelection(sel: InterpSelection | null): void;
+  setTour(tour: TourRef | null): void;
   addSnapshotLog(log: SnapshotLog): void;
   removeSnapshotLog(id: string): void;
   setActiveLog(id: string | null): void;
@@ -335,6 +377,7 @@ export const appStore = createStore<AppState>()((set) => ({
     labelDensity: 1,
     animationSpeed: 1,
     reducedMotion: false,
+    crossLink: true,
   },
   appearance: {
     atlas: {
@@ -393,10 +436,14 @@ export const appStore = createStore<AppState>()((set) => ({
   },
   sessions: { analyses: [], activeIds: [], hydrated: false },
   interp: { featureId: "weight-spectrum", traceSlug: "" },
+  interpSelection: null,
+  tour: null,
 
   setCapabilities: (capabilities) => set({ capabilities }),
   setDatasets: (datasets) => set({ datasets }),
-  setDataset: (datasetId, dataset) => set({ datasetId, dataset, hover: null, selection: null }),
+  // unit ids are per-model, so a dataset switch clears the cross-view pick too
+  setDataset: (datasetId, dataset) =>
+    set({ datasetId, dataset, hover: null, selection: null, interpSelection: null, tour: null }),
   setCompareData: (compareData) => set({ compareData }),
   setCompareState: (state) => set((s) => ({ compare: { ...s.compare, state } })),
   toggleCompareModel: (sourceIdx) =>
@@ -420,7 +467,12 @@ export const appStore = createStore<AppState>()((set) => ({
   setToggle: (key, value) =>
     set((s) => ({ toggles: { ...s.toggles, [key]: value } })),
   setSetting: (key, value) =>
-    set((s) => ({ settings: { ...s.settings, [key]: value } })),
+    set((s) => ({
+      settings: { ...s.settings, [key]: value },
+      // switching cross-view linking off also drops the live pick — a frozen
+      // highlight with no way to change it would read as data, not UI state
+      ...(key === "crossLink" && value === false ? { interpSelection: null } : {}),
+    })),
   setAppearance: (graph, key, value) =>
     set((s) => ({
       appearance: {
@@ -454,6 +506,9 @@ export const appStore = createStore<AppState>()((set) => ({
     set((s) => ({ interp: { ...s.interp, featureId } })),
   setInterpTrace: (traceSlug) =>
     set((s) => ({ interp: { ...s.interp, traceSlug } })),
+  setInterpSelection: (interpSelection) =>
+    set((s) => (s.settings.crossLink || interpSelection === null ? { interpSelection } : s)),
+  setTour: (tour) => set({ tour }),
   addSnapshotLog: (log) =>
     set((s) => ({
       snapshot: {

@@ -17,6 +17,8 @@
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import { appStore } from "../../app/store";
 import type { GpuTier } from "../../app/capabilities";
+import { HOT, MARKER_HOT } from "./chart-theme";
+import { InterpTooltip } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -27,7 +29,7 @@ const GT = 96; // header lines
 const GB = 76; // status footer + collapsed legend pill
 const IN_H = 42; // prompt input row (inside the plot band, below the header)
 
-const AMBER: [number, number, number] = [245, 195, 59];
+const AMBER = HOT; // shared --data-hot: sharp = low-entropy = bright amber
 const CELL_LO: [number, number, number] = [40, 42, 60];
 
 /** Cell tuple from the server: [top1_str, p, entropy_bits, kl_bits]. */
@@ -79,7 +81,7 @@ export class LiveNebulaDriver implements InterpDriver {
   private deck: Deck<OrthographicView[]> | null = null;
   private layersMod!: LayersModule;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private inputRoot!: HTMLElement;
   private input!: HTMLInputElement;
@@ -119,10 +121,7 @@ export class LiveNebulaDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-neuron-labels";
     overlay.appendChild(this.labelRoot);
@@ -133,7 +132,10 @@ export class LiveNebulaDriver implements InterpDriver {
     this.inputRoot.style.pointerEvents = "auto";
     this.input = document.createElement("input");
     this.input.type = "text";
-    this.input.value = "The Eiffel Tower is located in the city of";
+    // starts EMPTY on purpose: the placeholder + "type a prompt above" status are
+    // the empty state — a hardcoded default prompt fired an unrequested forward
+    // on mount and forced demo tooling to suppress it
+    this.input.value = "";
     this.input.placeholder = "type a prompt — every keystroke runs a real forward pass";
     this.input.setAttribute("aria-label", "live prompt");
     this.input.spellcheck = false;
@@ -401,7 +403,9 @@ export class LiveNebulaDriver implements InterpDriver {
             getPolygon: (d) => d.poly,
             filled: false,
             stroked: true,
-            getLineColor: [255, 255, 255, 235],
+            // red LED reticle locks the cursor cell — deliberately NOT white, so
+            // it never reads as the semantic white "matches final top-1" outline
+            getLineColor: [MARKER_HOT[0], MARKER_HOT[1], MARKER_HOT[2], 255],
             getLineWidth: 1.6,
             lineWidthUnits: "pixels",
             pickable: false,
@@ -595,45 +599,42 @@ export class LiveNebulaDriver implements InterpDriver {
     }
     const r = this.resp;
     if ((!c && !b) || !r) {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
-    this.tooltip.innerHTML = "";
-    const add = (cls: string, text: string) => {
-      const el = document.createElement("div");
-      el.className = cls;
-      el.textContent = text;
-      this.tooltip.appendChild(el);
-    };
     if (c) {
       const cell = r.cells[c.layer]?.[c.t];
       const fin = r.cells[r.n_layer]?.[c.t];
       if (!cell || !fin) {
-        this.tooltip.style.visibility = "hidden";
+        this.tooltip.hide();
         return;
       }
-      add(
-        "point-tooltip-label",
-        `${c.layer === r.n_layer ? "final" : `L${c.layer}`} · pos ${c.t} “${vis(r.tokens[c.t] ?? "")}”`,
-      );
-      add("point-tooltip-conf", `lens → “${vis(cell[0])}” p ${cell[1].toFixed(4)}`);
-      add("point-tooltip-conf", `entropy ${cell[2].toFixed(3)} bits · KL(final ‖ lens) ${cell[3].toFixed(3)} bits`);
-      add("point-tooltip-conf", `final → “${vis(fin[0])}” p ${fin[1].toFixed(4)}`);
+      // brighter (lower-entropy) lens reading is the "hot" datum the cursor locks
+      const sharp = cell[2] < (r.meta.entropy_max || 15.617) * 0.5;
+      this.tooltip.show([
+        {
+          kind: "label",
+          text: `${c.layer === r.n_layer ? "final" : `L${c.layer}`} · pos ${c.t} “${vis(r.tokens[c.t] ?? "")}”`,
+        },
+        { text: `lens → “${vis(cell[0])}”`, value: `p ${cell[1].toFixed(4)}`, hot: sharp },
+        { text: "entropy", value: `${cell[2].toFixed(3)} bits` },
+        { text: "KL(final ‖ lens)", value: `${cell[3].toFixed(3)} bits` },
+        { text: `final → “${vis(fin[0])}”`, value: `p ${fin[1].toFixed(4)}` },
+      ]);
     } else if (b) {
       const ft = r.final_top[b.rank];
       if (!ft) {
-        this.tooltip.style.visibility = "hidden";
+        this.tooltip.hide();
         return;
       }
-      add("point-tooltip-label", `next-token candidate #${b.rank + 1}`);
-      add("point-tooltip-conf", `“${vis(ft[0])}” p ${ft[1].toFixed(4)} = ${(ft[1] * 100).toFixed(2)}%`);
-      add("point-tooltip-conf", "final softmax at the last position — full 50,257-way");
+      this.tooltip.show([
+        { kind: "label", swatch: AMBER, text: `next-token candidate #${b.rank + 1}` },
+        { text: `“${vis(ft[0])}”`, value: `${(ft[1] * 100).toFixed(2)}%`, hot: b.rank === 0 },
+        { kind: "conf", text: "final softmax at the last position — full 50,257-way" },
+      ]);
     }
-    this.tooltip.style.visibility = "visible";
-    const px = Math.min(x + 14, this.cssW - 320);
-    const py = Math.min(y + 14, this.cssH - 110);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
   }
 
@@ -643,7 +644,7 @@ export class LiveNebulaDriver implements InterpDriver {
       this.hoverBar = -1;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -671,7 +672,7 @@ export class LiveNebulaDriver implements InterpDriver {
     this.inflight?.abort();
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip.remove();
+    this.tooltip.dispose();
     this.labelRoot.remove();
     this.inputRoot.remove();
     this.deck?.finalize();

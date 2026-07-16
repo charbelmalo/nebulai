@@ -15,6 +15,16 @@
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
 import { type GrokBundle, loadGrok } from "../../data/interp";
+import {
+  AXIS_RGBA,
+  dashedSegment,
+  MARKER_HOT,
+  markerPoly,
+  markerRing,
+  type Vec2,
+  withAlpha,
+} from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -27,7 +37,6 @@ const GB = 92; // px — clock chips + collapsed legend pill
 const AMBER: [number, number, number] = [245, 195, 59];
 const SLATE: [number, number, number] = [138, 146, 178];
 const CYAN: [number, number, number] = [70, 200, 235];
-const GUIDE: [number, number, number, number] = [118, 126, 158, 130];
 
 interface Seg {
   source: [number, number];
@@ -49,7 +58,7 @@ export class GrokClockDriver implements InterpDriver {
   private deck: Deck<OrthographicView[]> | null = null;
   private layersMod!: LayersModule;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private chipRoot!: HTMLElement;
 
@@ -85,10 +94,7 @@ export class GrokClockDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-neuron-labels";
     overlay.appendChild(this.labelRoot);
@@ -276,17 +282,22 @@ export class GrokClockDriver implements InterpDriver {
     }
 
     // vertical guides: train hits 100% / test hits 100% (the grok) — drawn
-    // per panel, since curve and heat x-axes differ on narrow
+    // per panel, since curve and heat x-axes differ on narrow. Dashed hairlines
+    // now (req 5), the GUIDE stays subtle via AXIS_RGBA.
     const guides: Seg[] = [];
     for (const s of [g.meta.tr100_step, g.meta.grok_step]) {
-      guides.push({
-        source: [this.xOfStep(s, gm.curveW), gm.curveY],
-        target: [this.xOfStep(s, gm.curveW), gm.curveY + gm.curveH],
-      });
-      guides.push({
-        source: [this.xOfStep(s, gm.heatW), gm.heatY],
-        target: [this.xOfStep(s, gm.heatW), gm.heatY + gm.heatH],
-      });
+      guides.push(
+        ...dashedSegment(
+          [this.xOfStep(s, gm.curveW), gm.curveY],
+          [this.xOfStep(s, gm.curveW), gm.curveY + gm.curveH],
+        ),
+      );
+      guides.push(
+        ...dashedSegment(
+          [this.xOfStep(s, gm.heatW), gm.heatY],
+          [this.xOfStep(s, gm.heatW), gm.heatY + gm.heatH],
+        ),
+      );
     }
 
     // clock successor path a -> a+1 — real pairs of computed points; the
@@ -310,6 +321,15 @@ export class GrokClockDriver implements InterpDriver {
         { x: mx, y: this.yOfFrac(g.purity_med[i] ?? 0), c: CYAN },
       );
     }
+    // hollow reticle rings framing each LED diamond core (the target-lock look),
+    // one per curve-hover marker, in that marker's own semantic curve color
+    const markerRings: { source: Vec2; target: Vec2; c: [number, number, number] }[] = [];
+    for (const m of markers) {
+      const ring = markerRing(m.x, m.y, 4.5 * 1.7);
+      for (let k = 0; k < ring.length - 1; k++) {
+        markerRings.push({ source: ring[k]!, target: ring[k + 1]!, c: m.c });
+      }
+    }
 
     this.deck.setProps({
       layers: [
@@ -326,7 +346,7 @@ export class GrokClockDriver implements InterpDriver {
           data: guides,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: GUIDE,
+          getColor: AXIS_RGBA,
           getWidth: 1,
           widthUnits: "pixels",
           pickable: false,
@@ -432,18 +452,21 @@ export class GrokClockDriver implements InterpDriver {
           updateTriggers: { getPosition: [this.layoutGen, this.clockIdx] },
           pickable: true,
         }),
-        new ScatterplotLayer<{ x: number; y: number; c: [number, number, number] }>({
+        new SolidPolygonLayer<{ x: number; y: number; c: [number, number, number] }>({
           id: "grok-markers",
           data: markers,
-          getPosition: (d) => [d.x, d.y, 0],
-          getFillColor: [0, 0, 0, 0],
-          getLineColor: (d) => [d.c[0], d.c[1], d.c[2], 255],
-          getRadius: 4.5,
-          radiusUnits: "pixels",
-          stroked: true,
-          filled: false,
-          getLineWidth: 1.4,
-          lineWidthUnits: "pixels",
+          getPolygon: (d) => markerPoly(d.x, d.y, 4.5),
+          getFillColor: (d) => [d.c[0], d.c[1], d.c[2], 255],
+          pickable: false,
+        }),
+        new LineLayer<{ source: Vec2; target: Vec2; c: [number, number, number] }>({
+          id: "grok-marker-ring",
+          data: markerRings,
+          getSourcePosition: (e) => [e.source[0], e.source[1], 0],
+          getTargetPosition: (e) => [e.target[0], e.target[1], 0],
+          getColor: (e) => withAlpha(e.c, 0.9),
+          getWidth: 1.4,
+          widthUnits: "pixels",
           pickable: false,
         }),
         new ScatterplotLayer<{ a: number }>({
@@ -454,7 +477,7 @@ export class GrokClockDriver implements InterpDriver {
             return [x, y, 0];
           },
           getFillColor: [0, 0, 0, 0],
-          getLineColor: [255, 255, 255, 230],
+          getLineColor: [MARKER_HOT[0], MARKER_HOT[1], MARKER_HOT[2], 230],
           getRadius: 6,
           radiusUnits: "pixels",
           stroked: true,
@@ -670,31 +693,37 @@ export class GrokClockDriver implements InterpDriver {
       this.pushLayers();
     }
 
-    this.tooltip.innerHTML = "";
-    const add = (cls: string, text: string) => {
-      const el = document.createElement("div");
-      el.className = cls;
-      el.textContent = text;
-      this.tooltip.appendChild(el);
-    };
+    const rows: TipRow[] = [];
     if (this.hoverCk != null) {
       const i = this.hoverCk;
-      add("point-tooltip-label", `step ${g.steps[i]}`);
-      add("point-tooltip-conf", `train acc ${(g.train_acc[i] ?? 0).toFixed(4)} · MSE ${(g.train_loss[i] ?? 0).toFixed(6)}`);
-      add("point-tooltip-conf", `test acc ${(g.test_acc[i] ?? 0).toFixed(4)} · MSE ${(g.test_loss[i] ?? 0).toFixed(6)}`);
-      add(
-        "point-tooltip-conf",
-        `unit purity median ${(g.purity_med[i] ?? 0).toFixed(4)} · ` +
-          `IQR [${(g.purity_q1[i] ?? 0).toFixed(3)}, ${(g.purity_q3[i] ?? 0).toFixed(3)}]`,
+      // the test-accuracy curve (AMBER) is the grokking headline — its swatch
+      // labels the row and its reading pops out hot
+      rows.push(
+        { kind: "label", text: `step ${g.steps[i]}`, swatch: AMBER },
+        { text: "test acc", value: `${(g.test_acc[i] ?? 0).toFixed(4)}`, hot: true },
+        { text: "train acc", value: `${(g.train_acc[i] ?? 0).toFixed(4)}` },
+        {
+          text: `train MSE ${(g.train_loss[i] ?? 0).toFixed(6)} · test MSE ${(g.test_loss[i] ?? 0).toFixed(6)}`,
+        },
+        {
+          text:
+            `unit purity median ${(g.purity_med[i] ?? 0).toFixed(4)} · ` +
+            `IQR [${(g.purity_q1[i] ?? 0).toFixed(3)}, ${(g.purity_q3[i] ?? 0).toFixed(3)}]`,
+        },
       );
     } else if (this.hoverHeat) {
       const { ci, k } = this.hoverHeat;
       const v = g.fpower[ci * g.meta.n_freq + k] ?? 0;
-      add("point-tooltip-label", `freq ${k === 0 ? "0 (DC)" : k} · step ${g.steps[ci]}`);
-      add("point-tooltip-conf", `${(v * 100).toFixed(2)}% of ‖W1ₐ‖² spectral power`);
-      add(
-        "point-tooltip-conf",
-        `linear ramp clamps at ${(this.heatMax * 100).toFixed(2)}% (max non-DC cell)`,
+      const t = Math.min(1, v / this.heatMax);
+      const swatch: [number, number, number] = [
+        Math.round(20 + t * (AMBER[0] - 20)),
+        Math.round(22 + t * (AMBER[1] - 22)),
+        Math.round(34 + t * (AMBER[2] - 34)),
+      ];
+      rows.push(
+        { kind: "label", text: `freq ${k === 0 ? "0 (DC)" : k} · step ${g.steps[ci]}`, swatch },
+        { text: "‖W1ₐ‖² spectral power", value: `${(v * 100).toFixed(2)}%`, hot: true },
+        { text: `linear ramp clamps at ${(this.heatMax * 100).toFixed(2)}% (max non-DC cell)` },
       );
     } else if (this.hoverA != null && g.clocks[this.clockIdx]) {
       const ck = g.clocks[this.clockIdx];
@@ -703,21 +732,21 @@ export class GrokClockDriver implements InterpDriver {
       const x = ck.xy[a * 2] ?? 0;
       const y = ck.xy[a * 2 + 1] ?? 0;
       const ang = (Math.atan2(y, x) * 180) / Math.PI;
-      add("point-tooltip-label", `token a = ${a} · clock k = ${ck.k}`);
-      add("point-tooltip-conf", `proj (${x.toFixed(4)}, ${y.toFixed(4)}) · angle ${ang.toFixed(1)}°`);
-      add("point-tooltip-conf", `k·a mod ${g.meta.p} = ${(ck.k * a) % g.meta.p} — its slot on the dial`);
-      add("point-tooltip-conf", `phase alignment of this clock: ${ck.circ}`);
+      rows.push(
+        { kind: "label", text: `token a = ${a} · clock k = ${ck.k}`, swatch: AMBER },
+        { text: "angle", value: `${ang.toFixed(1)}°`, hot: true },
+        { text: `proj (${x.toFixed(4)}, ${y.toFixed(4)})` },
+        { text: `k·a mod ${g.meta.p} = ${(ck.k * a) % g.meta.p} — its slot on the dial` },
+        { text: `phase alignment of this clock: ${ck.circ}` },
+      );
     } else {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
+    this.tooltip.show(rows);
     const rect = this.canvas.getBoundingClientRect();
-    const lx = e.clientX - rect.left;
-    const ly = e.clientY - rect.top;
-    this.tooltip.style.visibility = "visible";
-    this.tooltip.style.left = `${Math.min(lx + 14, this.cssW - 250)}px`;
-    this.tooltip.style.top = `${Math.min(ly + 14, this.cssH - 110)}px`;
+    this.tooltip.move(e.clientX - rect.left, e.clientY - rect.top, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
   }
 
@@ -727,7 +756,7 @@ export class GrokClockDriver implements InterpDriver {
       this.hoverA = null;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -756,7 +785,7 @@ export class GrokClockDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.chipRoot?.remove();
     this.deck?.finalize();

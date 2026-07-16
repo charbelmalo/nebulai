@@ -18,7 +18,19 @@
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
+import { appStore, type InterpSelection } from "../../app/store";
 import { type OVEigsBundle, loadOVEigs } from "../../data/interp";
+import {
+  AXIS_RGBA,
+  dashedSegment,
+  GRID_RGBA,
+  MARKER_HOT,
+  markerPoly,
+  type RGB,
+  type Vec2,
+  withAlpha,
+} from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 import { LAYER_COLORS } from "./NeuronFieldDriver";
 
@@ -29,8 +41,6 @@ const LOG_HI = 2; // |λ| = 100 at the rim
 const DECADES = [-1, 0, 1, 2]; // gridline rings: |λ| = 0.1, 1, 10, 100
 const MARGIN = 56; // px around the outer ring for labels
 const DIM_RGBA: [number, number, number, number] = [118, 126, 158, 26];
-const GRID_RGBA: [number, number, number, number] = [118, 126, 158, 30];
-const UNIT_RGBA: [number, number, number, number] = [166, 173, 200, 80];
 
 interface EigPt {
   position: [number, number];
@@ -56,7 +66,7 @@ export class OVEigenDriver implements InterpDriver {
   private deck: Deck<OrthographicView[]> | null = null;
   private layersMod!: LayersModule;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private chipRoot!: HTMLElement;
 
@@ -66,6 +76,8 @@ export class OVEigenDriver implements InterpDriver {
   private byHead: EigPt[][] = [];
   private isolateLayer: number | null = null;
   private isolateHead: number | null = null;
+  /** flat head index the global cross-view selection maps to (isolate = follow) */
+  private linkedHead: number | null = null;
   private dimPts: EigPt[] = [];
   private hover: EigPt | null = null;
 
@@ -89,10 +101,7 @@ export class OVEigenDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-neuron-labels";
     overlay.appendChild(this.labelRoot);
@@ -195,11 +204,14 @@ export class OVEigenDriver implements InterpDriver {
   private gridSegs(): Seg[] {
     const [cx, cy] = this.center();
     const segs: Seg[] = [];
+    // dashed rings (req 5): draw every other arc so each decade ring reads as a
+    // hairline dashed circle instead of a solid line competing with the points.
     const STEPS = 96;
     for (const d of DECADES) {
       const r = ((d - LOG_LO) / (LOG_HI - LOG_LO)) * this.R();
       const unit = d === 0;
       for (let k = 0; k < STEPS; k++) {
+        if (k % 2 === 1) continue;
         const a0 = (k / STEPS) * 2 * Math.PI;
         const a1 = ((k + 1) / STEPS) * 2 * Math.PI;
         segs.push({
@@ -209,13 +221,13 @@ export class OVEigenDriver implements InterpDriver {
         });
       }
     }
+    // dashed radial spokes
     for (let k = 0; k < 8; k++) {
       const a = (k / 8) * 2 * Math.PI;
-      segs.push({
-        source: [cx, cy],
-        target: [cx + this.R() * Math.cos(a), cy - this.R() * Math.sin(a)],
-        unit: false,
-      });
+      const rim: Vec2 = [cx + this.R() * Math.cos(a), cy - this.R() * Math.sin(a)];
+      for (const s of dashedSegment([cx, cy], rim, 3, 6)) {
+        segs.push({ source: s.source, target: s.target, unit: false });
+      }
     }
     return segs;
   }
@@ -228,8 +240,26 @@ export class OVEigenDriver implements InterpDriver {
 
   private pushLayers(): void {
     if (!this.deck || !this.pts.length) return;
-    const { ScatterplotLayer, LineLayer } = this.layersMod;
+    const { ScatterplotLayer, LineLayer, SolidPolygonLayer } = this.layersMod;
     const hoverHead = this.hover ? (this.byHead[this.hover.head] ?? []) : [];
+    // hover marker: a sharp red LED diamond (glow + core) locked onto the point,
+    // replacing the old white outline ring (req 4).
+    interface Marker {
+      poly: Vec2[];
+      color: [number, number, number, number];
+    }
+    const marks: Marker[] = this.hover
+      ? [
+          {
+            poly: markerPoly(this.hover.position[0], this.hover.position[1], 4.5 * 2.1),
+            color: withAlpha(MARKER_HOT, 0.22),
+          },
+          {
+            poly: markerPoly(this.hover.position[0], this.hover.position[1], 4.5),
+            color: withAlpha(MARKER_HOT, 1),
+          },
+        ]
+      : [];
 
     this.deck.setProps({
       layers: [
@@ -238,7 +268,7 @@ export class OVEigenDriver implements InterpDriver {
           data: this.gridSegs(),
           getSourcePosition: (s) => [s.source[0], s.source[1], 0],
           getTargetPosition: (s) => [s.target[0], s.target[1], 0],
-          getColor: (s) => (s.unit ? UNIT_RGBA : GRID_RGBA),
+          getColor: (s) => (s.unit ? AXIS_RGBA : GRID_RGBA),
           getWidth: (s) => (s.unit ? 1.4 : 1),
           widthUnits: "pixels",
           pickable: false,
@@ -255,6 +285,8 @@ export class OVEigenDriver implements InterpDriver {
         new ScatterplotLayer<EigPt>({
           id: "ov-active",
           data: this.activePts(),
+          // field defers to the focused head on hover (req 3)
+          opacity: this.hover ? 0.4 : 1,
           getPosition: (p) => [p.position[0], p.position[1], 0],
           getFillColor: (p) => {
             const [r, g, b] = LAYER_COLORS[p.layer] ?? [205, 210, 224];
@@ -278,17 +310,11 @@ export class OVEigenDriver implements InterpDriver {
           radiusUnits: "pixels",
           pickable: false,
         }),
-        new ScatterplotLayer<EigPt>({
+        new SolidPolygonLayer<Marker>({
           id: "ov-hover",
-          data: this.hover ? [this.hover] : [],
-          getPosition: (p) => [p.position[0], p.position[1], 0],
-          getFillColor: [255, 255, 255, 235],
-          getLineColor: [12, 14, 22, 235],
-          stroked: true,
-          lineWidthUnits: "pixels",
-          getLineWidth: 1.4,
-          getRadius: 4.2,
-          radiusUnits: "pixels",
+          data: marks,
+          getPolygon: (m) => m.poly,
+          getFillColor: (m) => m.color,
           pickable: false,
         }),
       ],
@@ -307,7 +333,7 @@ export class OVEigenDriver implements InterpDriver {
       this.dimPts = [];
     }
     this.hover = null;
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.buildChips();
     this.pushLayers();
     this.positionLabels();
@@ -412,8 +438,29 @@ export class OVEigenDriver implements InterpDriver {
     const p = this.pick(e);
     if (p) {
       // click a point → isolate its head's full spectrum; click again clears
-      this.setIsolate(null, this.isolateHead === p.head ? null : p.head);
+      const next = this.isolateHead === p.head ? null : p.head;
+      this.setIsolate(null, next);
+      // publish the isolate as the global cross-view head selection
+      appStore
+        .getState()
+        .setInterpSelection(next === null ? null : { kind: "head", layer: p.layer, head: p.headIdx });
     } else if (this.isolateHead !== null) {
+      this.setIsolate(null, null);
+      appStore.getState().setInterpSelection(null);
+    }
+  }
+
+  /** Cross-view link: follow a global head selection by isolating its spectrum. */
+  setSelection(sel: InterpSelection | null): void {
+    const H = this.bundle?.meta.n_head;
+    const flat = sel?.kind === "head" && H !== undefined ? sel.layer * H + sel.head : null;
+    if (flat === this.linkedHead && (flat === null || this.isolateHead === flat)) return;
+    const prev = this.linkedHead;
+    this.linkedHead = flat;
+    if (flat !== null) {
+      if (this.isolateHead !== flat) this.setIsolate(null, flat);
+    } else if (prev !== null && this.isolateHead === prev) {
+      // only clear an isolate the link itself created/mirrors
       this.setIsolate(null, null);
     }
   }
@@ -426,31 +473,29 @@ export class OVEigenDriver implements InterpDriver {
       this.pushLayers();
     }
     if (!p || !this.bundle) {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    this.tooltip.innerHTML = "";
-    const add = (cls: string, text: string) => {
-      const el = document.createElement("div");
-      el.className = cls;
-      el.textContent = text;
-      this.tooltip.appendChild(el);
-    };
     const cp = this.bundle.copying[p.head] ?? 0;
     const sgn = p.im >= 0 ? "+" : "−";
-    add("point-tooltip-label", `L${p.layer} · head ${p.headIdx} · λ${p.rank + 1} of ${this.bundle.d_head}`);
-    add("point-tooltip-conf", `λ = ${p.re.toFixed(4)} ${sgn} ${Math.abs(p.im).toFixed(4)}i`);
-    add("point-tooltip-conf", `|λ| = ${p.mag.toFixed(4)} · arg = ${p.argDeg.toFixed(1)}°`);
-    add("point-tooltip-conf", `head copying ${cp >= 0 ? "+" : ""}${cp.toFixed(3)} (Σ Re λ / Σ |λ|)`);
-    add("point-tooltip-conf", "click to isolate this head's spectrum");
-    this.tooltip.style.visibility = "visible";
-    const px = Math.min(x + 14, this.cssW - 280);
-    const py = Math.min(y + 14, this.cssH - 110);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    const lc = LAYER_COLORS[p.layer] ?? [205, 210, 224];
+    const rows: TipRow[] = [
+      {
+        kind: "label",
+        text: `L${p.layer} · head ${p.headIdx} · λ${p.rank + 1} of ${this.bundle.d_head}`,
+        swatch: [lc[0], lc[1], lc[2]] as RGB,
+      },
+      { text: `λ = ${p.re.toFixed(4)} ${sgn} ${Math.abs(p.im).toFixed(4)}i` },
+      { text: `|λ| = ${p.mag.toFixed(4)} · arg = ${p.argDeg.toFixed(1)}°` },
+      { text: `head copying ${cp >= 0 ? "+" : ""}${cp.toFixed(3)} (Σ Re λ / Σ |λ|)` },
+      { text: "click to isolate this head's spectrum" },
+    ];
+    this.tooltip.show(rows);
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
   }
 
@@ -459,7 +504,7 @@ export class OVEigenDriver implements InterpDriver {
       this.hover = null;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -490,7 +535,7 @@ export class OVEigenDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.chipRoot?.remove();
     this.deck?.finalize();

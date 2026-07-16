@@ -106,6 +106,11 @@ class GPT2Numpy:
         self.d_head = self.d // self.n_head
 
         self.t = load_file(hf_hub_download(model_id, "model.safetensors"))
+        # distilgpt2 ships the same GPT-2 tensors under a uniform "transformer."
+        # prefix (gpt2/gpt2-medium are unprefixed) — strip it so one key scheme
+        # serves the whole family.
+        if "wte.weight" not in self.t and "transformer.wte.weight" in self.t:
+            self.t = {k.removeprefix("transformer."): v for k, v in self.t.items()}
         self.wte = self._g("wte.weight")  # (V, d)
         self.wpe = self._g("wpe.weight")  # (n_ctx, d)
         self.V = self.wte.shape[0]

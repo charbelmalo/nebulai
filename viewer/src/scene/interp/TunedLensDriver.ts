@@ -19,8 +19,11 @@ import {
   type TunedBundle,
   type TunedCurvePoint,
   type TunedGrid,
+  isLiveTrace,
   loadTuned,
 } from "../../data/interp";
+import { ACCENT, dashedSegment, HOT, withAlpha } from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -30,7 +33,7 @@ const GR = 16;
 const GT = 96; // header lines under the tracebar
 const GB = 92; // clears the collapsed legend pill
 
-const TUNED: [number, number, number] = [245, 195, 59]; // amber
+const TUNED: [number, number, number] = HOT; // amber (== --data-hot token)
 const LOGIT: [number, number, number] = [96, 150, 255]; // blue
 const GUIDE: [number, number, number] = [118, 126, 158];
 const CELL_LO: [number, number, number] = [40, 42, 60]; // KL 0 (agrees with final)
@@ -71,7 +74,7 @@ export class TunedLensDriver implements InterpDriver {
   private deck: Deck<OrthographicView[]> | null = null;
   private layersMod!: LayersModule;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private chipRoot!: HTMLElement;
 
@@ -104,10 +107,7 @@ export class TunedLensDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-neuron-labels";
     overlay.appendChild(this.labelRoot);
@@ -130,7 +130,13 @@ export class TunedLensDriver implements InterpDriver {
       this.bundle = await loadTuned(model);
     }
     this.nL = this.bundle.n_layer;
-    const g = this.bundle.grids.find((x) => x.slug === trace) ?? this.bundle.grids[0];
+    const gFound = this.bundle.grids.find((x) => x.slug === trace);
+    if (!gFound && trace && isLiveTrace(trace))
+      throw new Error(
+        "the tuned-lens translator grids are precomputed per bundled prompt — " +
+          "custom prompts cover the forward-trace views only",
+      );
+    const g = gFound ?? this.bundle.grids[0];
     if (!g) throw new Error("tuned.json has no grids");
     this.grid = g;
     this.hoverCell = null;
@@ -302,29 +308,39 @@ export class TunedLensDriver implements InterpDriver {
         dots.push({ pos: [this.xOfL(ar, L), this.yOfAg(ar, a.agree)], color: [col[0], col[1], col[2], 255], r: 2.2 });
       }
     }
-    // guides: KL 0 baseline, 50% agreement
+    // guides: KL 0 baseline, 50% agreement — DASHED hairlines now (req 5) so the
+    // structure whispers under the curves.
+    const dashGuide = (
+      a: [number, number],
+      b: [number, number],
+      color: [number, number, number, number],
+      width: number,
+    ): Seg[] => dashedSegment(a, b).map((s) => ({ source: s.source, target: s.target, color, width }));
     const guides: Seg[] = [
-      {
-        source: [kr.x0, this.yOfKL(kr, 0)],
-        target: [kr.x0 + kr.w, this.yOfKL(kr, 0)],
-        color: [GUIDE[0], GUIDE[1], GUIDE[2], 60],
-        width: 1,
-      },
-      {
-        source: [ar.x0, this.yOfAg(ar, 0.5)],
-        target: [ar.x0 + ar.w, this.yOfAg(ar, 0.5)],
-        color: [GUIDE[0], GUIDE[1], GUIDE[2], 90],
-        width: 1,
-      },
+      ...dashGuide(
+        [kr.x0, this.yOfKL(kr, 0)],
+        [kr.x0 + kr.w, this.yOfKL(kr, 0)],
+        [GUIDE[0], GUIDE[1], GUIDE[2], 60],
+        1,
+      ),
+      ...dashGuide(
+        [ar.x0, this.yOfAg(ar, 0.5)],
+        [ar.x0 + ar.w, this.yOfAg(ar, 0.5)],
+        [GUIDE[0], GUIDE[1], GUIDE[2], 90],
+        1,
+      ),
     ];
+    // crosshair locked onto the hovered layer column (req 4), in the chrome accent
     if (this.hoverLayer >= 0) {
       for (const r of [kr, ar]) {
-        guides.push({
-          source: [this.xOfL(r, this.hoverLayer), r.y0],
-          target: [this.xOfL(r, this.hoverLayer), r.y0 + r.h],
-          color: [255, 255, 255, 70],
-          width: 1,
-        });
+        guides.push(
+          ...dashGuide(
+            [this.xOfL(r, this.hoverLayer), r.y0],
+            [this.xOfL(r, this.hoverLayer), r.y0 + r.h],
+            withAlpha(ACCENT, 0.5),
+            1,
+          ),
+        );
       }
     }
 
@@ -624,44 +640,57 @@ export class TunedLensDriver implements InterpDriver {
     const b = this.bundle;
     const g = this.grid;
     if ((!c && curveL < 0) || !b || !g) {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
-    this.tooltip.innerHTML = "";
-    const add = (cls: string, text: string) => {
-      const el = document.createElement("div");
-      el.className = cls;
-      el.textContent = text;
-      this.tooltip.appendChild(el);
-    };
     const lo0 = curveL >= 0 ? b.logit[curveL] : undefined;
     const tu0 = curveL >= 0 ? b.tuned[curveL] : undefined;
     const tuc = c ? g.tuned[c.layer]?.[c.t] : undefined;
     const loc = c ? g.logit[c.layer]?.[c.t] : undefined;
     const fin = c ? g.final_top[c.t] : undefined;
+    let rows: TipRow[];
     if (lo0 && tu0) {
-      add("point-tooltip-label", curveL === this.nL ? "final residual (layer 12)" : `entering block L${curveL}`);
-      add("point-tooltip-conf", `tuned  KL ${tu0.mean.toFixed(3)} bits (p25 ${tu0.p25.toFixed(2)} · p50 ${tu0.p50.toFixed(2)} · p75 ${tu0.p75.toFixed(2)})`);
-      add("point-tooltip-conf", `logit  KL ${lo0.mean.toFixed(3)} bits (p25 ${lo0.p25.toFixed(2)} · p50 ${lo0.p50.toFixed(2)} · p75 ${lo0.p75.toFixed(2)})`);
-      add("point-tooltip-conf", `top-1 agreement: tuned ${(tu0.agree * 100).toFixed(1)}% · logit ${(lo0.agree * 100).toFixed(1)}%`);
-      add("point-tooltip-conf", `over ${b.meta.n_eval_pos.toLocaleString()} held-out positions`);
+      rows = [
+        {
+          kind: "label",
+          text: curveL === this.nL ? "final residual (layer 12)" : `entering block L${curveL}`,
+        },
+        {
+          text: `tuned  KL ${tu0.mean.toFixed(3)} bits (p25 ${tu0.p25.toFixed(2)} · p50 ${tu0.p50.toFixed(2)} · p75 ${tu0.p75.toFixed(2)})`,
+          swatch: TUNED,
+        },
+        {
+          text: `logit  KL ${lo0.mean.toFixed(3)} bits (p25 ${lo0.p25.toFixed(2)} · p50 ${lo0.p50.toFixed(2)} · p75 ${lo0.p75.toFixed(2)})`,
+          swatch: LOGIT,
+        },
+        {
+          text: `top-1 agreement: tuned ${(tu0.agree * 100).toFixed(1)}% · logit ${(lo0.agree * 100).toFixed(1)}%`,
+        },
+        { text: `over ${b.meta.n_eval_pos.toLocaleString()} held-out positions` },
+      ];
     } else if (c && tuc && loc && fin) {
-      add(
-        "point-tooltip-label",
-        `${c.layer === this.nL ? "final" : `L${c.layer}`} · pos ${c.t} “${vis(g.token_strs[c.t] ?? "")}”`,
-      );
-      add("point-tooltip-conf", `tuned → “${vis(b.tok_strs[tuc[0]] ?? "")}” p ${tuc[1].toFixed(3)} · KL ${tuc[2].toFixed(3)} bits`);
-      add("point-tooltip-conf", `logit → “${vis(b.tok_strs[loc[0]] ?? "")}” p ${loc[1].toFixed(3)} · KL ${loc[2].toFixed(3)} bits`);
-      add("point-tooltip-conf", `final → “${vis(b.tok_strs[fin[0]] ?? "")}” p ${fin[1].toFixed(3)}`);
+      rows = [
+        {
+          kind: "label",
+          text: `${c.layer === this.nL ? "final" : `L${c.layer}`} · pos ${c.t} “${vis(g.token_strs[c.t] ?? "")}”`,
+        },
+        {
+          text: `tuned → “${vis(b.tok_strs[tuc[0]] ?? "")}” p ${tuc[1].toFixed(3)} · KL ${tuc[2].toFixed(3)} bits`,
+          swatch: TUNED,
+        },
+        {
+          text: `logit → “${vis(b.tok_strs[loc[0]] ?? "")}” p ${loc[1].toFixed(3)} · KL ${loc[2].toFixed(3)} bits`,
+          swatch: LOGIT,
+        },
+        { text: `final → “${vis(b.tok_strs[fin[0]] ?? "")}” p ${fin[1].toFixed(3)}` },
+      ];
     } else {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       return;
     }
-    this.tooltip.style.visibility = "visible";
-    const px = Math.min(x + 14, this.cssW - 320);
-    const py = Math.min(y + 14, this.cssH - 120);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    this.tooltip.show(rows);
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
   }
 
@@ -671,7 +700,7 @@ export class TunedLensDriver implements InterpDriver {
       this.hoverLayer = -1;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -697,7 +726,7 @@ export class TunedLensDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.chipRoot?.remove();
     this.deck?.finalize();

@@ -15,12 +15,26 @@
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
+import { appStore, type InterpSelection } from "../../app/store";
 import {
   type SAEActsBundle,
   type SAEActsFeature,
   type SAEActsTrace,
+  isLiveTrace,
+  livePromptFor,
+  loadLiveSAEActs,
   loadSAEActs,
+  putLiveSAEActs,
 } from "../../data/interp";
+import {
+  ACCENT,
+  crosshair,
+  MARKER_HOT,
+  type RGB,
+  type Seg as ThemeSeg,
+  withAlpha,
+} from "./chart-theme";
+import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -57,7 +71,7 @@ export class SAEPianoRollDriver implements InterpDriver {
   private deck: Deck<OrthographicView[]> | null = null;
   private layersMod!: LayersModule;
   private canvas!: HTMLCanvasElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private chipRoot!: HTMLElement;
 
@@ -68,6 +82,8 @@ export class SAEPianoRollDriver implements InterpDriver {
   private boardMax = 1;
   private scaleMode: "row" | "board" = "row";
   private hover: Cell | null = null;
+  /** feature id the global cross-view selection outlines (if a row shows it) */
+  private linked: number | null = null;
 
   private cssW = 1;
   private cssH = 1;
@@ -91,10 +107,7 @@ export class SAEPianoRollDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-neuron-labels";
     overlay.appendChild(this.labelRoot);
@@ -104,11 +117,14 @@ export class SAEPianoRollDriver implements InterpDriver {
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onLeave = () => this.onLeave();
+    const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("click", onClick);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("click", onClick);
     });
   }
 
@@ -117,7 +133,12 @@ export class SAEPianoRollDriver implements InterpDriver {
       this.bundle = await loadSAEActs(model);
     }
     const traces = this.bundle.traces;
-    const tr = traces.find((t) => t.slug === trace) ?? traces[0];
+    let found = traces.find((t) => t.slug === trace);
+    // 2c live SAE lens: a typed prompt's activations come from POST /live/sae
+    // (same producer as the offline traces); never silently show a bundled
+    // prompt under a live slug
+    if (!found && trace && isLiveTrace(trace)) found = await this.fetchLiveTrace(model, trace);
+    const tr = found ?? traces[0];
     if (!tr) throw new Error("sae_acts.json has no traces");
     this.tr = tr;
 
@@ -137,6 +158,45 @@ export class SAEPianoRollDriver implements InterpDriver {
     this.deck?.setProps({ viewState: this.viewState() });
     this.pushLayers();
     this.positionLabels();
+  }
+
+  /** Resolve a live slug: the in-memory cache first, else one POST /live/sae.
+   *  The final read goes through loadLiveSAEActs so the ⤓ data capture records
+   *  the synthetic live:// URL like any other bundle. */
+  private async fetchLiveTrace(model: string, slug: string): Promise<SAEActsTrace> {
+    try {
+      return await loadLiveSAEActs(model, slug);
+    } catch {
+      // not cached — compute it now (needs the prompt text behind the slug)
+    }
+    const prompt = livePromptFor(model, slug);
+    if (!prompt)
+      throw new Error(
+        "live SAE acts not loaded — type the prompt again (results live in memory only)",
+      );
+    const base = appStore.getState().probing.liveUrl.replace(/\/+$/, "");
+    let res: Response;
+    try {
+      res = await fetch(`${base}/live/sae`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: prompt }),
+      });
+    } catch {
+      throw new Error(
+        `no live server at ${base} — start it: python -m nebulai.backend.interp.live_server`,
+      );
+    }
+    const body = (await res.json()) as {
+      error?: string;
+      model?: string;
+      trace?: SAEActsTrace;
+    };
+    if (!res.ok || !body.trace) throw new Error(body.error ?? `live server error (${res.status})`);
+    if (body.model !== model)
+      throw new Error(`live server runs ${body.model}, viewer shows ${model}`);
+    putLiveSAEActs(model, slug, body.trace);
+    return loadLiveSAEActs(model, slug);
   }
 
   // ---- pixel-space grid layout ---------------------------------------------
@@ -233,6 +293,33 @@ export class SAEPianoRollDriver implements InterpDriver {
           target: hover.poly[(i + 1) % hover.poly.length] as [number, number],
         }))
       : [];
+    // ACCENT crosshair snapped to the hovered cell centre — this is a clean
+    // rectilinear time×feature grid, so row/column guides read unambiguously
+    // (req 4, mirroring the logit-attribution grid).
+    const cw = this.cellW();
+    const rh = this.rowH();
+    const plotBounds = {
+      x0: GL,
+      y0: GT,
+      x1: GL + this.plotW(),
+      y1: this.stripY() - STRIP_GAP,
+    };
+    const cross: ThemeSeg[] = hover
+      ? crosshair(GL + hover.pos * cw + cw / 2, this.rowY(hover.row) + rh / 2, plotBounds)
+      : [];
+    // cross-view linked feature — a steady ACCENT outline around its whole row
+    const linkEdges: ThemeSeg[] = [];
+    const linkedRow = this.linked !== null ? this.rows.find((r) => r.f.id === this.linked) : undefined;
+    if (linkedRow) {
+      const ly = this.rowY(linkedRow);
+      const lx1 = GL + this.plotW();
+      linkEdges.push(
+        { source: [GL, ly], target: [lx1, ly] },
+        { source: [lx1, ly], target: [lx1, ly + rh] },
+        { source: [lx1, ly + rh], target: [GL, ly + rh] },
+        { source: [GL, ly + rh], target: [GL, ly] },
+      );
+    }
 
     this.deck.setProps({
       layers: [
@@ -243,12 +330,33 @@ export class SAEPianoRollDriver implements InterpDriver {
           getFillColor: (c) => this.colorOf(c),
           pickable: true,
         }),
+        new LineLayer<ThemeSeg>({
+          id: "pr-crosshair",
+          data: cross,
+          getSourcePosition: (e) => [e.source[0], e.source[1], 0],
+          getTargetPosition: (e) => [e.target[0], e.target[1], 0],
+          getColor: withAlpha(ACCENT, 0.5),
+          getWidth: 1,
+          widthUnits: "pixels",
+          pickable: false,
+        }),
+        new LineLayer<ThemeSeg>({
+          id: "pr-link",
+          data: linkEdges,
+          getSourcePosition: (e) => [e.source[0], e.source[1], 0],
+          getTargetPosition: (e) => [e.target[0], e.target[1], 0],
+          getColor: withAlpha(ACCENT, 0.95),
+          getWidth: 1.6,
+          widthUnits: "pixels",
+          pickable: false,
+        }),
+        // hovered cell outline recolored to the danger LED reticle (req 4)
         new LineLayer<{ source: [number, number]; target: [number, number] }>({
           id: "pr-hover",
           data: edges,
           getSourcePosition: (e) => [e.source[0], e.source[1], 0],
           getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: [255, 255, 255, 220],
+          getColor: withAlpha(MARKER_HOT, 0.86),
           getWidth: 1.2,
           widthUnits: "pixels",
           pickable: false,
@@ -270,7 +378,7 @@ export class SAEPianoRollDriver implements InterpDriver {
         if (this.scaleMode === mode) return;
         this.scaleMode = mode;
         this.hover = null;
-        this.tooltip.style.visibility = "hidden";
+        this.tooltip.hide();
         this.cells = this.cells.slice(); // new ref → colors regenerate
         this.buildChips();
         this.pushLayers();
@@ -367,38 +475,55 @@ export class SAEPianoRollDriver implements InterpDriver {
       this.pushLayers();
     }
     if (!c || !this.tr) {
-      this.tooltip.style.visibility = "hidden";
+      this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
     const f = c.row.f;
     const tok = this.tr.token_strs[c.pos] ?? "";
-    this.tooltip.innerHTML = "";
-    const add = (cls: string, text: string) => {
-      const el = document.createElement("div");
-      el.className = cls;
-      el.textContent = text;
-      this.tooltip.appendChild(el);
-    };
-    add("point-tooltip-label", `feature #${f.id} · “${tok}” (pos ${c.pos})`);
-    add("point-tooltip-conf", `act ${c.act.toFixed(3)} · row peak ${fmt(f.max)}`);
+    const cc = this.colorOf(c);
+    const swatch: RGB = [cc[0], cc[1], cc[2]];
     const firePct = 10 ** f.log_sparsity * 100;
-    add(
-      "point-tooltip-conf",
-      `fires globally on ≈${firePct.toPrecision(2)}% of tokens (log₁₀ ${f.log_sparsity.toFixed(2)})`,
-    );
-    add(
-      "point-tooltip-conf",
-      `direct path ↑“${vis(f.top_tok)}” (+${f.top_val.toFixed(1)}) — skips blocks 8–11`,
-    );
+    const rows: TipRow[] = [
+      { kind: "label", text: `feature #${f.id} · “${tok}” (pos ${c.pos})`, swatch },
+      { text: "act", value: c.act.toFixed(3), hot: true },
+      { text: "row peak", value: fmt(f.max) },
+      {
+        text: `fires globally on ≈${firePct.toPrecision(2)}% of tokens (log₁₀ ${f.log_sparsity.toFixed(2)})`,
+      },
+      { text: `direct path ↑“${vis(f.top_tok)}” (+${f.top_val.toFixed(1)}) — skips blocks 8–11` },
+    ];
     if (c.row.band === "sink") {
-      add("point-tooltip-conf", "first-token outlier band (‖x₀‖ ≈ 30× other positions)");
+      rows.push({ text: "first-token outlier band (‖x₀‖ ≈ 30× other positions)" });
     }
-    this.tooltip.style.visibility = "visible";
-    const px = Math.min(x + 14, this.cssW - 300);
-    const py = Math.min(y + 14, this.cssH - 110);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    this.tooltip.show(rows);
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
+  }
+
+  private onClick(e: PointerEvent): void {
+    if (!this.deck) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const info = this.deck.pickObject({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+      radius: 1,
+      layerIds: ["pr-cells"],
+    }) as PickingInfo | null;
+    const c = (info?.object as Cell | undefined) ?? null;
+    if (!c) return;
+    // toggle publish as the global cross-view SAE-feature selection
+    const same = this.linked === c.row.f.id;
+    appStore.getState().setInterpSelection(same ? null : { kind: "saeFeature", id: c.row.f.id });
+  }
+
+  /** Cross-view link: outline the selected feature's row when this prompt's
+   *  top-k board actually contains it (the board only shows top features). */
+  setSelection(sel: InterpSelection | null): void {
+    const id = sel?.kind === "saeFeature" ? sel.id : null;
+    if (id === this.linked) return;
+    this.linked = id;
+    if (this.cells.length) this.pushLayers();
   }
 
   private onLeave(): void {
@@ -406,7 +531,7 @@ export class SAEPianoRollDriver implements InterpDriver {
       this.hover = null;
       this.pushLayers();
     }
-    this.tooltip.style.visibility = "hidden";
+    this.tooltip.hide();
     this.canvas.style.cursor = "";
   }
 
@@ -433,7 +558,7 @@ export class SAEPianoRollDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.chipRoot?.remove();
     this.deck?.finalize();

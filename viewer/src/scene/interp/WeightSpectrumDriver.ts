@@ -13,6 +13,17 @@
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
 import { loadWeights, type SpectrumMatrix, type WeightsBundle } from "../../data/interp";
+import {
+  ACCENT,
+  crosshair,
+  dashedSegment,
+  GRID_RGBA,
+  MARKER_HOT,
+  markerPoly,
+  type Vec2,
+  withAlpha,
+} from "./chart-theme";
+import { InterpTooltip } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
@@ -45,13 +56,17 @@ export class WeightSpectrumDriver implements InterpDriver {
   private makeView!: () => OrthographicView;
   private canvas!: HTMLCanvasElement;
   private overlay!: HTMLElement;
-  private tooltip!: HTMLElement;
+  private tooltip!: InterpTooltip;
   private axisRoot!: HTMLElement;
 
   private bundle: WeightsBundle | null = null;
   private curves: Curve[] = [];
   private logMax = 1;
   private logMin = 0;
+  // hover focus: the illuminated curve (by unique matrix name) and the world
+  // point of the σ under the cursor (for the LED marker + crosshair).
+  private hoverName: string | null = null;
+  private hoverMark: Vec2 | null = null;
 
   private cssW = 1;
   private cssH = 1;
@@ -75,10 +90,7 @@ export class WeightSpectrumDriver implements InterpDriver {
       height: this.cssH,
     }) as unknown as Deck<OrthographicView[]>;
 
-    this.tooltip = document.createElement("div");
-    this.tooltip.className = "point-tooltip interp-tooltip";
-    this.tooltip.style.visibility = "hidden";
-    overlay.appendChild(this.tooltip);
+    this.tooltip = new InterpTooltip(overlay);
     this.axisRoot = document.createElement("div");
     this.axisRoot.className = "interp-axis";
     overlay.appendChild(this.axisRoot);
@@ -141,24 +153,48 @@ export class WeightSpectrumDriver implements InterpDriver {
     return t * SPAN_Y;
   }
 
+  /** World units per screen pixel — dashes/markers are authored in pixels for a
+   *  consistent on-screen size, then scaled into this driver's world space. */
+  private worldPerPx(): number {
+    const zoom = Math.min((this.cssW - PAD_PX) / SPAN_X, (this.cssH - PAD_PX) / SPAN_Y);
+    return 1 / Math.max(zoom, 1e-6);
+  }
+
   private pushLayers(): void {
     if (!this.deck) return;
-    const { PathLayer } = this.layersMod;
-    // decade gridlines at σ = 10^k within [logMin, logMax]
+    const { PathLayer, SolidPolygonLayer } = this.layersMod;
+    const wpp = this.worldPerPx();
+    // decade gridlines at σ = 10^k within [logMin, logMax] — subtle DASHED
+    // hairlines now (req 5): the structure whispers, the curves speak.
     const grid: { path: [number, number][] }[] = [];
     const kLo = Math.ceil(this.logMin);
     const kHi = Math.floor(this.logMax);
     for (let k = kLo; k <= kHi; k++) {
       const y = this.yAt(10 ** k);
-      grid.push({ path: [[0, y], [SPAN_X, y]] });
+      for (const s of dashedSegment([0, y], [SPAN_X, y], 3 * wpp, 6 * wpp)) {
+        grid.push({ path: [s.source, s.target] });
+      }
     }
+    // crosshair + LED marker locked onto the hovered σ point (req 4)
+    const cross: { path: [number, number][] }[] = this.hoverMark
+      ? crosshair(this.hoverMark[0], this.hoverMark[1], { x0: 0, y0: 0, x1: SPAN_X, y1: SPAN_Y }, 4 * wpp, 5 * wpp).map(
+          (s) => ({ path: [s.source, s.target] }),
+        )
+      : [];
+    const marks = this.hoverMark
+      ? [
+          { poly: markerPoly(this.hoverMark[0], this.hoverMark[1], 9 * wpp), color: withAlpha(MARKER_HOT, 0.22) },
+          { poly: markerPoly(this.hoverMark[0], this.hoverMark[1], 4.5 * wpp), color: withAlpha(MARKER_HOT, 1) },
+        ]
+      : [];
+
     this.deck.setProps({
       layers: [
         new PathLayer<{ path: [number, number][] }>({
           id: "ws-grid",
           data: grid,
           getPath: (d) => d.path,
-          getColor: [148, 140, 165, 34],
+          getColor: GRID_RGBA,
           getWidth: 1,
           widthUnits: "pixels",
           pickable: false,
@@ -167,12 +203,39 @@ export class WeightSpectrumDriver implements InterpDriver {
           id: "ws-curves",
           data: this.curves,
           getPath: (d) => d.path,
-          getColor: (d) => d.color,
-          getWidth: 1.6,
+          // focus/dim (req 3): on hover, the focused curve illuminates to full
+          // hue while every other curve recedes to a faint trace.
+          getColor: (d) => {
+            if (this.hoverName == null) return d.color;
+            if (d.matrix.name === this.hoverName) {
+              const [r, g, bl] = KIND_RGB[d.matrix.kind];
+              return [r, g, bl, 245];
+            }
+            return [d.color[0], d.color[1], d.color[2], 26];
+          },
+          getWidth: (d) =>
+            this.hoverName == null ? 1.6 : d.matrix.name === this.hoverName ? 2.6 : 1.0,
           widthUnits: "pixels",
           jointRounded: true,
           capRounded: true,
+          updateTriggers: { getColor: this.hoverName, getWidth: this.hoverName },
           pickable: true,
+        }),
+        new PathLayer<{ path: [number, number][] }>({
+          id: "ws-crosshair",
+          data: cross,
+          getPath: (d) => d.path,
+          getColor: withAlpha(ACCENT, 0.5),
+          getWidth: 1,
+          widthUnits: "pixels",
+          pickable: false,
+        }),
+        new SolidPolygonLayer<{ poly: Vec2[]; color: [number, number, number, number] }>({
+          id: "ws-marker",
+          data: marks,
+          getPolygon: (d) => d.poly,
+          getFillColor: (d) => d.color,
+          pickable: false,
         }),
       ],
     });
@@ -245,28 +308,30 @@ export class WeightSpectrumDriver implements InterpDriver {
     const idx = Math.max(0, Math.min(n - 1, Math.round((wx / SPAN_X) * (n - 1))));
     const sigma = c.matrix.singular_values[idx]!;
     const m = c.matrix;
-    this.tooltip.innerHTML = "";
-    const l1 = document.createElement("div");
-    l1.className = "point-tooltip-label";
-    l1.textContent = m.name;
-    const l2 = document.createElement("div");
-    l2.className = "point-tooltip-conf";
-    l2.textContent = `σ[${idx}] = ${sigma.toPrecision(5)}`;
-    const l3 = document.createElement("div");
-    l3.className = "point-tooltip-conf";
-    l3.textContent =
-      `stable rank ${m.stable_rank} · eff. rank ${m.effective_rank} · κ ${m.condition.toLocaleString("en-US")}`;
-    this.tooltip.append(l1, l2, l3);
-    this.tooltip.style.visibility = "visible";
-    const px = Math.min(x + 14, this.cssW - 260);
-    const py = Math.min(y + 14, this.cssH - 64);
-    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    // update focus + marker, then re-push (only 4 layers — cheap enough to stay
+    // at 60fps): the marker must track the cursor even within one curve.
+    this.hoverName = m.name;
+    this.hoverMark = [this.xAt(idx, n), this.yAt(sigma)];
+    this.pushLayers();
+    this.tooltip.show([
+      { kind: "label", text: m.name, swatch: KIND_RGB[m.kind] },
+      { text: `σ[${idx}]`, value: sigma.toPrecision(5), hot: true },
+      { text: "stable rank", value: String(m.stable_rank) },
+      { text: "eff. rank", value: String(m.effective_rank) },
+      { text: "κ", value: m.condition.toLocaleString("en-US") },
+    ]);
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
   }
 
   private hideTip(): void {
-    if (this.tooltip) this.tooltip.style.visibility = "hidden";
+    this.tooltip?.hide();
     this.canvas.style.cursor = "";
+    if (this.hoverName != null || this.hoverMark != null) {
+      this.hoverName = null;
+      this.hoverMark = null;
+      this.pushLayers();
+    }
   }
 
   private viewState() {
@@ -298,7 +363,7 @@ export class WeightSpectrumDriver implements InterpDriver {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers = [];
-    this.tooltip?.remove();
+    this.tooltip?.dispose();
     this.axisRoot?.remove();
     this.deck?.finalize();
     this.deck = null;
