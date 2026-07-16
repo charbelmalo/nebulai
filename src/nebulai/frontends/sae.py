@@ -59,6 +59,16 @@ _NP_URL = (
 )
 
 
+def release_tag_for(sae_release: str) -> str:
+    """The sae-lens release tag a weights repo corresponds to.
+
+    RELEASE_TAG is only true of the canonical repo; any other repo names
+    itself so the unit string never claims a provenance it doesn't have."""
+    if sae_release == "jbloom/GPT2-Small-SAEs-Reformatted":
+        return RELEASE_TAG
+    return sae_release
+
+
 def sae_unit_string(release_tag: str, sae_id: str) -> str:
     """The honest `meta.unit` value naming the true geometry origin.
 
@@ -215,10 +225,10 @@ def load_sae_units(
 
     meta = {
         "model": model_name,
-        "unit": sae_unit_string(RELEASE_TAG, sae_id),
+        "unit": sae_unit_string(release_tag_for(sae_release), sae_id),
         "projection": "decoder",
         "layer": layer,
-        "loader": "safetensors-direct(jbloom/GPT2-Small-SAEs-Reformatted)",
+        "loader": f"safetensors-direct({sae_release})",
         "sae_release": sae_release,
         "sae_id": sae_id,
         "d_sae": d_sae,

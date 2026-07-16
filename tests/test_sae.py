@@ -7,6 +7,7 @@ import pytest
 from nebulai.frontends.sae import (
     labels_for,
     parse_explanations,
+    release_tag_for,
     sae_dataset_id,
     sae_unit_string,
     subset_indices,
@@ -118,6 +119,31 @@ def test_sae_unit_string_exact():
         sae_unit_string("gpt2-small-res-jb", "blocks.8.hook_resid_pre")
         == "sae_decoder(gpt2-small-res-jb, blocks.8.hook_resid_pre)"
     )
+
+
+# --- release_tag_for --------------------------------------------------------
+
+RELEASE_TAG_CASES = [
+    # the canonical repo maps to the sae-lens release tag it is true of
+    (
+        "canonical-repo-gets-tag",
+        "jbloom/GPT2-Small-SAEs-Reformatted",
+        "gpt2-small-res-jb",
+    ),
+    # any other repo names itself — never claim a provenance it doesn't have
+    (
+        "other-repo-names-itself",
+        "someone/other-saes",
+        "someone/other-saes",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "_id,release,expected", RELEASE_TAG_CASES, ids=[c[0] for c in RELEASE_TAG_CASES]
+)
+def test_release_tag_for(_id, release, expected):
+    assert release_tag_for(release) == expected
 
 
 # --- sae_dataset_id ---------------------------------------------------------

@@ -204,10 +204,6 @@ def _run_sae(args: argparse.Namespace) -> None:
             "the MVP ships model space (decoder) only"
         )
 
-    dataset_id = sae_dataset_id("gpt2-small", args.sae_id)
-    out_dir = Path(args.out) / dataset_id
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     t = _timer()
     units = load_sae_units(
         sae_release=args.sae_release,
@@ -217,6 +213,9 @@ def _run_sae(args: argparse.Namespace) -> None:
         labels_source=args.labels,
         out_root=Path(args.out),
     )
+    dataset_id = sae_dataset_id(units.meta["model"], args.sae_id)
+    out_dir = Path(args.out) / dataset_id
+    out_dir.mkdir(parents=True, exist_ok=True)
     print(
         f"[1/5] loaded {len(units)} SAE feature units from "
         f"{args.sae_release}/{args.sae_id} (d_sae {units.meta['d_sae']}, "
@@ -303,7 +302,7 @@ def _run_sae(args: argparse.Namespace) -> None:
         units.labels,
         png,
         html,
-        title="Nebul.AI — gpt2-small SAE feature map",
+        title=f"Nebul.AI — {units.meta['model']} SAE feature map",
         sub_title=(
             f"{meta['n_points']} SAE features · {meta['n_clusters']} clusters · "
             f"SAE decoder directions ({args.sae_id}) -> UMAP -> HDBSCAN"
