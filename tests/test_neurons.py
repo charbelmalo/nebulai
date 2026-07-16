@@ -14,6 +14,7 @@ from nebulai.frontends.neurons import (
     neuron_tensor_path,
     neuron_unit_string,
     orient_neuron_rows,
+    placeholder_titles,
     subset_indices,
 )
 
@@ -168,3 +169,23 @@ def test_run_neurons_label_source_reserved():
     with pytest.raises(SystemExit) as excinfo:
         _run_neurons(args)
     assert "label-space projection is not implemented" in str(excinfo.value)
+
+
+# --- CLI honesty: all-placeholder labels must not be LLM-named ---------------
+
+
+def test_placeholder_titles_are_honest_and_stamped():
+    cluster_ids = np.array([2, -1, 0, 2, 0, -1, 5])
+    titles, namer_used = placeholder_titles(cluster_ids)
+    assert titles == {
+        0: "unlabeled neurons (cluster 0)",
+        2: "unlabeled neurons (cluster 2)",
+        5: "unlabeled neurons (cluster 5)",
+    }
+    assert namer_used == "none(all-placeholder-labels)"
+
+
+def test_placeholder_titles_all_noise_is_empty():
+    titles, namer_used = placeholder_titles(np.array([-1, -1]))
+    assert titles == {}
+    assert namer_used == "none(all-placeholder-labels)"

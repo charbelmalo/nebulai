@@ -326,6 +326,7 @@ def _run_neurons(args: argparse.Namespace) -> None:
         load_neuron_units,
         neuron_dataset_id,
         neuron_tensor_path,
+        placeholder_titles,
     )
 
     if args.source == "label":
@@ -399,16 +400,21 @@ def _run_neurons(args: argparse.Namespace) -> None:
     print(f"[3/5] HDBSCAN: {n_clusters} clusters, {noise:.0%} noise [{t()}]")
 
     t = _timer()
-    titles, namer_used = name_clusters(
-        units,
-        cluster_ids,
-        namer=args.namer,
-        openrouter_model=args.openrouter_model,
-        ollama_model=args.ollama_model,
-        ollama_host=args.ollama_host,
-        anthropic_model=args.anthropic_model,
-        env_file=args.env_file,
-    )
+    if units.meta.get("n_labeled", 0) == 0:
+        # every member label is a placeholder — an LLM namer would invent
+        # semantics from zero information, so title clusters honestly instead
+        titles, namer_used = placeholder_titles(cluster_ids)
+    else:
+        titles, namer_used = name_clusters(
+            units,
+            cluster_ids,
+            namer=args.namer,
+            openrouter_model=args.openrouter_model,
+            ollama_model=args.ollama_model,
+            ollama_host=args.ollama_host,
+            anthropic_model=args.anthropic_model,
+            env_file=args.env_file,
+        )
     print(f"[4/5] named {len(titles)} clusters via '{namer_used}' [{t()}]")
 
     t = _timer()

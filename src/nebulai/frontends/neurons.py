@@ -83,6 +83,21 @@ def labels_for(ids: list[int], desc: dict[int, str]) -> list[str]:
     return [desc.get(i) or f"neuron {i} (unlabeled)" for i in ids]
 
 
+def placeholder_titles(cluster_ids: "np.ndarray") -> tuple[dict[int, str], str]:
+    """Honest cluster titles when EVERY member label is a placeholder.
+
+    An LLM namer given only "neuron {i} (unlabeled)" strings would invent
+    semantics from zero information (observed: it produced "token clusters"),
+    so the map must not pretend its clusters mean anything. Returns
+    ({cluster_id: "unlabeled neurons (cluster N)"}, namer_used) with the
+    namer stamped "none(all-placeholder-labels)" so meta records why."""
+    titles = {
+        int(cid): f"unlabeled neurons (cluster {int(cid)})"
+        for cid in sorted({int(c) for c in cluster_ids if c >= 0})
+    }
+    return titles, "none(all-placeholder-labels)"
+
+
 def orient_neuron_rows(W: np.ndarray, d_mlp: int, d_model: int) -> np.ndarray:
     """Runtime orientation verification so rows are always neurons.
 
