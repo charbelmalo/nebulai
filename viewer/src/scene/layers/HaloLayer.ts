@@ -26,6 +26,8 @@ export class HaloLayer {
   readonly uMotion = uniform(1);
   /** halos mark hubs on the flat map — the dimension morph fades them */
   readonly uFade = uniform(1);
+  /** user intensity multiplier (Settings → Appearance → Atlas: haloIntensity) */
+  readonly uIntensity = uniform(1);
 
   private material: THREE.SpriteNodeMaterial;
 
@@ -71,7 +73,12 @@ export class HaloLayer {
     const glow = d.smoothstep(0.12, 0.42).oneMinus().mul(0.12);
     const alphaPulse = this.uTime.mul(1.4).add(iPhase).cos().mul(0.35).mul(this.uMotion).add(1);
     material.colorNode = iColor;
-    material.opacityNode = ring.mul(RING_ALPHA).add(glow).mul(alphaPulse).mul(this.uFade);
+    material.opacityNode = ring
+      .mul(RING_ALPHA)
+      .add(glow)
+      .mul(alphaPulse)
+      .mul(this.uFade)
+      .mul(this.uIntensity);
 
     this.material = material;
     this.object = new THREE.Sprite(material);

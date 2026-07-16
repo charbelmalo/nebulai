@@ -133,10 +133,7 @@ export class AtlasDriver implements SceneDriver {
 
     this.beams = new BeamsLayer();
     this.flare = new FlareLayer();
-    if (this.reducedMotion) {
-      this.beams.uMotion.value = 0;
-      this.flare.uMotion.value = 0;
-    }
+    this.beams.uWidthScale.value = appStore.getState().appearance.atlas.beamWidth;
     this.scene.add(this.beams.object, this.flare.group);
 
     // bloom rides only on real webgpu; the webgl rung renders direct (keeps
@@ -167,6 +164,11 @@ export class AtlasDriver implements SceneDriver {
             this.points.uConfFloor.value = s.settings.confidenceFloor;
           }
           this.bloomOn = this.bloomPipe !== null && s.settings.bloom;
+        }
+        if (s.appearance !== prev.appearance) {
+          if (this.beams) this.beams.uWidthScale.value = s.appearance.atlas.beamWidth;
+          if (this.halos) this.halos.uIntensity.value = s.appearance.atlas.haloIntensity;
+          this.cameraDirty = true;
         }
         if (s.dims !== prev.dims) this.onDimsChange(s.dims);
         if (s.mapQuery !== prev.mapQuery) {
@@ -260,6 +262,7 @@ export class AtlasDriver implements SceneDriver {
       }
       this.halos = new HaloLayer(halos);
       if (this.reducedMotion) this.halos.uMotion.value = 0;
+      this.halos.uIntensity.value = appStore.getState().appearance.atlas.haloIntensity;
       this.halos.visible = t.halos;
       this.scene.add(this.halos.object);
     }
@@ -303,11 +306,9 @@ export class AtlasDriver implements SceneDriver {
       this.hoverDirty = false;
     }
 
-    // scene time drives beam energy, halo breathing, sparkle orbits;
+    // scene time drives halo breathing (beams/flare are static by design);
     // ?frozen pins t to 0 upstream, reduced motion zeroes uMotion instead
-    if (this.beams) this.beams.uTime.value = t;
     if (this.halos) this.halos.uTime.value = t;
-    if (this.flare) this.flare.uTime.value = t;
 
     if (this.cameraDirty) {
       const [hx, hy] = this.cam.halfExtents();
@@ -468,7 +469,8 @@ export class AtlasDriver implements SceneDriver {
         beams.push({ start: hull.anchor, end: other.anchor, weight: nb.weight });
         badgeSpecs.push({ start: hull.anchor, end: other.anchor, text: formatCount(other.size) });
       }
-      const size = Math.min(Math.max(hullRadius(hull) * 1.5, this.mapExtent * 0.02), this.mapExtent * 0.25);
+      // the flare marks the anchor, it must not engulf the cluster
+      const size = Math.min(Math.max(hullRadius(hull) * 0.6, this.mapExtent * 0.015), this.mapExtent * 0.06);
       this.flare.setTarget(hull.anchor[0], hull.anchor[1], size, clusterColor(sel.id));
     } else {
       const p = this.dataset.columns.pos2;
@@ -480,7 +482,7 @@ export class AtlasDriver implements SceneDriver {
       }
       const cid = this.dataset.columns.clusterId[sel.id]!;
       const color = cid >= 0 ? clusterColor(cid) : ([0.9, 0.85, 0.95] as [number, number, number]);
-      this.flare.setTarget(start[0], start[1], this.mapExtent * 0.03, color);
+      this.flare.setTarget(start[0], start[1], this.mapExtent * 0.02, color);
     }
 
     // normalize weights for display so solid-vs-dotted contrast survives even

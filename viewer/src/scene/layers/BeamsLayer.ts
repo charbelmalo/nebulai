@@ -1,9 +1,11 @@
-/** The hero effect: thick glowing gradient beams from a selected hub to its
- *  neighbors (video's "connection" ribbons). Pre-allocated instanced quads —
- *  never re-created, just re-written and re-counted on selection change.
- *  Geometry is built in the vertex stage from per-instance start/end points so
- *  a beam is one instance, not a polyline. Weights come from 10-D cluster
- *  space (honesty guardrail) and drive both ramp position and alpha. */
+/** The hero effect: thin gradient beams from a selected hub to its neighbors.
+ *  Minimal by design (Embedding-Projector / Cosmograph register): weight maps
+ *  to opacity, no dashes, no motion — the connection pattern carries the
+ *  frame, not the stroke styling. Pre-allocated instanced quads — never
+ *  re-created, just re-written and re-counted on selection change. Geometry
+ *  is built in the vertex stage from per-instance start/end points so a beam
+ *  is one instance, not a polyline. Weights come from 10-D cluster space
+ *  (honesty guardrail). */
 
 import * as THREE from "three/webgpu";
 import {
@@ -21,8 +23,8 @@ import { rampTextureData } from "../../styles/tokens";
 
 export const MAX_BEAMS = 64;
 
-const WIDTH_SRC_PX = 14; // beam width at the source, in CSS px
-const WIDTH_DST_PX = 3.5; // tapers toward the target
+const WIDTH_SRC_PX = 2.5; // beam width at the source, in CSS px
+const WIDTH_DST_PX = 1.25; // tapers toward the target
 const BEAM_Z = 0.04; // above territories (-0.05) and the point plane (0)
 
 export interface Beam {
@@ -36,10 +38,8 @@ export class BeamsLayer {
   readonly object: THREE.InstancedMesh;
   /** world units per CSS px — driver syncs with the camera each frame */
   readonly uWpp = uniform(0.01);
-  /** scene time in seconds; pinned to 0 by ?frozen and reduced motion */
-  readonly uTime = uniform(0);
-  /** 1 = scrolling energy pulse, 0 = static (reduced motion) */
-  readonly uMotion = uniform(1);
+  /** user width multiplier (Settings → Appearance → Atlas: beamWidth) */
+  readonly uWidthScale = uniform(1);
 
   private startAttr: THREE.InstancedBufferAttribute;
   private endAttr: THREE.InstancedBufferAttribute;
@@ -77,10 +77,10 @@ export class BeamsLayer {
     const len = dir.length().max(1e-6);
     const perp = vec2(dir.y.negate(), dir.x).div(len);
     const widthWorld = mix(float(WIDTH_SRC_PX), float(WIDTH_DST_PX), t)
-      .mul(mix(float(0.55), float(1), aWeight)) // weak links are thinner
+      .mul(this.uWidthScale)
       .mul(this.uWpp);
-    // gentle bow (video's links arc, they don't shoot straight)
-    const bow = t.mul(Math.PI).sin().mul(len).mul(0.06);
+    // gentle bow (links arc slightly so overlapping edges stay separable)
+    const bow = t.mul(Math.PI).sin().mul(len).mul(0.03);
     const p = aStart
       .add(dir.mul(t))
       .add(perp.mul(across.mul(widthWorld).add(bow)));
@@ -89,20 +89,11 @@ export class BeamsLayer {
     // gradient along the beam through the shared 5-stop ramp
     material.colorNode = texture(this.rampTex, vec2(t, 0.5)).rgb;
 
-    // soft ribbon: fade across the width, at both ends, and by weight;
-    // a slow energy pulse scrolls source→target unless motion is off
+    // soft ribbon: fade across the width and at both ends; weight IS the
+    // opacity — one visual channel, honestly mapped, nothing animated
     const edgeFade = across.abs().mul(2).smoothstep(0.25, 1).oneMinus();
     const endFade = t.smoothstep(0, 0.05).mul(t.oneMinus().smoothstep(0, 0.08));
-    const pulse = t.mul(len.mul(2.5)).sub(this.uTime.mul(3)).sin().mul(0.5).add(0.5);
-    const energy = mix(float(1), pulse.mul(0.55).add(0.6), this.uMotion);
-    const alpha = mix(float(0.2), float(0.6), aWeight);
-    // strong links render solid; weak ones dissolve into the video's dotted
-    // trails (dots scroll source→target unless motion is off)
-    const solid = aWeight.smoothstep(0.45, 0.85);
-    const dotPhase = t.mul(len).div(this.uWpp).div(26).sub(this.uTime.mul(this.uMotion).mul(1.5));
-    const dots = dotPhase.fract().sub(0.5).abs().mul(2).smoothstep(0.3, 0.65).oneMinus();
-    const dashMask = mix(dots, float(1), solid);
-    material.opacityNode = edgeFade.mul(endFade).mul(energy).mul(alpha).mul(dashMask);
+    material.opacityNode = edgeFade.mul(endFade).mul(mix(float(0.3), float(0.95), aWeight));
 
     this.material = material;
     // 1×1 plane, its vertices fully recomputed by positionNode
