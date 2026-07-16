@@ -523,7 +523,9 @@ export const appStore = createStore<AppState>()((set, get) => ({
   setViewMode: (viewMode) => set({ viewMode, selection: null, hover: null }),
   // beams/flare are drawn in the 2-D map plane — a dimension switch clears
   // the selection rather than rendering edges at stale coordinates
-  setDims: (dims) => set({ dims, selection: null, hover: null }),
+  // selection survives the dimension flip — beams glide pos2→pos3 with the
+  // points; only hover is cleared (its pick frame changes under the cursor)
+  setDims: (dims) => set({ dims, hover: null }),
   setMorphT: (morphT) => set({ morphT }),
   setHover: (hover) => set({ hover }),
   setSelection: (selection) => set({ selection }),

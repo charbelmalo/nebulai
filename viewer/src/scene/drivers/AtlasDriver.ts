@@ -70,6 +70,8 @@ export class AtlasDriver implements SceneDriver {
   private picker: PointPicker | null = null;
   private tooltip: Tooltip | null = null;
   private hullsById = new Map<number, ClusterHull>();
+  /** cluster centroids in pos3 (u3 display) space — 3D beam anchors */
+  private centroid3ById = new Map<number, [number, number, number]>();
 
   // hero layers: beams + flare live for the driver's whole life; halos are
   // rebuilt per dataset (hub choice is data-driven)
@@ -215,6 +217,7 @@ export class AtlasDriver implements SceneDriver {
 
     this.picker = new PointPicker(ds.columns.pos2, ds.columns.count);
     this.hullsById = new Map(ds.hulls.map((h) => [h.clusterId, h]));
+    this.centroid3ById = new Map(ds.columns.clusters.map((c) => [c.id, c.centroid]));
 
     const overlay = document.getElementById("overlay-html")!;
     this.labels = new LabelOverlay(overlay, ds.hulls, ds.columns.clusters, (cid) => {
@@ -495,8 +498,10 @@ export class AtlasDriver implements SceneDriver {
   private applyMorph(): void {
     const m = this.morph;
     if (this.points) this.points.uMorph.value = m;
+    if (this.beams) this.beams.uMorph.value = m;
     this.territories?.setFade(1 - m);
     if (this.halos) this.halos.uFade.value = 1 - m;
+    this.applyBeamsVisibility(appStore.getState().toggles.beams);
     appStore.getState().setMorphT(m);
   }
 
@@ -544,14 +549,13 @@ export class AtlasDriver implements SceneDriver {
 
   /** Rebuild beams/flare for a new selection. Cluster → edges to neighbor
    *  hubs (badge = neighbor size); point → its kNN row (badge = similarity).
-   *  Weights are gaussian sims in 10-D u_cluster space, never display space. */
+   *  Weights are gaussian sims in 10-D u_cluster space, never display space.
+   *  Every beam carries both pos2 and pos3 endpoints — uMorph glides them in
+   *  sync with the points, so selections work flat, mid-morph, and in 3D. */
   private applySelection(sel: Selection | null): void {
     if (!this.beams || !this.flare || !this.dataset) return;
     const edges = this.dataset.columns.edges;
-    // beams/flare are drawn in the flat map plane — in 3D they'd anchor to
-    // stale pos2 coordinates, so selections there render no edges (yet)
-    const in3d = appStore.getState().dims === 3 || this.morph > 0.02;
-    if (!sel || !edges || in3d) {
+    if (!sel || !edges) {
       this.beams.clear();
       this.flare.clearTarget();
       this.badges?.clear();
@@ -560,6 +564,10 @@ export class AtlasDriver implements SceneDriver {
 
     const beams: Beam[] = [];
     const badgeSpecs: BadgeSpec[] = [];
+    // 3D anchor for a cluster: its pos3 centroid (fall back to the flat
+    // anchor at z 0 so a missing centroid degrades visibly, not wrongly)
+    const anchor3 = (h: ClusterHull): [number, number, number] =>
+      this.centroid3ById.get(h.clusterId) ?? [h.anchor[0], h.anchor[1], 0];
 
     if (sel.kind === "cluster") {
       const hull = this.hullsById.get(sel.id);
@@ -567,7 +575,13 @@ export class AtlasDriver implements SceneDriver {
       for (const nb of clusterNeighbors(edges, sel.id).slice(0, MAX_CLUSTER_BEAMS)) {
         const other = this.hullsById.get(nb.other);
         if (!other) continue;
-        beams.push({ start: hull.anchor, end: other.anchor, weight: nb.weight });
+        beams.push({
+          start: hull.anchor,
+          end: other.anchor,
+          start3: anchor3(hull),
+          end3: anchor3(other),
+          weight: nb.weight,
+        });
         badgeSpecs.push({ start: hull.anchor, end: other.anchor, text: formatCount(other.size) });
       }
       // the flare marks the anchor, it must not engulf the cluster
@@ -575,10 +589,14 @@ export class AtlasDriver implements SceneDriver {
       this.flare.setTarget(hull.anchor[0], hull.anchor[1], size, clusterColor(sel.id));
     } else {
       const p = this.dataset.columns.pos2;
-      const start: [number, number] = [p[sel.id * 2]!, p[sel.id * 2 + 1]!];
+      const q = this.dataset.columns.pos3;
+      const at2 = (i: number): [number, number] => [p[i * 2]!, p[i * 2 + 1]!];
+      const at3 = (i: number): [number, number, number] => [q[i * 3]!, q[i * 3 + 1]!, q[i * 3 + 2]!];
+      const start = at2(sel.id);
+      const start3 = at3(sel.id);
       for (const nb of knnNeighbors(edges, sel.id)) {
-        const end: [number, number] = [p[nb.id * 2]!, p[nb.id * 2 + 1]!];
-        beams.push({ start, end, weight: nb.sim });
+        const end = at2(nb.id);
+        beams.push({ start, end, start3, end3: at3(nb.id), weight: nb.sim });
         badgeSpecs.push({ start, end, text: nb.sim.toFixed(2) });
       }
       const cid = this.dataset.columns.clusterId[sel.id]!;
@@ -608,8 +626,12 @@ export class AtlasDriver implements SceneDriver {
 
   private applyBeamsVisibility(on: boolean): void {
     if (this.beams) this.beams.visible = on;
-    if (this.flare) this.flare.visible = on;
-    if (this.badges) this.badges.visible = on;
+    // flare + badges anchor in the flat map plane (screen-projected top-down)
+    // — past the morph midpoint they'd sit visibly off the 3D cloud, so they
+    // hide honestly while the beams keep gliding with the points
+    const flat = this.morph <= 0.5;
+    if (this.flare) this.flare.visible = on && flat;
+    if (this.badges) this.badges.visible = on && flat;
   }
 
   /** Zoom onto one point's neighborhood (search-result click). The window is

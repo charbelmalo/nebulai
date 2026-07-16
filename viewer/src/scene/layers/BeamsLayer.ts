@@ -9,6 +9,7 @@
 
 import * as THREE from "three/webgpu";
 import {
+  cameraPosition,
   float,
   instancedDynamicBufferAttribute,
   mix,
@@ -30,6 +31,9 @@ const BEAM_Z = 0.04; // above territories (-0.05) and the point plane (0)
 export interface Beam {
   start: [number, number];
   end: [number, number];
+  /** endpoints in pos3 (u3 display) space — the flythrough anchors */
+  start3: [number, number, number];
+  end3: [number, number, number];
   /** similarity weight ∈ (0,1] — ramp position + alpha */
   weight: number;
 }
@@ -40,9 +44,13 @@ export class BeamsLayer {
   readonly uWpp = uniform(0.01);
   /** user width multiplier (Settings → Appearance → Atlas: beamWidth) */
   readonly uWidthScale = uniform(1);
+  /** 2D↔3D morph — endpoints glide pos2→pos3 in sync with PointsLayer */
+  readonly uMorph = uniform(0);
 
   private startAttr: THREE.InstancedBufferAttribute;
   private endAttr: THREE.InstancedBufferAttribute;
+  private start3Attr: THREE.InstancedBufferAttribute;
+  private end3Attr: THREE.InstancedBufferAttribute;
   private weightAttr: THREE.InstancedBufferAttribute;
   private material: THREE.MeshBasicNodeMaterial;
   private rampTex: THREE.DataTexture;
@@ -50,13 +58,19 @@ export class BeamsLayer {
   constructor() {
     const starts = new Float32Array(MAX_BEAMS * 2);
     const ends = new Float32Array(MAX_BEAMS * 2);
+    const starts3 = new Float32Array(MAX_BEAMS * 3);
+    const ends3 = new Float32Array(MAX_BEAMS * 3);
     const weights = new Float32Array(MAX_BEAMS);
     this.startAttr = new THREE.InstancedBufferAttribute(starts, 2);
     this.endAttr = new THREE.InstancedBufferAttribute(ends, 2);
+    this.start3Attr = new THREE.InstancedBufferAttribute(starts3, 3);
+    this.end3Attr = new THREE.InstancedBufferAttribute(ends3, 3);
     this.weightAttr = new THREE.InstancedBufferAttribute(weights, 1);
 
     const aStart = instancedDynamicBufferAttribute<"vec2">(this.startAttr, "vec2");
     const aEnd = instancedDynamicBufferAttribute<"vec2">(this.endAttr, "vec2");
+    const aStart3 = instancedDynamicBufferAttribute<"vec3">(this.start3Attr, "vec3");
+    const aEnd3 = instancedDynamicBufferAttribute<"vec3">(this.end3Attr, "vec3");
     const aWeight = instancedDynamicBufferAttribute<"float">(this.weightAttr, "float");
 
     this.rampTex = new THREE.DataTexture(rampTextureData(), 256, 1, THREE.RGBAFormat);
@@ -70,21 +84,30 @@ export class BeamsLayer {
       side: THREE.DoubleSide,
     });
 
-    // build the ribbon: t runs source→target, `across` spans the width
+    // build the ribbon: t runs source→target, `across` spans the width.
+    // Endpoints glide pos2→pos3 with the morph; the ribbon billboards toward
+    // the camera (cross(view, dir)) so it stays face-on from any orbit angle.
+    // At morph 0 the camera is overhead, so the billboard collapses to the
+    // old in-plane perpendicular exactly.
     const t = uv().x;
     const across = positionGeometry.y; // plane geometry: -0.5 … 0.5
-    const dir = aEnd.sub(aStart);
+    const start = mix(vec3(aStart, BEAM_Z), aStart3, this.uMorph);
+    const end = mix(vec3(aEnd, BEAM_Z), aEnd3, this.uMorph);
+    const dir = end.sub(start);
     const len = dir.length().max(1e-6);
-    const perp = vec2(dir.y.negate(), dir.x).div(len);
+    const mid = start.add(end).mul(0.5);
+    const perpRaw = cameraPosition.sub(mid).cross(dir);
+    // epsilon guard: a beam pointing straight at the camera has no billboard
+    // plane — max() keeps the divide finite (the ribbon degenerates to a line)
+    const perp = perpRaw.div(perpRaw.length().max(1e-6));
     const widthWorld = mix(float(WIDTH_SRC_PX), float(WIDTH_DST_PX), t)
       .mul(this.uWidthScale)
       .mul(this.uWpp);
     // gentle bow (links arc slightly so overlapping edges stay separable)
     const bow = t.mul(Math.PI).sin().mul(len).mul(0.03);
-    const p = aStart
+    material.positionNode = start
       .add(dir.mul(t))
       .add(perp.mul(across.mul(widthWorld).add(bow)));
-    material.positionNode = vec3(p, BEAM_Z);
 
     // gradient along the beam through the shared 5-stop ramp
     material.colorNode = texture(this.rampTex, vec2(t, 0.5)).rgb;
@@ -107,6 +130,8 @@ export class BeamsLayer {
     const n = Math.min(beams.length, MAX_BEAMS);
     const s = this.startAttr.array as Float32Array;
     const e = this.endAttr.array as Float32Array;
+    const s3 = this.start3Attr.array as Float32Array;
+    const e3 = this.end3Attr.array as Float32Array;
     const w = this.weightAttr.array as Float32Array;
     for (let i = 0; i < n; i++) {
       const b = beams[i]!;
@@ -114,10 +139,18 @@ export class BeamsLayer {
       s[i * 2 + 1] = b.start[1];
       e[i * 2] = b.end[0];
       e[i * 2 + 1] = b.end[1];
+      s3[i * 3] = b.start3[0];
+      s3[i * 3 + 1] = b.start3[1];
+      s3[i * 3 + 2] = b.start3[2];
+      e3[i * 3] = b.end3[0];
+      e3[i * 3 + 1] = b.end3[1];
+      e3[i * 3 + 2] = b.end3[2];
       w[i] = b.weight;
     }
     this.startAttr.needsUpdate = true;
     this.endAttr.needsUpdate = true;
+    this.start3Attr.needsUpdate = true;
+    this.end3Attr.needsUpdate = true;
     this.weightAttr.needsUpdate = true;
     this.object.count = n;
   }
