@@ -12,7 +12,7 @@ import { appStore, type ViewMode } from "./app/store";
 import { mountChrome } from "./chrome/mount";
 import { applyUrlState, readUrlState, startUrlSync } from "./chrome/urlState";
 import { loadCompare } from "./data/compare";
-import { loadDataset, loadIndex } from "./data/loader";
+import { evictDataset, loadDataset, loadIndex } from "./data/loader";
 import { AtlasDriver } from "./scene/drivers/AtlasDriver";
 import { ChordDriver } from "./scene/drivers/ChordDriver";
 import { CompareDriver } from "./scene/drivers/CompareDriver";
@@ -227,33 +227,58 @@ async function boot() {
   }
 
   mountChrome(chrome);
+
+  /** Load a dataset entry and hand it to every live driver. `noCache` skips
+   *  both the in-memory column cache and the browser HTTP cache — used after
+   *  a rebuild overwrites the artifact on disk. */
+  async function loadAndShow(entry: { id: string; path: string }, noCache = false) {
+    const st = appStore.getState();
+    st.setLoading(true);
+    progress.classList.remove("is-done");
+    progress.style.width = "0%";
+    try {
+      if (noCache) evictDataset(entry.path);
+      const next = await loadDataset(
+        entry.path,
+        (loaded, total) => {
+          appStore.getState().setLoading(true, loaded, total);
+          progress.style.width = `${((loaded / total) * 100).toFixed(1)}%`;
+          say(`${entry.id} — ${(loaded / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`);
+        },
+        "/out",
+        noCache,
+      );
+      appStore.getState().setDataset(entry.id, next);
+      driver.setDataset(next);
+      chordDriver?.setDataset(next);
+      hierDriver?.setDataset(next);
+      say(`${metaLine()} · gpu: ${caps.tier}`);
+    } finally {
+      appStore.getState().setLoading(false);
+      progress.style.width = "100%";
+      progress.classList.add("is-done");
+    }
+  }
+
   registerActions({
     async switchDataset(id) {
       const st = appStore.getState();
       if (st.loading.active || id === st.datasetId) return;
       const entry = st.datasets.find((d) => d.id === id);
       if (!entry) return;
-      st.setLoading(true);
-      progress.classList.remove("is-done");
-      progress.style.width = "0%";
-      try {
-        const next = await loadDataset(entry.path, (loaded, total) => {
-          appStore.getState().setLoading(true, loaded, total);
-          progress.style.width = `${((loaded / total) * 100).toFixed(1)}%`;
-          say(`${id} — ${(loaded / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`);
-        });
-        appStore.getState().setDataset(id, next);
-        driver.setDataset(next);
-        chordDriver?.setDataset(next);
-        hierDriver?.setDataset(next);
-        say(`${metaLine()} · gpu: ${caps.tier}`);
-      } finally {
-        appStore.getState().setLoading(false);
-        progress.style.width = "100%";
-        progress.classList.add("is-done");
-      }
+      await loadAndShow(entry);
     },
     switchViewMode,
+    async refreshDatasets(datasetId) {
+      if (appStore.getState().loading.active) return;
+      const index = await loadIndex("/out", true);
+      appStore.getState().setDatasets(index.datasets);
+      const entry = index.datasets.find((d) => d.id === datasetId);
+      if (!entry) return; // built into a different out root than the one served
+      await loadAndShow(entry, true);
+      appStore.getState().pushProgressEvent("done", `map ready — ${datasetId}`);
+      appStore.getState().setProgress({ stage: "done", pct: 1 });
+    },
   });
 
   // deep links for e2e + `nebulai compare` handoff

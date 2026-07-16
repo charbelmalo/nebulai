@@ -1,11 +1,13 @@
-/** Live probing + simulated map-build progress. The real backend runs in
- *  Python; this module drives the viewer-side state so the progress strip
- *  animates whether it's talking to a real endpoint or a mock schedule. */
+/** Live probing + REAL map builds. The build side talks to the local build
+ *  server (`python -m nebulai.backend.build_server`, port 8124), which runs
+ *  the actual `nebulai tokens` pipeline as a subprocess — progress here is
+ *  the pipeline's own stage output, nothing simulated. */
 
+import { signal } from "@preact/signals";
+import { requestRefreshDatasets } from "../app/actions";
 import { appStore, type ProbeStage } from "../app/store";
 
 let probeTimer: number | null = null;
-let buildTimer: number | null = null;
 
 /** Fire a single /models probe against the configured endpoint. Updates
  *  `progress.latencyMs` and pushes an event on success or error. */
@@ -39,60 +41,184 @@ export async function probeEndpoint(): Promise<void> {
   }
 }
 
-/** Schedule of stages the map-build steps through. Timings are illustrative;
- *  a real pipeline replaces this with backend events. */
-const BUILD_SCHEDULE: { stage: ProbeStage; ms: number; msg: string }[] = [
-  { stage: "probing", ms: 400, msg: "handshake…" },
-  { stage: "loading", ms: 800, msg: "streaming units" },
-  { stage: "reducing", ms: 1600, msg: "UMAP 10-D → 3-D → 2-D" },
-  { stage: "clustering", ms: 900, msg: "HDBSCAN leaf selection" },
-  { stage: "naming", ms: 1500, msg: "auto-namer chain" },
-  { stage: "exporting", ms: 500, msg: "writing nebulai.json" },
-  { stage: "rendering", ms: 600, msg: "drawing atlas" },
-  { stage: "done", ms: 0, msg: "map ready" },
-];
+// ── build server client ─────────────────────────────────────────────────────
 
-export function startBuildProbe(): void {
-  cancelBuildProbe();
-  const st = appStore.getState();
-  st.resetProgress();
-  st.pushProgressEvent("probing", "starting build");
-  let elapsed = 0;
-  const total = BUILD_SCHEDULE.reduce((a, s) => a + s.ms, 0);
-  let idx = 0;
-
-  const tick = () => {
-    if (idx >= BUILD_SCHEDULE.length) {
-      buildTimer = null;
-      return;
-    }
-    const step = BUILD_SCHEDULE[idx];
-    if (!step) {
-      buildTimer = null;
-      return;
-    }
-    appStore.getState().setProgress({
-      stage: step.stage,
-      message: step.msg,
-      pct: Math.min(1, elapsed / Math.max(1, total)),
-    });
-    appStore.getState().pushProgressEvent(step.stage, step.msg);
-    elapsed += step.ms;
-    idx++;
-    buildTimer = window.setTimeout(tick, step.ms);
-  };
-  tick();
+/** One curated (or previously built) model as reported by /build/models. */
+export interface BuildModelInfo {
+  id: string;
+  label: string;
+  interp: boolean;
+  built: boolean;
+  /** reduced.params.json contents when a UMAP cache exists — the fast
+   *  re-cluster path is available when the current params match this. */
+  cached_reduce: Record<string, unknown> | null;
 }
 
-export function cancelBuildProbe(): void {
-  if (buildTimer != null) {
-    clearTimeout(buildTimer);
-    buildTimer = null;
-    const st = appStore.getState();
-    if (st.progress.stage !== "done") {
-      st.setProgress({ stage: "idle", message: "cancelled" });
-      st.pushProgressEvent("idle", "cancelled");
+export interface BuildModelsPayload {
+  models: BuildModelInfo[];
+  namers: string[];
+  sources: { id: string; label: string }[];
+}
+
+/** null until the first successful /build/models fetch. */
+export const $buildModels = signal<BuildModelsPayload | null>(null);
+export const $buildHealth = signal<"unknown" | "ok" | "down">("unknown");
+
+function buildBase(): string {
+  return appStore.getState().probing.buildUrl.replace(/\/+$/, "");
+}
+
+export async function fetchBuildModels(): Promise<void> {
+  try {
+    const res = await fetch(`${buildBase()}/build/models`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    $buildModels.value = (await res.json()) as BuildModelsPayload;
+    $buildHealth.value = "ok";
+  } catch {
+    $buildModels.value = null;
+    $buildHealth.value = "down";
+  }
+}
+
+/** Store BuildParams → /build/start params. 0-valued counts are omitted so
+ *  the CLI defaults apply (full vocab / auto cluster sizing). */
+function serverParams(): Record<string, unknown> {
+  const { buildParams: bp, buildSource } = appStore.getState().probing;
+  const p: Record<string, unknown> = {
+    n_neighbors: bp.nNeighbors,
+    seed: bp.seed,
+    cluster_method: bp.clusterMethod,
+    namer: bp.namer,
+    edges: bp.edges,
+  };
+  if (bp.maxTokens > 0) p.max_tokens = bp.maxTokens;
+  if (bp.minClusterSize > 0) p.min_cluster_size = bp.minClusterSize;
+  if (bp.minSamples > 0) p.min_samples = bp.minSamples;
+  if (bp.force) p.force = true;
+  if (buildSource === "api") {
+    p.embed_host = bp.embedHost;
+    p.embed_model = bp.embedModel;
+    p.embed_api = bp.embedApi;
+  }
+  return p;
+}
+
+/** Do the current params hit the model's UMAP cache? (= the seconds-fast
+ *  re-cluster teaching loop instead of a minutes-long reduce). Mirrors the
+ *  reduce_params dict in cli.py; api builds aren't reported by /build/models,
+ *  so they never claim the fast path. */
+export function cacheMatches(m: BuildModelInfo | undefined): boolean {
+  const { buildModel, buildSource, buildParams: bp } = appStore.getState().probing;
+  const c = m?.cached_reduce;
+  if (!c || buildSource !== "hf") return false;
+  return (
+    c.model === buildModel &&
+    (c.max_tokens ?? null) === (bp.maxTokens > 0 ? bp.maxTokens : null) &&
+    c.center === true &&
+    c.cluster_dim === 10 &&
+    c.n_neighbors === bp.nNeighbors &&
+    c.seed === bp.seed
+  );
+}
+
+let pollTimer: number | null = null;
+let lastStage: string | null = null;
+
+function stopPolling(): void {
+  if (pollTimer != null) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function startPolling(): void {
+  stopPolling();
+  lastStage = null;
+  pollTimer = window.setInterval(() => void pollBuildStatus(), 1000);
+}
+
+function fmtElapsed(s: number): string {
+  const m = Math.floor(s / 60);
+  return m > 0 ? `${m}m ${Math.floor(s % 60)}s` : `${Math.floor(s)}s`;
+}
+
+export async function pollBuildStatus(): Promise<void> {
+  const st = appStore.getState();
+  try {
+    const res = await fetch(`${buildBase()}/build/status`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const s = await res.json();
+    const stage = (s.stage ?? "idle") as ProbeStage;
+    st.setProgress({
+      stage,
+      pct: s.pct ?? 0,
+      message: s.running ? `${s.message || "…"} — ${fmtElapsed(s.elapsed_s ?? 0)} elapsed` : s.message || "",
+      error: s.error ?? null,
+    });
+    if (stage !== lastStage) {
+      st.pushProgressEvent(stage, s.message || stage);
+      lastStage = stage;
     }
+    if (!s.running) {
+      stopPolling();
+      void fetchBuildModels(); // built/cached flags just changed
+      if (s.done && s.dataset_id) {
+        st.pushProgressEvent("rendering", `hot-swapping to ${s.dataset_id}`);
+        requestRefreshDatasets(s.dataset_id);
+      }
+    }
+  } catch (e) {
+    stopPolling();
+    const msg = e instanceof Error ? e.message : String(e);
+    st.setProgress({ stage: "error", error: `lost build server: ${msg}` });
+    st.pushProgressEvent("error", `status poll failed: ${msg}`);
+    $buildHealth.value = "down";
+  }
+}
+
+/** POST /build/start with the configured model/source/params, then poll.
+ *  `force` overrides the stored force flag (the re-cluster button passes
+ *  false so a matching UMAP cache is reused). */
+export async function startBuild(opts: { force?: boolean } = {}): Promise<void> {
+  const st = appStore.getState();
+  const { buildModel, buildSource } = st.probing;
+  if (!buildModel.trim()) {
+    st.setProgress({ stage: "error", error: "no model selected" });
+    return;
+  }
+  const params = serverParams();
+  if (opts.force !== undefined) {
+    if (opts.force) params.force = true;
+    else delete params.force;
+  }
+  st.resetProgress();
+  st.pushProgressEvent("probing", `POST /build/start ${buildModel} (${buildSource})`);
+  st.setProgress({ stage: "probing", pct: 0.02, message: `starting ${buildModel}…` });
+  try {
+    const res = await fetch(`${buildBase()}/build/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: buildModel, source: buildSource, params }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+    startPolling();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    st.setProgress({ stage: "error", error: msg });
+    st.pushProgressEvent("error", `build start failed: ${msg}`);
+  }
+}
+
+export async function cancelBuild(): Promise<void> {
+  const st = appStore.getState();
+  try {
+    await fetch(`${buildBase()}/build/cancel`, { method: "POST" });
+    st.pushProgressEvent("idle", "cancel requested");
+    // the poll loop observes the server flip to idle/"cancelled"
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    st.pushProgressEvent("error", `cancel failed: ${msg}`);
   }
 }
 

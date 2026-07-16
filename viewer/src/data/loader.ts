@@ -15,8 +15,8 @@ export interface Dataset {
 
 const cache = new Map<string, Dataset>();
 
-export async function loadIndex(base = "/out"): Promise<DatasetIndex> {
-  const res = await fetch(`${base}/index.json`);
+export async function loadIndex(base = "/out", noCache = false): Promise<DatasetIndex> {
+  const res = await fetch(`${base}/index.json`, noCache ? { cache: "no-store" } : undefined);
   if (!res.ok) throw new Error(`no dataset index at ${base}/index.json (${res.status})`);
   return res.json();
 }
@@ -25,8 +25,9 @@ export function loadDataset(
   path: string,
   onProgress?: (loaded: number, total: number) => void,
   base = "/out",
+  noCache = false,
 ): Promise<Dataset> {
-  const cached = cache.get(path);
+  const cached = noCache ? undefined : cache.get(path);
   if (cached) return Promise.resolve(cached);
 
   return new Promise((resolve, reject) => {
@@ -51,7 +52,7 @@ export function loadDataset(
       worker.terminate();
       reject(new Error(e.message));
     };
-    worker.postMessage({ url: `${base}/${path}` });
+    worker.postMessage({ url: `${base}/${path}`, noCache });
   });
 }
 

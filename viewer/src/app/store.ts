@@ -167,6 +167,24 @@ export interface Appearance {
   };
 }
 
+/** Map-builder parameters — mirrors the build server's /build/start params
+ *  (which mirror the `nebulai tokens` CLI flags). 0 means "auto"/"full" for
+ *  the counts; the server omits those flags so the CLI default applies. */
+export interface BuildParams {
+  maxTokens: number; // 0 = full curated vocab
+  nNeighbors: number; // UMAP n_neighbors
+  seed: number; // UMAP seed
+  minClusterSize: number; // 0 = auto (HDBSCAN default heuristic)
+  minSamples: number; // 0 = auto
+  clusterMethod: "leaf" | "eom";
+  namer: "auto" | "ollama" | "openrouter" | "anthropic" | "none";
+  edges: "knn" | "cluster" | "none";
+  force: boolean; // recompute cached UMAP reductions
+  embedHost: string; // [source=api] embeddings endpoint base URL
+  embedModel: string; // [source=api] embedding model name
+  embedApi: "ollama" | "openai"; // [source=api] transport
+}
+
 /** Model probing config — live probing tests a model endpoint before it's
  *  used for cluster naming or embedding. Progress state is separate and
  *  transient (mirrors the pipeline stages the backend actually reports). */
@@ -179,6 +197,10 @@ export interface Probing {
   autoRun: boolean; // rebuild the map when config changes
   useM4Worker: boolean; // route through 192.168.0.200 (m4worker-bridge)
   liveUrl: string; // Internals #25 live probe server (nebulai live_server)
+  buildUrl: string; // map build server (nebulai build_server)
+  buildModel: string; // HF model id to build (curated pick or custom)
+  buildSource: "hf" | "api"; // W_E rows vs third-party text embeddings
+  buildParams: BuildParams;
 }
 
 export type ProbeStage =
@@ -262,6 +284,7 @@ export interface AppState {
     value: Appearance[G][K],
   ): void;
   setProbing<K extends keyof Probing>(key: K, value: Probing[K]): void;
+  setBuildParam<K extends keyof BuildParams>(key: K, value: BuildParams[K]): void;
   setProgress(patch: Partial<Progress>): void;
   pushProgressEvent(stage: ProbeStage, message: string): void;
   resetProgress(): void;
@@ -415,6 +438,23 @@ export const appStore = createStore<AppState>()((set) => ({
     autoRun: false,
     useM4Worker: false,
     liveUrl: "http://127.0.0.1:8123",
+    buildUrl: "http://127.0.0.1:8124",
+    buildModel: "gpt2",
+    buildSource: "hf",
+    buildParams: {
+      maxTokens: 0,
+      nNeighbors: 30,
+      seed: 42,
+      minClusterSize: 0,
+      minSamples: 0,
+      clusterMethod: "leaf",
+      namer: "auto",
+      edges: "knn",
+      force: false,
+      embedHost: "http://192.168.0.200:11434",
+      embedModel: "mxbai-embed-large",
+      embedApi: "ollama",
+    },
   },
   progress: {
     stage: "idle",
@@ -482,6 +522,13 @@ export const appStore = createStore<AppState>()((set) => ({
     })),
   setProbing: (key, value) =>
     set((s) => ({ probing: { ...s.probing, [key]: value } })),
+  setBuildParam: (key, value) =>
+    set((s) => ({
+      probing: {
+        ...s.probing,
+        buildParams: { ...s.probing.buildParams, [key]: value },
+      },
+    })),
   setProgress: (patch) => set((s) => ({ progress: { ...s.progress, ...patch } })),
   pushProgressEvent: (stage, message) =>
     set((s) => {

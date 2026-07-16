@@ -8,6 +8,10 @@ import type { ViewMode } from "./store";
 export interface AppActions {
   switchDataset(id: string): Promise<void>;
   switchViewMode(mode: ViewMode): Promise<void>;
+  /** After a build finishes: re-fetch out/index.json (cache-busted), evict the
+   *  rebuilt dataset and hot-swap to it — bypasses switchDataset's same-id
+   *  early-return so rebuilding the currently shown map refreshes in place. */
+  refreshDatasets(datasetId: string): Promise<void>;
 }
 
 let handlers: AppActions | null = null;
@@ -22,4 +26,10 @@ export function requestDataset(id: string): void {
 
 export function requestViewMode(mode: ViewMode): void {
   handlers?.switchViewMode(mode).catch((e) => console.error("[nebulai] view switch failed", e));
+}
+
+export function requestRefreshDatasets(datasetId: string): void {
+  handlers
+    ?.refreshDatasets(datasetId)
+    .catch((e) => console.error("[nebulai] dataset refresh failed", e));
 }

@@ -8,6 +8,8 @@ import { computeHulls, type ClusterHull } from "./hulls";
 
 export interface ParseRequest {
   url: string;
+  /** bypass the browser HTTP cache — used after a rebuild overwrites the file */
+  noCache?: boolean;
 }
 
 export type ParseResponse =
@@ -18,7 +20,7 @@ export type ParseResponse =
 self.onmessage = async (ev: MessageEvent<ParseRequest>) => {
   const t0 = performance.now();
   try {
-    const res = await fetch(ev.data.url);
+    const res = await fetch(ev.data.url, ev.data.noCache ? { cache: "reload" } : undefined);
     if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${ev.data.url}`);
 
     const total = Number(res.headers.get("Content-Length") ?? 0);

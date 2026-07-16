@@ -4,10 +4,19 @@
  *  the `nebulai` skill's SETTINGS_HOME rule. */
 
 import type { ComponentChildren } from "preact";
+import { useEffect } from "preact/hooks";
 import { useSignal } from "@preact/signals";
 import { requestDataset, requestViewMode } from "../app/actions";
 import { appStore, type ViewMode } from "../app/store";
-import { probeEndpoint, startBuildProbe, cancelBuildProbe } from "./probe";
+import {
+  $buildHealth,
+  $buildModels,
+  cacheMatches,
+  cancelBuild,
+  fetchBuildModels,
+  probeEndpoint,
+  startBuild,
+} from "./probe";
 import {
   $appearance,
   $capabilities,
@@ -29,7 +38,7 @@ import {
   clearSessionAnalyses as clearPersistedSessions,
   deleteSessionAnalysis,
 } from "./sessionStore";
-import { SelectRow, SliderRow, Tabs, TextRow, ToggleRow } from "./controls";
+import { RadioRow, SelectRow, SliderRow, Tabs, TextRow, ToggleRow } from "./controls";
 
 const TABS = ["General", "Appearance", "Model Probing", "Snapshot", "Sessions", "Data", "About"];
 
@@ -375,9 +384,196 @@ function AppearanceTab() {
 function ProbingTab() {
   const p = $probing.value;
   const pg = $progress.value;
+  const bm = $buildModels.value;
+  const health = $buildHealth.value;
+
+  // discover curated models + built/cache state when the tab opens
+  useEffect(() => {
+    void fetchBuildModels();
+  }, []);
+
+  const bp = p.buildParams;
+  const set = appStore.getState().setBuildParam;
+  const models = bm?.models ?? [];
+  const isCurated = models.some((m) => m.id === p.buildModel);
+  const selected = models.find((m) => m.id === p.buildModel);
+  const building = pg.stage !== "idle" && pg.stage !== "done" && pg.stage !== "error";
+  const canRecluster = !building && cacheMatches(selected);
 
   return (
     <>
+      <SettingsSection
+        title="Map builder"
+        hint="Runs the real `nebulai tokens` pipeline on the local build server — pick a model, choose the geometry source, and rebuild the semantic map. Start it with: python -m nebulai.backend.build_server"
+      >
+        <TextRow
+          label="Build server"
+          type="url"
+          value={p.buildUrl}
+          placeholder="http://127.0.0.1:8124"
+          onChange={(v) => appStore.getState().setProbing("buildUrl", v)}
+          hint={health === "ok" ? "● connected" : health === "down" ? "○ unreachable" : "…"}
+        />
+        <SelectRow
+          label="Model"
+          value={isCurated ? p.buildModel : "__custom"}
+          options={[
+            ...models.map((m) => ({
+              value: m.id,
+              label:
+                m.label +
+                (m.built ? " · built" : "") +
+                (m.interp ? " · internals" : ""),
+            })),
+            { value: "__custom", label: "Custom HF model id…" },
+          ]}
+          onChange={(v) =>
+            appStore.getState().setProbing("buildModel", v === "__custom" ? "" : v)
+          }
+          disabled={models.length === 0}
+        />
+        {(!isCurated || models.length === 0) && (
+          <TextRow
+            label="HF model id"
+            value={p.buildModel}
+            placeholder="EleutherAI/pythia-410m"
+            onChange={(v) => appStore.getState().setProbing("buildModel", v)}
+            hint="any safetensors model with a standard embedding key"
+          />
+        )}
+        <RadioRow
+          name="Geometry source"
+          value={p.buildSource}
+          options={[
+            { value: "hf", label: "Model weights (W_E) — the model's own geometry" },
+            {
+              value: "api",
+              label: "API text embeddings — external embedder, labeled as such on the map",
+            },
+          ]}
+          onChange={(v) => appStore.getState().setProbing("buildSource", v as "hf" | "api")}
+        />
+        {p.buildSource === "api" && (
+          <>
+            <TextRow
+              label="Embed host"
+              type="url"
+              value={bp.embedHost}
+              placeholder="http://192.168.0.200:11434"
+              onChange={(v) => set("embedHost", v)}
+              hint="ollama on the M4 worker, or any OpenAI-compatible endpoint"
+            />
+            <TextRow
+              label="Embed model"
+              value={bp.embedModel}
+              placeholder="mxbai-embed-large"
+              onChange={(v) => set("embedModel", v)}
+            />
+            <SelectRow
+              label="Embed API"
+              value={bp.embedApi}
+              options={[
+                { value: "ollama", label: "ollama (/api/embed)" },
+                { value: "openai", label: "OpenAI-compatible (/v1/embeddings)" },
+              ]}
+              onChange={(v) => set("embedApi", v as "ollama" | "openai")}
+            />
+          </>
+        )}
+        <SelectRow
+          label="Cluster namer"
+          value={bp.namer}
+          options={[
+            { value: "auto", label: "auto (ollama → OpenRouter → centroid)" },
+            { value: "ollama", label: "ollama (M4 worker)" },
+            { value: "openrouter", label: "OpenRouter" },
+            { value: "anthropic", label: "Anthropic — naming only (no embeddings API)" },
+            { value: "none", label: "none (centroid tokens)" },
+          ]}
+          onChange={(v) => set("namer", v as typeof bp.namer)}
+        />
+        <SliderRow
+          label="Max tokens"
+          value={bp.maxTokens}
+          min={0}
+          max={50000}
+          step={1000}
+          format={(v) => (v === 0 ? "full vocab" : v.toLocaleString("en-US"))}
+          onChange={(v) => set("maxTokens", v)}
+        />
+        <SliderRow
+          label="UMAP neighbors"
+          value={bp.nNeighbors}
+          min={5}
+          max={100}
+          step={1}
+          format={(v) => `${v}`}
+          onChange={(v) => set("nNeighbors", v)}
+        />
+        <SliderRow
+          label="Min cluster size"
+          value={bp.minClusterSize}
+          min={0}
+          max={200}
+          step={5}
+          format={(v) => (v === 0 ? "auto" : `${v}`)}
+          onChange={(v) => set("minClusterSize", v)}
+        />
+        <SelectRow
+          label="Cluster selection"
+          value={bp.clusterMethod}
+          options={[
+            { value: "leaf", label: "leaf — fine clusters (recommended)" },
+            { value: "eom", label: "eom — coarse, mega-cluster-prone" },
+          ]}
+          onChange={(v) => set("clusterMethod", v as "leaf" | "eom")}
+        />
+        <SelectRow
+          label="Similarity edges"
+          value={bp.edges}
+          options={[
+            { value: "knn", label: "kNN + cluster edges (adds ~4MB)" },
+            { value: "cluster", label: "cluster edges only" },
+            { value: "none", label: "none" },
+          ]}
+          onChange={(v) => set("edges", v as typeof bp.edges)}
+        />
+        <ToggleRow
+          label="Force recompute UMAP"
+          checked={bp.force}
+          onChange={(v) => set("force", v)}
+          hint="ignores the reduction cache — full vocab takes 15–30 min"
+        />
+        <div class="settings-actions">
+          <button
+            type="button"
+            class="btn-primary"
+            onClick={() => void startBuild()}
+            disabled={building || health !== "ok" || !p.buildModel.trim()}
+            title="Full build — UMAP on the full vocab takes ~15–30 min; small max-tokens builds finish in about a minute"
+          >
+            Build map
+          </button>
+          <button
+            type="button"
+            class="btn-ghost"
+            onClick={() => void startBuild({ force: false })}
+            disabled={!canRecluster || health !== "ok"}
+            title="Re-cluster + re-name from the cached UMAP reduction — seconds, not minutes"
+          >
+            Re-cluster from cache
+          </button>
+          <button
+            type="button"
+            class="btn-ghost"
+            onClick={() => void cancelBuild()}
+            disabled={!building}
+          >
+            Cancel
+          </button>
+        </div>
+      </SettingsSection>
+
       <SettingsSection
         title="Endpoint"
         hint="Point the naming/embedding chain at a custom OpenAI-compatible endpoint, or route through the M4 worker bridge."
@@ -443,22 +639,6 @@ function ProbingTab() {
           <button type="button" class="btn-primary" onClick={() => probeEndpoint()}>
             Probe now
           </button>
-          <button
-            type="button"
-            class="btn-ghost"
-            onClick={() => startBuildProbe()}
-            disabled={pg.stage !== "idle" && pg.stage !== "done" && pg.stage !== "error"}
-          >
-            Rebuild map
-          </button>
-          <button
-            type="button"
-            class="btn-ghost"
-            onClick={() => cancelBuildProbe()}
-            disabled={pg.stage === "idle" || pg.stage === "done" || pg.stage === "error"}
-          >
-            Cancel
-          </button>
         </div>
       </SettingsSection>
 
@@ -516,7 +696,7 @@ function ProgressStrip() {
 function ProgressLog() {
   const pg = $progress.value;
   if (pg.history.length === 0) {
-    return <p class="settings-empty">No events yet. Press “Rebuild map” to start.</p>;
+    return <p class="settings-empty">No events yet. Press “Build map” to start.</p>;
   }
   return (
     <ul class="progress-log">

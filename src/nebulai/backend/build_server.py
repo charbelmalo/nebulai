@@ -121,6 +121,10 @@ def build_cmd(model: str, source: str, params: dict[str, Any]) -> list[str]:
             cmd += ["--embed-host", str(p["embed_host"])]
         if p.get("embed_model"):
             cmd += ["--embed-model", str(p["embed_model"])]
+        if p.get("embed_api"):
+            if p["embed_api"] not in ("ollama", "openai"):
+                raise ValueError(f"invalid embed_api {p['embed_api']!r}")
+            cmd += ["--embed-api", p["embed_api"]]
     return cmd
 
 
