@@ -28,6 +28,36 @@ def _keep(s: str) -> bool:
     return True
 
 
+def curated_vocab(
+    model_id: str,
+    max_tokens: int | None = None,
+    n_vocab: int | None = None,
+) -> tuple[list[int], list[str]]:
+    """The curated (ids, labels) vocabulary for a model's tokenizer.
+
+    Shared by the W_E front-end below and the api-embeddings front-end
+    (api_tokens.py) so both map exactly the same token set."""
+    from tokenizers import Tokenizer
+
+    tok = Tokenizer.from_pretrained(model_id)
+    n = tok.get_vocab_size() if n_vocab is None else min(n_vocab, tok.get_vocab_size())
+
+    ids: list[int] = []
+    labels: list[str] = []
+    for i in range(n):
+        s = tok.decode([i])
+        if _keep(s):
+            ids.append(i)
+            labels.append(s)
+
+    # BPE merge order roughly tracks corpus frequency, so the lowest ids are
+    # the most frequent tokens — truncating keeps the common ones.
+    if max_tokens is not None and len(ids) > max_tokens:
+        ids = ids[:max_tokens]
+        labels = labels[:max_tokens]
+    return ids, labels
+
+
 def load_token_units(
     model_id: str = "gpt2",
     center: bool = True,
@@ -35,7 +65,6 @@ def load_token_units(
 ) -> Units:
     from huggingface_hub import hf_hub_download
     from safetensors.numpy import load_file
-    from tokenizers import Tokenizer
 
     path = hf_hub_download(model_id, "model.safetensors")
     tensors = load_file(path)
@@ -49,22 +78,7 @@ def load_token_units(
     W = np.asarray(tensors[key], dtype=np.float32)
     del tensors
 
-    tok = Tokenizer.from_pretrained(model_id)
-    n_vocab = min(W.shape[0], tok.get_vocab_size())
-
-    ids: list[int] = []
-    labels: list[str] = []
-    for i in range(n_vocab):
-        s = tok.decode([i])
-        if _keep(s):
-            ids.append(i)
-            labels.append(s)
-
-    # BPE merge order roughly tracks corpus frequency, so the lowest ids are
-    # the most frequent tokens — truncating keeps the common ones.
-    if max_tokens is not None and len(ids) > max_tokens:
-        ids = ids[:max_tokens]
-        labels = labels[:max_tokens]
+    ids, labels = curated_vocab(model_id, max_tokens, n_vocab=W.shape[0])
 
     V = W[ids]
     if center:

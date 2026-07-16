@@ -21,6 +21,9 @@ def _update_index(out_root: Path) -> Path:
             {
                 "id": jp.parent.name,
                 "model": meta.get("model", jp.parent.name),
+                # names the geometry's true origin — "token_embedding" for W_E
+                # maps, "api_text_embedding(<embedder>)" for api-source maps
+                "unit": meta.get("unit", "token_embedding"),
                 "path": f"{jp.parent.name}/nebulai.json",
                 "schema_version": meta.get("schema_version", 1),
                 "n_points": meta["n_points"],
@@ -39,24 +42,50 @@ def _update_index(out_root: Path) -> Path:
 
 
 def _run_tokens(args: argparse.Namespace) -> None:
+    import os
+
     from .backend.cluster import cluster_units
     from .backend.export import export_json
     from .backend.name import name_clusters
     from .backend.reduce import reduce_vectors
     from .backend.viz import render
-    from .frontends.tokens import load_token_units
 
-    out_dir = Path(args.out) / args.model.replace("/", "__")
+    dataset_id = args.model.replace("/", "__")
+    if args.source == "api":
+        dataset_id += f"__api-{args.embed_model.replace('/', '__')}"
+    out_dir = Path(args.out) / dataset_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
     t = _timer()
-    units = load_token_units(
-        args.model, center=not args.no_center, max_tokens=args.max_tokens
-    )
-    print(
-        f"[1/5] loaded {len(units)} token units from {args.model} "
-        f"(vocab {units.meta['vocab_size']}, curated to {units.meta['kept']}) [{t()}]"
-    )
+    if args.source == "api":
+        from .frontends.api_tokens import load_api_token_units
+
+        units = load_api_token_units(
+            args.model,
+            embed_host=args.embed_host,
+            embed_model=args.embed_model,
+            api=args.embed_api,
+            api_key=os.environ.get("EMBED_API_KEY") or os.environ.get("OPENAI_API_KEY"),
+            center=not args.no_center,
+            max_tokens=args.max_tokens,
+            out_root=Path(args.out),
+        )
+        print(
+            f"[1/5] loaded {len(units)} token units from {args.model} via "
+            f"{args.embed_model}@{args.embed_host} — api text embeddings, "
+            f"NOT model-internal geometry (vocab {units.meta['vocab_size']}, "
+            f"curated to {units.meta['kept']}) [{t()}]"
+        )
+    else:
+        from .frontends.tokens import load_token_units
+
+        units = load_token_units(
+            args.model, center=not args.no_center, max_tokens=args.max_tokens
+        )
+        print(
+            f"[1/5] loaded {len(units)} token units from {args.model} "
+            f"(vocab {units.meta['vocab_size']}, curated to {units.meta['kept']}) [{t()}]"
+        )
 
     # UMAP is the expensive step — cache reductions keyed by their params
     reduce_params = {
@@ -67,6 +96,10 @@ def _run_tokens(args: argparse.Namespace) -> None:
         "n_neighbors": args.n_neighbors,
         "seed": args.seed,
     }
+    if args.source == "api":
+        # extra keys only for api builds, so existing hf caches stay valid
+        reduce_params["source"] = "api"
+        reduce_params["embed_model"] = args.embed_model
     cache = out_dir / "reduced.npz"
     cache_meta = out_dir / "reduced.params.json"
     t = _timer()
@@ -130,6 +163,11 @@ def _run_tokens(args: argparse.Namespace) -> None:
     )
     png = out_dir / "map_static.png"
     html = out_dir / "map_interactive.html"
+    geometry_line = (
+        f"api text embeddings ({args.embed_model}) — not model-internal"
+        if args.source == "api"
+        else "embedding rows"
+    )
     render(
         u2,
         cluster_ids,
@@ -140,7 +178,7 @@ def _run_tokens(args: argparse.Namespace) -> None:
         title=f"Nebul.AI — {args.model} token map",
         sub_title=(
             f"{meta['n_points']} tokens · {meta['n_clusters']} clusters · "
-            f"embedding rows -> UMAP -> HDBSCAN"
+            f"{geometry_line} -> UMAP -> HDBSCAN"
         ),
     )
     _update_index(Path(args.out))
@@ -288,6 +326,31 @@ def main() -> None:
     t = sub.add_parser("tokens", help="Plan C: token-embedding map")
     t.add_argument("--model", default="gpt2", help="HF model id (default: gpt2)")
     t.add_argument("--out", default="out", help="output directory root")
+    t.add_argument(
+        "--source",
+        choices=["hf", "api"],
+        default="hf",
+        help="geometry source: hf = the model's own W_E rows (model-internal); "
+        "api = a third-party text embedder over the same curated vocab "
+        "(labeled as such — NOT model-internal geometry)",
+    )
+    t.add_argument(
+        "--embed-host",
+        default="http://192.168.0.200:11434",
+        help="[--source api] embeddings endpoint base URL (default: M4 worker)",
+    )
+    t.add_argument(
+        "--embed-model",
+        default="mxbai-embed-large",
+        help="[--source api] embedding model name",
+    )
+    t.add_argument(
+        "--embed-api",
+        choices=["ollama", "openai"],
+        default="ollama",
+        help="[--source api] transport: ollama /api/embed or OpenAI-compatible "
+        "/v1/embeddings (bearer key from EMBED_API_KEY or OPENAI_API_KEY)",
+    )
     t.add_argument(
         "--max-tokens",
         type=int,
