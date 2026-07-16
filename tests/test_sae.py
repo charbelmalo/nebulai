@@ -184,3 +184,19 @@ SUBSET_CASES = [
 )
 def test_subset_indices(_id, args, expected):
     assert subset_indices(*args) == expected
+
+
+# --- CLI honesty: all-placeholder labels must not be LLM-named ---------------
+
+
+def test_placeholder_titles_features_noun():
+    import numpy as np
+
+    from nebulai.backend.name import placeholder_titles
+
+    titles, namer_used = placeholder_titles(np.array([1, -1, 0, 1]), "features")
+    assert titles == {
+        0: "unlabeled features (cluster 0)",
+        1: "unlabeled features (cluster 1)",
+    }
+    assert namer_used == "none(all-placeholder-labels)"

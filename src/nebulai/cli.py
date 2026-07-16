@@ -192,7 +192,7 @@ def _run_sae(args: argparse.Namespace) -> None:
     structure and its exact `[k/5] ...` prints (build_server parses them)."""
     from .backend.cluster import cluster_units
     from .backend.export import export_json
-    from .backend.name import name_clusters
+    from .backend.name import name_clusters, placeholder_titles
     from .backend.reduce import reduce_vectors
     from .backend.viz import render
     from .frontends.sae import load_sae_units, sae_dataset_id
@@ -267,16 +267,21 @@ def _run_sae(args: argparse.Namespace) -> None:
     print(f"[3/5] HDBSCAN: {n_clusters} clusters, {noise:.0%} noise [{t()}]")
 
     t = _timer()
-    titles, namer_used = name_clusters(
-        units,
-        cluster_ids,
-        namer=args.namer,
-        openrouter_model=args.openrouter_model,
-        ollama_model=args.ollama_model,
-        ollama_host=args.ollama_host,
-        anthropic_model=args.anthropic_model,
-        env_file=args.env_file,
-    )
+    if units.meta.get("n_labeled", 0) == 0:
+        # every member label is a placeholder (--labels none) — an LLM namer
+        # would invent semantics from zero information, so title honestly
+        titles, namer_used = placeholder_titles(cluster_ids, "features")
+    else:
+        titles, namer_used = name_clusters(
+            units,
+            cluster_ids,
+            namer=args.namer,
+            openrouter_model=args.openrouter_model,
+            ollama_model=args.ollama_model,
+            ollama_host=args.ollama_host,
+            anthropic_model=args.anthropic_model,
+            env_file=args.env_file,
+        )
     print(f"[4/5] named {len(titles)} clusters via '{namer_used}' [{t()}]")
 
     t = _timer()

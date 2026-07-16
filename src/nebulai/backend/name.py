@@ -224,6 +224,24 @@ def _name_with_centroid(reps: dict[int, list[str]]) -> dict[int, str]:
     }
 
 
+def placeholder_titles(
+    cluster_ids: np.ndarray, unit_noun: str
+) -> tuple[dict[int, str], str]:
+    """Honest cluster titles when EVERY member label is a placeholder.
+
+    An LLM namer given only placeholder labels ("neuron 3 (unlabeled)")
+    invents semantics from zero information — observed producing "token
+    clusters" on an all-placeholder neuron map. Callers must use this instead
+    of name_clusters when units.meta["n_labeled"] == 0. `unit_noun` names the
+    unit type ("neurons", "features"); the namer stamp records why no LLM ran.
+    """
+    titles = {
+        int(cid): f"unlabeled {unit_noun} (cluster {int(cid)})"
+        for cid in sorted({int(c) for c in cluster_ids if c >= 0})
+    }
+    return titles, "none(all-placeholder-labels)"
+
+
 def name_clusters(
     units: Units,
     cluster_ids: np.ndarray,

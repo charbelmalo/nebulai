@@ -86,16 +86,12 @@ def labels_for(ids: list[int], desc: dict[int, str]) -> list[str]:
 def placeholder_titles(cluster_ids: "np.ndarray") -> tuple[dict[int, str], str]:
     """Honest cluster titles when EVERY member label is a placeholder.
 
-    An LLM namer given only "neuron {i} (unlabeled)" strings would invent
-    semantics from zero information (observed: it produced "token clusters"),
-    so the map must not pretend its clusters mean anything. Returns
-    ({cluster_id: "unlabeled neurons (cluster N)"}, namer_used) with the
-    namer stamped "none(all-placeholder-labels)" so meta records why."""
-    titles = {
-        int(cid): f"unlabeled neurons (cluster {int(cid)})"
-        for cid in sorted({int(c) for c in cluster_ids if c >= 0})
-    }
-    return titles, "none(all-placeholder-labels)"
+    Thin wrapper over backend.name.placeholder_titles (the rule generalizes
+    to any all-placeholder pipeline — sae's --labels none has the same need);
+    kept here so the neurons contract stays test-pinned at this import path."""
+    from ..backend.name import placeholder_titles as _generic
+
+    return _generic(cluster_ids, "neurons")
 
 
 def orient_neuron_rows(W: np.ndarray, d_mlp: int, d_model: int) -> np.ndarray:
