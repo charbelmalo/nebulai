@@ -169,6 +169,10 @@ export class AtlasDriver implements SceneDriver {
           this.bloomOn = this.bloomPipe !== null && s.settings.bloom;
         }
         if (s.dims !== prev.dims) this.onDimsChange(s.dims);
+        if (s.mapQuery !== prev.mapQuery) {
+          this.points?.setMatches(s.mapQuery.results?.matchIds ?? null);
+          this.cameraDirty = true;
+        }
       }),
     );
   }
@@ -503,6 +507,20 @@ export class AtlasDriver implements SceneDriver {
     if (this.beams) this.beams.visible = on;
     if (this.flare) this.flare.visible = on;
     if (this.badges) this.badges.visible = on;
+  }
+
+  /** Zoom onto one point's neighborhood (search-result click). The window is
+   *  a fixed fraction of the map so nearby tokens stay in frame for context. */
+  flyToPoint(id: number): void {
+    if (!this.dataset) return;
+    const p = this.dataset.columns.pos2;
+    const x = p[id * 2];
+    const y = p[id * 2 + 1];
+    if (x === undefined || y === undefined) return;
+    this.userDroveCamera = true;
+    const fitPx = Math.min(this.cam.viewportW, this.cam.viewportH) * 0.55;
+    const wpp = Math.max((this.mapExtent * 0.06) / fitPx, this.cam.minWpp);
+    this.cam.flyTo(x, y, wpp, performance.now());
   }
 
   /** Cinematic zoom onto one cluster (pill click / future keyboard nav). */

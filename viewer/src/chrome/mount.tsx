@@ -8,6 +8,7 @@ import { ComparePanel } from "./ComparePanel";
 import { GuidePage } from "./GuidePage";
 import { InterpPage } from "./InterpPage";
 import { LegendCard } from "./LegendCard";
+import { SearchPanel } from "./SearchPanel";
 import { SessionsPage } from "./SessionsPage";
 import { SettingsPage } from "./SettingsPage";
 import { SnapshotMap } from "./SnapshotMap";
@@ -32,6 +33,7 @@ function Chrome() {
       <TopBar />
       {onMap && <Sidebar />}
       {onMap && ($viewMode.value === "compare" ? <ComparePanel /> : <LegendCard />)}
+      {onMap && $viewMode.value === "atlas" && <SearchPanel />}
       {page === "snapshot" && <SnapshotMap />}
       {page === "interp" && <InterpPage />}
       {page === "guide" && <GuidePage />}

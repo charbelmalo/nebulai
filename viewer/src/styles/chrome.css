@@ -4252,3 +4252,194 @@ body.page-sessions #stage {
   font: 400 10px/1.35 var(--font-mono);
   color: var(--text-faint);
 }
+
+/* ── keyword search panel (atlas) ─────────────────────────────────────── */
+
+.search-panel {
+  position: absolute;
+  top: 76px;
+  right: 32px;
+  display: flex;
+  flex-direction: column;
+  width: 300px;
+  max-height: calc(100vh - 320px);
+  padding: 14px 16px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-card);
+}
+
+.search-fab {
+  position: absolute;
+  top: 76px;
+  right: 32px;
+  padding: 9px 18px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-card);
+  color: var(--text-dim);
+  font: 600 11px/1.2 var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease-out);
+}
+
+.search-fab:hover {
+  color: var(--text);
+}
+
+.search-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-title {
+  margin: 0;
+  flex: 1;
+  font: 650 11px/1.4 var(--font-ui);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.search-count {
+  font: 500 10px/1.4 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.search-input {
+  margin-top: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-pill);
+  color: var(--text);
+  font: 400 12px/1.4 var(--font-ui);
+  outline: none;
+}
+
+.search-input:focus-visible {
+  border-color: var(--text-faint);
+}
+
+.search-empty {
+  margin: 10px 0 0;
+  color: var(--text-dim);
+  font: 400 11px/1.55 var(--font-ui);
+}
+
+.search-groups {
+  margin-top: 8px;
+  overflow-y: auto;
+}
+
+.search-group {
+  margin-top: 6px;
+}
+
+.search-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--text);
+  font: 600 11px/1.4 var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease-out);
+}
+
+.search-group-head:hover {
+  background: var(--bg-pill);
+}
+
+.search-group-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-group-count {
+  flex: none;
+  font: 500 10px/1.4 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+.search-row-label {
+  display: block;
+  width: 100%;
+  padding: 3px 8px 3px 18px;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--text-dim);
+  font: 400 11px/1.5 var(--font-mono);
+  text-align: left;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
+}
+
+.search-row-label:hover {
+  background: var(--bg-pill);
+  color: var(--text);
+}
+
+.search-row.is-selected .search-row-label {
+  color: var(--text);
+  background: var(--bg-pill);
+}
+
+.search-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 8px 6px 18px;
+}
+
+.search-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-dim);
+  font: 400 10px/1.5 var(--font-mono);
+  white-space: pre;
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease-out);
+}
+
+.search-chip:hover {
+  color: var(--text);
+}
+
+.search-chip-sim {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.search-more {
+  margin: 2px 0 0;
+  padding-left: 18px;
+  color: var(--text-faint);
+  font: 400 10px/1.5 var(--font-ui);
+}

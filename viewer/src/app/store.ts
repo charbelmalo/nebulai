@@ -8,6 +8,7 @@ import type { Capabilities } from "./capabilities";
 import type { CompareData } from "../data/compare";
 import type { Dataset } from "../data/loader";
 import type { DatasetEntry } from "../data/schema";
+import { searchLabels, type SearchResults } from "../data/search";
 import type { SessionAnalysis } from "../chrome/sessionlog";
 
 export type ViewMode = "atlas" | "chord" | "hierarchy" | "compare";
@@ -109,6 +110,15 @@ export interface SessionsState {
 export interface Selection {
   kind: "cluster" | "point";
   id: number;
+}
+
+/** Map-page keyword search. `results` is derived from `text` against the
+ *  current dataset's labels at write time (labels never leave the main
+ *  thread, so the store is the one place with both). null results = no
+ *  query; a zero-match query keeps a non-null results object. */
+export interface MapQuery {
+  text: string;
+  results: SearchResults | null;
 }
 
 export interface Toggles {
@@ -247,6 +257,7 @@ export interface AppState {
   morphT: number; // 0 = flat map, 1 = flythrough; drivers ease toward dims
   hover: Selection | null;
   selection: Selection | null;
+  mapQuery: MapQuery;
   toggles: Toggles;
   settings: Settings;
   appearance: Appearance;
@@ -276,6 +287,7 @@ export interface AppState {
   setMorphT(t: number): void;
   setHover(s: Selection | null): void;
   setSelection(s: Selection | null): void;
+  setMapQuery(text: string): void;
   setToggle(key: keyof Toggles, value: boolean): void;
   setSetting<K extends keyof Settings>(key: K, value: Settings[K]): void;
   setAppearance<G extends keyof Appearance, K extends keyof Appearance[G]>(
@@ -378,7 +390,7 @@ export const DEFAULT_TOPICS: TopicPreset[] = [
   },
 ];
 
-export const appStore = createStore<AppState>()((set) => ({
+export const appStore = createStore<AppState>()((set, get) => ({
   capabilities: null,
   datasets: [],
   datasetId: null,
@@ -391,6 +403,7 @@ export const appStore = createStore<AppState>()((set) => ({
   morphT: 0,
   hover: null,
   selection: null,
+  mapQuery: { text: "", results: null },
   toggles: { territories: true, labels: true, beams: true, halos: true, noise: true, legend: true },
   settings: {
     pointScale: 1,
@@ -483,7 +496,17 @@ export const appStore = createStore<AppState>()((set) => ({
   setDatasets: (datasets) => set({ datasets }),
   // unit ids are per-model, so a dataset switch clears the cross-view pick too
   setDataset: (datasetId, dataset) =>
-    set({ datasetId, dataset, hover: null, selection: null, interpSelection: null, tour: null }),
+    set({
+      datasetId,
+      dataset,
+      hover: null,
+      selection: null,
+      // match ids are per-dataset row indices — a stale query on a new
+      // vocabulary would highlight arbitrary points
+      mapQuery: { text: "", results: null },
+      interpSelection: null,
+      tour: null,
+    }),
   setCompareData: (compareData) => set({ compareData }),
   setCompareState: (state) => set((s) => ({ compare: { ...s.compare, state } })),
   toggleCompareModel: (sourceIdx) =>
@@ -504,6 +527,11 @@ export const appStore = createStore<AppState>()((set) => ({
   setMorphT: (morphT) => set({ morphT }),
   setHover: (hover) => set({ hover }),
   setSelection: (selection) => set({ selection }),
+  setMapQuery: (text) => {
+    const ds = get().dataset;
+    const results = ds ? searchLabels(ds.columns.labels, ds.columns.clusterId, text) : null;
+    set({ mapQuery: { text, results } });
+  },
   setToggle: (key, value) =>
     set((s) => ({ toggles: { ...s.toggles, [key]: value } })),
   setSetting: (key, value) =>

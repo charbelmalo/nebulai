@@ -24,6 +24,8 @@ export interface UrlState {
   trace?: string;
   view?: ViewMode;
   dims?: 2 | 3;
+  /** map-page keyword search query */
+  q?: string;
 }
 
 /** Parse the current hash. Unknown keys/values are dropped, never guessed. */
@@ -42,6 +44,8 @@ export function readUrlState(): UrlState {
   if (view && (VIEWS as readonly string[]).includes(view)) out.view = view as ViewMode;
   const dims = p.get("dims");
   if (dims === "2" || dims === "3") out.dims = Number(dims) as 2 | 3;
+  const q = p.get("q");
+  if (q && q.trim()) out.q = q;
   return out;
 }
 
@@ -53,6 +57,8 @@ export function applyUrlState(u: UrlState): void {
   if (u.feature) st.setInterpFeature(u.feature);
   if (u.trace) st.setInterpTrace(u.trace);
   if (u.dims) st.setDims(u.dims);
+  // after the boot dataset load, so the labels to search are resident
+  if (u.q) st.setMapQuery(u.q);
   if (u.page) st.setPage(u.page);
   if (u.view && u.view !== "atlas") requestViewMode(u.view);
 }
@@ -65,6 +71,7 @@ function buildHash(): string {
   if (st.page === "map") {
     if (st.viewMode !== "atlas") p.set("view", st.viewMode);
     if (st.dims === 3) p.set("dims", "3");
+    if (st.mapQuery.text.trim()) p.set("q", st.mapQuery.text);
   } else if (st.page === "interp") {
     p.set("feature", st.interp.featureId);
     // live traces exist only in this tab's memory — a permalink to one would

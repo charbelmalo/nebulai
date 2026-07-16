@@ -43,6 +43,8 @@ export class PointsLayer {
   readonly uNoiseVis = uniform(1);
   /** hide clustered points whose confidence is below this (0–1) */
   readonly uConfFloor = uniform(0);
+  /** 1 = a keyword search is active: non-matches dim to a faint ghost */
+  readonly uSearchMode = uniform(0);
 
   private material: THREE.SpriteNodeMaterial;
   private idSprite: THREE.Sprite | null = null;
@@ -54,6 +56,9 @@ export class PointsLayer {
   private iNoise!: ReturnType<typeof instancedBufferAttribute<"float">>;
   private iConf!: ReturnType<typeof instancedBufferAttribute<"float">>;
   private count: number;
+  // search-match flags: CPU-writable so setMatches() can flip them per query
+  private matchArray: Float32Array;
+  private matchAttr: THREE.InstancedBufferAttribute;
 
   constructor(columns: Columns) {
     const n = columns.count;
@@ -86,6 +91,10 @@ export class PointsLayer {
     const iAlpha = instancedBufferAttribute<"float">(new THREE.InstancedBufferAttribute(alpha, 1), "float");
     const iNoise = instancedBufferAttribute<"float">(new THREE.InstancedBufferAttribute(noise, 1), "float");
     const iConf = instancedBufferAttribute<"float">(new THREE.InstancedBufferAttribute(conf, 1), "float");
+    this.matchArray = new Float32Array(n);
+    this.matchAttr = new THREE.InstancedBufferAttribute(this.matchArray, 1);
+    this.matchAttr.setUsage(THREE.DynamicDrawUsage);
+    const iMatch = instancedBufferAttribute<"float">(this.matchAttr, "float");
     this.iPos2 = iPos2;
     this.iPos3 = iPos3;
     this.iNoise = iNoise;
@@ -102,7 +111,12 @@ export class PointsLayer {
     material.positionNode = mix(vec3(iPos2, 0), iPos3, this.uMorph);
 
     const hovered = instanceIndex.toFloat().equal(this.uHover);
-    material.scaleNode = this.uSize.mul(this.uScale).mul(select(hovered, float(2.2), float(1)));
+    // matches grow slightly while a search is live so they read at map zoom
+    const searchScale = mix(float(1), mix(float(1), float(1.5), iMatch), this.uSearchMode);
+    material.scaleNode = this.uSize
+      .mul(this.uScale)
+      .mul(select(hovered, float(2.2), float(1)))
+      .mul(searchScale);
 
     // soft disc mask on the quad; hover pops to near-solid
     const d = uv().sub(0.5).length();
@@ -111,7 +125,10 @@ export class PointsLayer {
     // visibility gates: noise toggle kills dust; confidence floor cuts weak
     // clustered points (noise is exempt so the two controls stay orthogonal)
     const gate = select(iNoise.greaterThan(0.5), this.uNoiseVis, iConf.step(this.uConfFloor));
-    material.opacityNode = disc.mul(select(hovered, float(1), iAlpha)).mul(gate);
+    // search dim: non-matches ghost to 5% (still pickable — the id mesh does
+    // not apply this) so matches carry the frame without hiding the map
+    const searchDim = mix(float(1), mix(float(0.05), float(1), iMatch), this.uSearchMode);
+    material.opacityNode = disc.mul(select(hovered, float(1), iAlpha)).mul(gate).mul(searchDim);
 
     this.material = material;
     this.object = new THREE.Sprite(material);
@@ -121,6 +138,16 @@ export class PointsLayer {
 
   setHover(index: number | null): void {
     this.uHover.value = index ?? -1;
+  }
+
+  /** Highlight a search-match set (null = no active query, everything back to
+   *  normal). A live query with zero matches dims the whole map — honest:
+   *  "nothing here matches". */
+  setMatches(ids: Uint32Array | null): void {
+    this.matchArray.fill(0);
+    if (ids) for (let i = 0; i < ids.length; i++) this.matchArray[ids[i]!] = 1;
+    this.matchAttr.needsUpdate = true;
+    this.uSearchMode.value = ids ? 1 : 0;
   }
 
   /** Companion sprite that renders every point's instance index as a 24-bit

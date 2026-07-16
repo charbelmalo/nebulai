@@ -9,6 +9,7 @@ import {
   type CompareUI,
   type InterpSelection,
   type InterpUI,
+  type MapQuery,
   type Page,
   type Probing,
   type Progress,
@@ -35,6 +36,7 @@ export const $loading = signal(s.loading);
 export const $viewMode = signal<ViewMode>(s.viewMode);
 export const $dims = signal<2 | 3>(s.dims);
 export const $selection = signal<Selection | null>(s.selection);
+export const $mapQuery = signal<MapQuery>(s.mapQuery);
 export const $toggles = signal<Toggles>(s.toggles);
 export const $settings = signal<Settings>(s.settings);
 export const $appearance = signal<Appearance>(s.appearance);
@@ -59,6 +61,7 @@ appStore.subscribe((st) => {
   if (st.viewMode !== $viewMode.value) $viewMode.value = st.viewMode;
   if (st.dims !== $dims.value) $dims.value = st.dims;
   if (st.selection !== $selection.value) $selection.value = st.selection;
+  if (st.mapQuery !== $mapQuery.value) $mapQuery.value = st.mapQuery;
   if (st.toggles !== $toggles.value) $toggles.value = st.toggles;
   if (st.settings !== $settings.value) $settings.value = st.settings;
   if (st.appearance !== $appearance.value) $appearance.value = st.appearance;

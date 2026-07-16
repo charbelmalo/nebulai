@@ -279,6 +279,12 @@ async function boot() {
       appStore.getState().pushProgressEvent("done", `map ready — ${datasetId}`);
       appStore.getState().setProgress({ stage: "done", pct: 1 });
     },
+    flyToCluster(id) {
+      if (appStore.getState().viewMode === "atlas") driver.flyToCluster(id);
+    },
+    flyToPoint(id) {
+      if (appStore.getState().viewMode === "atlas") driver.flyToPoint(id);
+    },
   });
 
   // deep links for e2e + `nebulai compare` handoff
