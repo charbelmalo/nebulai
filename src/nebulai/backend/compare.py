@@ -37,6 +37,40 @@ _PALETTE = [
 ]
 
 
+def _source_label(meta: dict) -> str:
+    """A short, human-readable identity for one map, distinguishing front-ends
+    of the SAME model (token vs SAE vs neuron) — which `meta.model` alone
+    cannot, so all three collapse into one cloud if keyed on the model id.
+
+    Derived from the geometry origin (`meta.unit`): e.g. "SmolLM2-135M · SAE
+    features", "SmolLM2-135M · MLP neurons", "SmolLM2-135M · tokens"."""
+    model = str(meta.get("model", "?"))
+    short = model.split("/")[-1]
+    unit = str(meta.get("unit", ""))
+    if unit.startswith("sae_decoder"):
+        kind = "SAE features"
+    elif unit.startswith("mlp_neuron"):
+        kind = "MLP neurons"
+    elif unit.startswith("api_text_embedding"):
+        kind = "API embeddings"
+    elif unit.startswith("token_embedding") or unit == "token_embedding":
+        kind = "tokens"
+    else:
+        kind = unit or "units"
+    return f"{short} · {kind}"
+
+
+def _unique_labels(labels: list[str]) -> list[str]:
+    """Make identity labels unique (append ' #2', ' #3', … on collision) so two
+    maps that derive the same label never merge silently."""
+    seen: dict[str, int] = {}
+    out: list[str] = []
+    for label in labels:
+        seen[label] = seen.get(label, 0) + 1
+        out.append(label if seen[label] == 1 else f"{label} #{seen[label]}")
+    return out
+
+
 def _load_model(json_path: Path) -> dict:
     d = json.loads(json_path.read_text())
     members: dict[int, list[str]] = {}
@@ -56,7 +90,11 @@ def _load_model(json_path: Path) -> dict:
                 "members": members.get(cid, [])[:12],
             }
         )
-    return {"model": d["meta"]["model"], "clusters": clusters}
+    return {
+        "model": d["meta"]["model"],
+        "label": _source_label(d["meta"]),
+        "clusters": clusters,
+    }
 
 
 def _normalize(P: np.ndarray, scale: float = 10.0) -> np.ndarray:
@@ -83,7 +121,10 @@ def build_comparison(
     seed: int = 42,
 ) -> dict:
     models = [_load_model(p) for p in json_paths]
-    model_ids = [m["model"] for m in models]
+    # identify each cloud by its front-end/unit label, NOT meta.model — three
+    # decompositions of one model (tokens/SAE/neurons) share a model id and
+    # would otherwise collapse into a single legend entry / color / jaccard key
+    model_ids = _unique_labels([m["label"] for m in models])
 
     # one meta-point per (model, cluster)
     src, titles, sizes, texts, native = [], [], [], [], []
@@ -194,6 +235,7 @@ def build_comparison(
     return {
         "meta": {
             "models": model_ids,
+            "source_models": [m["model"] for m in models],
             "n_points": len(points),
             "n_meta_clusters": len(meta_clusters),
             "embed_model": embed_model,

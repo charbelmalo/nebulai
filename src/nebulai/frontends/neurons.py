@@ -53,8 +53,15 @@ def model_tag_for(model_repo: str) -> str:
     return model_repo
 
 
-def neuron_tensor_path(layer: int) -> str:
-    """The HF module path whose `.weight` rows are neurons for a given layer."""
+def neuron_tensor_path(layer: int, arch: str = "gpt2") -> str:
+    """The HF module path whose `.weight` rows are neurons for a given layer.
+
+    GPT-2 (Conv1D): `h.{L}.mlp.c_proj`. Llama-family (SmolLM2, Qwen, Mistral,
+    Gemma; Linear down-projection): `model.layers.{L}.mlp.down_proj`. Both are
+    the MLP down-projection — the map into the residual stream — so a neuron is
+    a row once oriented (see orient_neuron_rows)."""
+    if arch == "llama":
+        return f"model.layers.{layer}.mlp.down_proj"
     return f"h.{layer}.mlp.c_proj"
 
 
@@ -126,33 +133,51 @@ def load_neuron_units(
 ) -> Units:
     """Load MLP write directions (c_proj rows) as Units.
 
-    Heavy imports (huggingface_hub, safetensors) are lazy so the pure helpers
+    Heavy imports (huggingface_hub, weights) are lazy so the pure helpers
     above import without them — matching sae.py's style. (out_root is accepted
     for signature parity with load_sae_units even though no label cache is
     written yet.)
+
+    Architecture is auto-detected from config.json: GPT-2 (Conv1D `n_embd`/
+    `n_inner`/`n_layer`) vs Llama-family (`hidden_size`/`intermediate_size`/
+    `num_hidden_layers`). Weights are read through the shared bf16-aware loader
+    so BF16 checkpoints (SmolLM2 and most Llama micro-models) work.
     """
     from huggingface_hub import hf_hub_download
-    from safetensors import safe_open
+
+    from ..weights import load_safetensor_f32, safetensor_keys
 
     cfg = json.loads(Path(hf_hub_download(model_repo, "config.json")).read_text())
-    d_model = int(cfg["n_embd"])
-    d_mlp = int(cfg.get("n_inner") or 4 * d_model)
-    n_layer = int(cfg["n_layer"])
+    if "n_embd" in cfg:  # GPT-2 (Conv1D)
+        arch = "gpt2"
+        d_model = int(cfg["n_embd"])
+        d_mlp = int(cfg.get("n_inner") or 4 * d_model)
+        n_layer = int(cfg["n_layer"])
+    elif "hidden_size" in cfg:  # Llama-family (Linear down_proj)
+        arch = "llama"
+        d_model = int(cfg["hidden_size"])
+        d_mlp = int(cfg["intermediate_size"])
+        n_layer = int(cfg["num_hidden_layers"])
+    else:
+        raise ValueError(
+            f"cannot detect MLP architecture for {model_repo}: config.json has "
+            f"neither GPT-2 keys (n_embd) nor Llama keys (hidden_size)"
+        )
 
     if not 0 <= layer < n_layer:
         raise ValueError(
             f"layer {layer} out of range for {model_repo} (n_layer {n_layer})"
         )
 
+    tensor_path = neuron_tensor_path(layer, arch)
     weights_path = hf_hub_download(model_repo, "model.safetensors")
-    key = f"{neuron_tensor_path(layer)}.weight"
-    with safe_open(weights_path, framework="numpy") as f:
-        if key not in f.keys():
-            raise ValueError(
-                f"{key} not found in {model_repo} model.safetensors — "
-                f"not a GPT-2-style checkpoint?"
-            )
-        W = np.asarray(f.get_tensor(key), dtype=np.float32)
+    key = f"{tensor_path}.weight"
+    if key not in safetensor_keys(weights_path):
+        raise ValueError(
+            f"{key} not found in {model_repo} model.safetensors — "
+            f"not a {arch}-style checkpoint?"
+        )
+    W = load_safetensor_f32(weights_path, keys=[key])[key]
     W = orient_neuron_rows(W, d_mlp, d_model)
 
     ids = subset_indices(d_mlp, max_neurons)
@@ -165,22 +190,23 @@ def load_neuron_units(
     else:
         raise ValueError(
             f"unknown labels_source {labels_source!r} (only 'none' — no public "
-            f"raw-neuron auto-interp export exists for gpt2-small: Neuronpedia's "
-            f"gpt2-small mlp sources are OpenAI SAEs, not raw neurons)"
+            f"raw-neuron auto-interp export exists for these micro-models: "
+            f"Neuronpedia's mlp sources are SAEs, not raw neurons)"
         )
     labels = labels_for(ids, desc)
     n_labeled = sum(1 for i in ids if i in desc)
 
     model_tag = model_tag_for(model_repo)
-    tensor_path = neuron_tensor_path(layer)
     meta = {
         "model": model_tag,
         "unit": neuron_unit_string(model_tag, tensor_path),
         "projection": "w_out",
+        "arch": arch,
         "layer": layer,
         "loader": f"safetensors-direct({model_repo})",
         "model_repo": model_repo,
         "tensor": f"{tensor_path}.weight",
+        "tensor_path": tensor_path,
         "d_mlp": d_mlp,
         "d_model": d_model,
         "kept": len(ids),
@@ -190,9 +216,8 @@ def load_neuron_units(
         "n_labeled": n_labeled,
         "n_unlabeled": len(ids) - n_labeled,
         "labels_note": (
-            "no public raw-neuron auto-interp export for gpt2-small "
-            "(Neuronpedia mlp-oai sources are OpenAI SAEs; OpenAI "
-            "neuron-explainer covers GPT-2 XL only)"
+            "no public raw-neuron auto-interp export for this model "
+            "(Neuronpedia mlp sources are SAEs, not raw neurons)"
         ),
     }
 

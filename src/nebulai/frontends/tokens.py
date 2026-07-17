@@ -64,19 +64,22 @@ def load_token_units(
     max_tokens: int | None = None,
 ) -> Units:
     from huggingface_hub import hf_hub_download
-    from safetensors.numpy import load_file
+
+    from ..weights import load_safetensor_f32, safetensor_keys
 
     path = hf_hub_download(model_id, "model.safetensors")
-    tensors = load_file(path)
+    # read the header first so we can pull ONLY the embedding tensor — and so
+    # bf16 checkpoints (SmolLM2, most Llama micro-models) load, which
+    # safetensors.numpy.load_file cannot do (no native numpy bfloat16)
     key = next(
-        (k for k in tensors if k.endswith(_EMBED_KEY_SUFFIXES)), None
+        (k for k in safetensor_keys(path) if k.endswith(_EMBED_KEY_SUFFIXES)), None
     )
     if key is None:
         raise KeyError(
-            f"no embedding matrix found in {model_id}; keys: {sorted(tensors)[:10]}..."
+            f"no embedding matrix found in {model_id}; "
+            f"keys: {sorted(safetensor_keys(path))[:10]}..."
         )
-    W = np.asarray(tensors[key], dtype=np.float32)
-    del tensors
+    W = load_safetensor_f32(path, keys=[key])[key]
 
     ids, labels = curated_vocab(model_id, max_tokens, n_vocab=W.shape[0])
 

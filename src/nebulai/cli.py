@@ -44,7 +44,7 @@ def _update_index(out_root: Path) -> Path:
 def _run_tokens(args: argparse.Namespace) -> None:
     import os
 
-    from .backend.cluster import cluster_units
+    from .backend.cluster import cluster_units, resolve_cluster_params
     from .backend.export import export_json
     from .backend.name import name_clusters
     from .backend.reduce import reduce_vectors
@@ -130,6 +130,15 @@ def _run_tokens(args: argparse.Namespace) -> None:
         min_samples=args.min_samples,
         method=args.cluster_method,
     )
+    # record the params HDBSCAN actually saw so the map is reproducible and
+    # the metrics table can report how each cloud was clustered (defaults are
+    # n-dependent, so a re-sweep's chosen values must be stamped, not implied)
+    units.meta["hdbscan"] = resolve_cluster_params(
+        len(u_cluster),
+        args.min_cluster_size,
+        args.min_samples,
+        args.cluster_method,
+    )
     n_clusters = len({int(c) for c in cluster_ids if c >= 0})
     noise = float((cluster_ids < 0).mean())
     print(f"[3/5] HDBSCAN: {n_clusters} clusters, {noise:.0%} noise [{t()}]")
@@ -190,7 +199,7 @@ def _run_tokens(args: argparse.Namespace) -> None:
 def _run_sae(args: argparse.Namespace) -> None:
     """Plan A: SAE decoder-direction map. Mirrors _run_tokens's 5-stage
     structure and its exact `[k/5] ...` prints (build_server parses them)."""
-    from .backend.cluster import cluster_units
+    from .backend.cluster import cluster_units, resolve_cluster_params
     from .backend.export import export_json
     from .backend.name import name_clusters, placeholder_titles
     from .backend.reduce import reduce_vectors
@@ -262,6 +271,15 @@ def _run_sae(args: argparse.Namespace) -> None:
         min_samples=args.min_samples,
         method=args.cluster_method,
     )
+    # record the params HDBSCAN actually saw so the map is reproducible and
+    # the metrics table can report how each cloud was clustered (defaults are
+    # n-dependent, so a re-sweep's chosen values must be stamped, not implied)
+    units.meta["hdbscan"] = resolve_cluster_params(
+        len(u_cluster),
+        args.min_cluster_size,
+        args.min_samples,
+        args.cluster_method,
+    )
     n_clusters = len({int(c) for c in cluster_ids if c >= 0})
     noise = float((cluster_ids < 0).mean())
     print(f"[3/5] HDBSCAN: {n_clusters} clusters, {noise:.0%} noise [{t()}]")
@@ -310,7 +328,8 @@ def _run_sae(args: argparse.Namespace) -> None:
         title=f"Nebul.AI — {units.meta['model']} SAE feature map",
         sub_title=(
             f"{meta['n_points']} SAE features · {meta['n_clusters']} clusters · "
-            f"SAE decoder directions ({args.sae_id}) -> UMAP -> HDBSCAN"
+            f"SAE decoder directions ({args.sae_id}, {meta.get('hook', 'resid')}-SAE)"
+            f" -> UMAP -> HDBSCAN"
         ),
     )
     _update_index(Path(args.out))
@@ -322,7 +341,7 @@ def _run_sae(args: argparse.Namespace) -> None:
 def _run_neurons(args: argparse.Namespace) -> None:
     """Plan B: MLP-neuron write-direction map. Mirrors _run_sae's 5-stage
     structure and its exact `[k/5] ...` prints (build_server parses them)."""
-    from .backend.cluster import cluster_units
+    from .backend.cluster import cluster_units, resolve_cluster_params
     from .backend.export import export_json
     from .backend.name import name_clusters
     from .backend.reduce import reduce_vectors
@@ -330,7 +349,6 @@ def _run_neurons(args: argparse.Namespace) -> None:
     from .frontends.neurons import (
         load_neuron_units,
         neuron_dataset_id,
-        neuron_tensor_path,
         placeholder_titles,
     )
 
@@ -350,7 +368,8 @@ def _run_neurons(args: argparse.Namespace) -> None:
         labels_source=args.labels,
         out_root=Path(args.out),
     )
-    tensor_path = neuron_tensor_path(args.layer)
+    # arch-aware path (gpt2 c_proj vs llama down_proj) is stamped by the loader
+    tensor_path = units.meta["tensor_path"]
     dataset_id = neuron_dataset_id(units.meta["model"], tensor_path)
     out_dir = Path(args.out) / dataset_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -399,6 +418,15 @@ def _run_neurons(args: argparse.Namespace) -> None:
         min_cluster_size=args.min_cluster_size,
         min_samples=args.min_samples,
         method=args.cluster_method,
+    )
+    # record the params HDBSCAN actually saw so the map is reproducible and
+    # the metrics table can report how each cloud was clustered (defaults are
+    # n-dependent, so a re-sweep's chosen values must be stamped, not implied)
+    units.meta["hdbscan"] = resolve_cluster_params(
+        len(u_cluster),
+        args.min_cluster_size,
+        args.min_samples,
+        args.cluster_method,
     )
     n_clusters = len({int(c) for c in cluster_ids if c >= 0})
     noise = float((cluster_ids < 0).mean())
@@ -537,6 +565,32 @@ def _run_interp(args: argparse.Namespace) -> None:
     # refresh the discovery index so the viewer's model picker sees the new
     # bundle without a re-run of `nebulai tokens`
     _update_index(Path(args.out))
+
+
+def _run_metrics(args: argparse.Namespace) -> None:
+    """Structural comparison table (silhouette / noise / cluster count) across
+    several already-built maps — the quantitative artifact behind the A-vs-B-vs-C
+    claim. Writes out/compare/metrics.json and prints an aligned table."""
+    from .backend.metrics import compute_map_metrics, format_table
+
+    out_root = Path(args.out)
+    rows = []
+    for m in args.datasets:
+        dd = out_root / m.replace("/", "__")
+        if not (dd / "nebulai.json").exists():
+            raise SystemExit(
+                f"missing {dd / 'nebulai.json'} — build it first "
+                f"(nebulai tokens/sae/neurons)"
+            )
+        rows.append(compute_map_metrics(dd))
+
+    print(format_table(rows))
+
+    cmp_dir = out_root / "compare"
+    cmp_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = cmp_dir / "metrics.json"
+    metrics_path.write_text(json.dumps({"maps": rows}, ensure_ascii=False, indent=2))
+    print(f"\n  {metrics_path}")
 
 
 def _run_compare(args: argparse.Namespace) -> None:
@@ -702,7 +756,8 @@ def main() -> None:
         "--max-features",
         type=int,
         default=4096,
-        help="keep the first N of d_sae features (deterministic MVP subset)",
+        help="keep the first N of d_sae features (deterministic MVP subset); "
+        "0 = the full dictionary (e.g. all 36864 sparsify latents)",
     )
     s.add_argument(
         "--source",
@@ -910,6 +965,20 @@ def main() -> None:
         help="text file, one prompt per line (default: curated circuit prompts)",
     )
     ip.set_defaults(fn=_run_interp)
+
+    mt = sub.add_parser(
+        "metrics",
+        help="structural comparison table (silhouette / noise / cluster count) "
+        "across several already-built maps",
+    )
+    mt.add_argument(
+        "datasets",
+        nargs="+",
+        help="dataset dir ids or model ids already built (e.g. "
+        "HuggingFaceTB__SmolLM2-135M HuggingFaceTB__SmolLM2-135M__sae__layers.21.mlp)",
+    )
+    mt.add_argument("--out", default="out", help="output directory root")
+    mt.set_defaults(fn=_run_metrics)
 
     c = sub.add_parser(
         "compare",

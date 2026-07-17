@@ -8,3 +8,9 @@ viewer/node_modules/
 viewer/dist/
 viewer/tests/e2e/.artifacts/
 viewer/local-sessions/
+.pytest_cache/
+
+# Local working artifacts (demos, thinking notes, inspiration dumps — not source)
+in/
+scratchpad-demo/
+viewer/design/

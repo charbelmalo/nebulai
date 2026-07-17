@@ -83,9 +83,22 @@ def sae_dataset_id(model_name: str, sae_id: str) -> str:
 
 def subset_indices(d_sae: int, max_features: int | None) -> list[int]:
     """The deterministic feature subset: the first `max_features` indices,
-    clamped to d_sae. ids ARE the original dictionary indices."""
-    n = d_sae if max_features is None else min(max_features, d_sae)
+    clamped to d_sae. ids ARE the original dictionary indices. `None` or a
+    non-positive `max_features` (e.g. --max-features 0) takes the FULL
+    dictionary."""
+    n = d_sae if max_features is None or max_features <= 0 else min(max_features, d_sae)
     return list(range(n))
+
+
+def layer_from_sae_id(sae_id: str) -> int:
+    """The layer index a hookpoint id refers to: the first integer in the id.
+    `layers.21.mlp` -> 21, `blocks.8.hook_resid_pre` -> 8."""
+    import re
+
+    m = re.search(r"\d+", sae_id)
+    if m is None:
+        raise ValueError(f"no layer index found in sae_id {sae_id!r}")
+    return int(m.group())
 
 
 def parse_explanations(lines: Iterable[str]) -> dict[int, str]:
@@ -173,45 +186,86 @@ def load_sae_units(
 ) -> Units:
     """Load SAE decoder directions as Units.
 
-    Heavy imports (huggingface_hub, safetensors) are lazy so the pure helpers
-    above import without them — matching tokens.py's style.
+    Heavy imports (huggingface_hub, safetensors, weights) are lazy so the pure
+    helpers above import without them — matching tokens.py's style.
+
+    Two on-disk formats are auto-detected from the per-layer cfg.json:
+      - sae-lens / jbloom  (`d_sae`/`d_in`/`model_name`/`hook_point_layer`,
+        weights in `sae_weights.safetensors`, plus a `sparsity.safetensors`);
+      - EleutherAI `sparsify`  (`num_latents`/`d_in`/`k`/`normalize_decoder`,
+        weights in `sae.safetensors`, model name in the PARENT config.json,
+        no sparsity file — so no sparsity stats are stamped rather than faked).
+    In both, W_dec has shape [d_sae, d_in] and rows are features (no transpose).
     """
     from huggingface_hub import hf_hub_download
     from safetensors.numpy import load_file
 
-    cfg_path = hf_hub_download(sae_release, f"{sae_id}/cfg.json")
-    cfg = json.loads(Path(cfg_path).read_text())
-    d_sae = int(cfg["d_sae"])
-    d_in = int(cfg["d_in"])
-    model_name = cfg["model_name"]
-    layer = int(cfg["hook_point_layer"])
+    from ..weights import load_safetensor_f32
 
-    weights_path = hf_hub_download(sae_release, f"{sae_id}/sae_weights.safetensors")
-    W_dec = np.asarray(load_file(weights_path)["W_dec"], dtype=np.float32)
+    cfg = json.loads(Path(hf_hub_download(sae_release, f"{sae_id}/cfg.json")).read_text())
+    fmt = "sae_lens" if "d_sae" in cfg else "sparsify"
+
+    extra_meta: dict = {}
+    sparsity_stats: dict = {}
+    if fmt == "sae_lens":
+        d_sae = int(cfg["d_sae"])
+        d_in = int(cfg["d_in"])
+        model_name = cfg["model_name"]
+        layer = int(cfg["hook_point_layer"])
+        hook = "resid"  # the res-jb releases hook the residual stream
+        weights_path = hf_hub_download(sae_release, f"{sae_id}/sae_weights.safetensors")
+        W_dec = np.asarray(load_file(weights_path)["W_dec"], dtype=np.float32)
+    else:  # EleutherAI sparsify
+        d_sae = int(cfg["num_latents"])
+        d_in = int(cfg["d_in"])
+        parent = json.loads(Path(hf_hub_download(sae_release, "config.json")).read_text())
+        model_name = parent.get("model") or sae_release
+        layer = layer_from_sae_id(sae_id)
+        hook = "mlp" if sae_id.endswith(".mlp") else "resid"
+        weights_path = hf_hub_download(sae_release, f"{sae_id}/sae.safetensors")
+        W_dec = load_safetensor_f32(weights_path, keys=["W_dec"])["W_dec"]
+        extra_meta = {
+            "k": int(cfg["k"]),
+            "expansion": d_sae // d_in,
+            "normalize_decoder": bool(cfg.get("normalize_decoder", False)),
+        }
+
     if W_dec.shape != (d_sae, d_in):
-        raise ValueError(
-            f"W_dec shape {W_dec.shape} != expected ({d_sae}, {d_in})"
-        )
+        raise ValueError(f"W_dec shape {W_dec.shape} != expected ({d_sae}, {d_in})")
 
     ids = subset_indices(d_sae, max_features)
     V = W_dec[ids]
     if center:
         V = V - V.mean(axis=0, keepdims=True)
 
-    # sparsity: log10 firing rate per feature; stamp subset stats (no filtering)
-    sparsity_path = hf_hub_download(sae_release, f"{sae_id}/sparsity.safetensors")
-    log_sparsity = np.asarray(
-        load_file(sparsity_path)["sparsity"], dtype=np.float32
-    )[ids]
-    sparsity_stats = {
-        "log_sparsity_mean": round(float(log_sparsity.mean()), 3),
-        "log_sparsity_min": round(float(log_sparsity.min()), 3),
-        "log_sparsity_max": round(float(log_sparsity.max()), 3),
-        "n_dead": int((log_sparsity <= -5).sum()),
-    }
+    if fmt == "sae_lens":
+        # sparsity: log10 firing rate per feature; stamp subset stats (no filter)
+        sparsity_path = hf_hub_download(sae_release, f"{sae_id}/sparsity.safetensors")
+        log_sparsity = np.asarray(
+            load_file(sparsity_path)["sparsity"], dtype=np.float32
+        )[ids]
+        sparsity_stats = {
+            "log_sparsity_mean": round(float(log_sparsity.mean()), 3),
+            "log_sparsity_min": round(float(log_sparsity.min()), 3),
+            "log_sparsity_max": round(float(log_sparsity.max()), 3),
+            "n_dead": int((log_sparsity <= -5).sum()),
+        }
 
-    # labels: bootstrap from Neuronpedia, or all-placeholder for offline/dev
+    # labels: bootstrap from Neuronpedia, or all-placeholder for offline/dev.
+    # The Neuronpedia export is hardwired to gpt2-small 8-res-jb, so it is only
+    # valid for that exact SAE — refuse it elsewhere rather than silently
+    # stamping gpt2 labels onto another model's features.
     if labels_source == "neuronpedia":
+        if not (
+            sae_release == "jbloom/GPT2-Small-SAEs-Reformatted"
+            and sae_id == "blocks.8.hook_resid_pre"
+        ):
+            raise ValueError(
+                "neuronpedia labels are only wired for "
+                "jbloom/GPT2-Small-SAEs-Reformatted / blocks.8.hook_resid_pre; "
+                f"no hosted auto-interp export exists for {sae_release}/{sae_id} "
+                "— use --labels none"
+            )
         cache_dir = out_root / "neuronpedia" / f"{_NP_MODEL}_{_NP_LAYER}"
         desc = _fetch_explanations(cache_dir)
     elif labels_source == "none":
@@ -227,6 +281,8 @@ def load_sae_units(
         "model": model_name,
         "unit": sae_unit_string(release_tag_for(sae_release), sae_id),
         "projection": "decoder",
+        "sae_format": fmt,
+        "hook": hook,
         "layer": layer,
         "loader": f"safetensors-direct({sae_release})",
         "sae_release": sae_release,
@@ -239,6 +295,7 @@ def load_sae_units(
         "labels_source": labels_source,
         "n_labeled": n_labeled,
         "n_unlabeled": len(ids) - n_labeled,
+        **extra_meta,
         **sparsity_stats,
     }
 
