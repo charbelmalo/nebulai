@@ -5,9 +5,11 @@ server. **Goal:** serve the Nebul.AI viewer as a **fully static, pre-baked**
 site under the sub-path `/psychiX/nebulai-maps/` with **zero server-side
 computation** and **no "data not available" gaps** for any selection.
 
-This branch (`deploy/static`) is the source of truth for the deploy. `main` is
-the working library; do not build the public site from `main` (its data base
-and live-endpoint defaults are tuned for local dev, not sub-path hosting).
+Build from **`main`** — it is the single source of truth. There is no separate
+deploy branch: the sub-path base and the blank live-endpoint defaults are both
+selected at **build time** via `VITE_*` env vars (§3), so the same `main` tree
+serves local dev (loopback defaults) and this static deploy (blanked) with no
+code divergence.
 
 ---
 
@@ -17,8 +19,8 @@ The viewer is a static SPA. Every view (Atlas / Chord / Hierarchical / Compare
 and all 25 Internals panels) is a plain `fetch()` of a **pre-computed JSON file**
 under `out/`. Nothing is computed at request time. To deploy you only:
 
-1. `git clone` this repo, checkout `deploy/static`, and **build the SPA** with the
-   sub-path base.
+1. `git clone` this repo (branch `main`) and **build the SPA** with the sub-path
+   base and blanked live endpoints (§3).
 2. **Copy the baked `out/` data tree** (~320 MB) next to the built app. `out/` is
    **git-ignored — it is NOT in the repo** and must be transferred out-of-band.
 3. Serve both as static files, with the data tree at `<app>/out/`.
@@ -52,8 +54,7 @@ browser — harmless to include, safe to omit if you want to trim ~90 MB.
 
 ```sh
 git clone https://github.com/charbelmalo/nebulai.git
-cd nebulai
-git checkout deploy/static
+cd nebulai            # branch main — the deploy source of truth
 ```
 
 (Forgejo mirror: `https://git.charbelmalo.online/charbelmalo/nebulai.git` — same
@@ -69,20 +70,32 @@ app's own assets **and** the baked-data root resolve under the sub-path:
 ```sh
 cd viewer
 npm ci
-VITE_BASE=/psychiX/nebulai-maps/ npm run build   # -> viewer/dist/
+VITE_BASE=/psychiX/nebulai-maps/ \
+VITE_LIVE_URL= VITE_BUILD_URL= VITE_EMBED_HOST= \
+  npm run build                                  # -> viewer/dist/
 ```
 
-Why this matters: `viewer/src/data/base.ts` derives the data root
-(`DATA_BASE`) from Vite's `BASE_URL`. With `VITE_BASE=/psychiX/nebulai-maps/`,
-every data fetch targets `/psychiX/nebulai-maps/out/…`. **If you forget
-`VITE_BASE`, data requests fall back to `./out` and will 404 under the sub-path.**
-Confirm after building:
+Two groups of build-time env vars, both required for this deploy:
+
+- **`VITE_BASE=/psychiX/nebulai-maps/`** — the sub-path. `viewer/src/data/base.ts`
+  derives the data root (`DATA_BASE`) from Vite's `BASE_URL` and resolves it to an
+  **absolute** URL against the page origin (this is load-bearing: the data parse
+  runs in a Web Worker, and a relative base would resolve against the worker
+  script, not the page). With this set, every data fetch targets
+  `https://…/psychiX/nebulai-maps/out/…`. **If you omit `VITE_BASE`, the base
+  defaults to `./` and data 404s under the sub-path.** The trailing slash is
+  required.
+- **`VITE_LIVE_URL= VITE_BUILD_URL= VITE_EMBED_HOST=`** (empty) — blanks the
+  optional live/build/embed endpoints so the static site is bring-your-own-endpoint
+  and contacts no backend on its own (§8). Omitting these bakes in the local-dev
+  loopback defaults (`127.0.0.1:8123/8124`, `localhost:11434`) instead — **don't**,
+  for a public deploy.
+
+Confirm the base after building:
 
 ```sh
 grep -o '/psychiX/nebulai-maps/assets/[^"]*' viewer/dist/index.html   # should print asset paths
 ```
-
-The trailing slash in `VITE_BASE=/psychiX/nebulai-maps/` is required.
 
 ---
 
@@ -98,13 +111,22 @@ rsync -avz --delete ~/Developer/nebulai/out/ \
   user@research.elysiumsolutions.net:/var/www/nebulai-maps/out/
 ```
 
-**Option B — tarball, then transfer + extract:**
+**Option B — tarball with a checksum, then transfer + extract:**
 ```sh
-# build machine
+# build machine — pack and record an integrity checksum
 tar -czf nebulai-out.tar.gz -C ~/Developer/nebulai out       # ~120–150 MB compressed
-# server
+shasum -a 256 nebulai-out.tar.gz | tee nebulai-out.tar.gz.sha256
+# transfer both files, then on the server verify BEFORE extracting
+shasum -a 256 -c nebulai-out.tar.gz.sha256                   # must print: OK
 mkdir -p /var/www/nebulai-maps && tar -xzf nebulai-out.tar.gz -C /var/www/nebulai-maps
 ```
+
+rsync (Option A) is the more reliable choice for this single self-hosted target —
+it is incremental, integrity-checks each block, and `--delete` keeps the server
+tree exactly in sync on re-deploys; prefer it when SSH is available. (A GitHub
+release asset would only be worth the public-upload overhead if many independent
+consumers or a CI job needed to pull the data — not the case for one server you
+control.)
 
 Either way the tree must end up at `<webroot>/psychiX/nebulai-maps/out/` (see §5).
 
@@ -208,14 +230,22 @@ This exact flow was verified on a deployment-shaped local server before handover
 
 ## 8. Live features = bring-your-own-endpoint (no backend required)
 
-On this branch the optional live features (the #25 "Live Nebula" driver,
-"+ your prompt" trace/SAE re-derive, on-demand build, and the model probe) ship
-with **blank default endpoints**. They are inert until a visitor pastes their own
-OpenAI-compatible / nebulai server URL under **Settings → Model Probing**. The
-static site contacts **no** backend on its own. You do **not** need to run any
+Built with the empty `VITE_LIVE_URL/VITE_BUILD_URL/VITE_EMBED_HOST` (§3), the
+optional live features (the #25 "Live Nebula" driver, "+ your prompt" trace/SAE
+re-derive, on-demand build, and the model probe) ship with **blank default
+endpoints**. They are inert until a visitor pastes their own OpenAI-compatible /
+nebulai server URL under **Settings → Model Probing**. The static site contacts
+**no** backend on its own — every map, chord, hierarchy, compare and Internals
+panel is served from the baked `out/` tree. You do **not** need to run any
 server-side process for the site to be fully functional as a map viewer.
 
-(If you ever want the live panels active, that's a separate opt-in: run
+One honest caveat: if a visitor *actively enables* the live #25 driver without
+first pasting a URL, the driver falls back to probing `http://127.0.0.1:8123` —
+i.e. **their own** loopback, not any server of ours (this is a generic dev
+default; it reveals no infrastructure and leaks no data off their machine). It
+simply fails to connect. Nothing is contacted unless the visitor opts in.
+
+(If you ever want the live panels active for real, that's a separate opt-in: run
 `python -m nebulai.backend.interp.live_server` somewhere reachable and have users
 point Settings at it. Not part of this static deploy.)
 

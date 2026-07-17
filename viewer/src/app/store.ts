@@ -450,12 +450,17 @@ export const appStore = createStore<AppState>()((set, get) => ({
     probeIntervalMs: 15000,
     autoRun: false,
     useBridgeEndpoint: false,
-    // Static deploy (deploy/static): blank by default — the live Internals
-    // driver, on-demand build server and probe are bring-your-own-endpoint.
-    // A visitor pastes their own OpenAI-compatible / nebulai server URL in
-    // Settings; nothing is contacted until they do.
-    liveUrl: "",
-    buildUrl: "",
+    // Bridge endpoints (live Internals driver, on-demand build server, probe)
+    // are env-driven so one codebase serves both dev and a static deploy:
+    //   • dev / local: default to loopback so a locally-run nebulai server
+    //     (live_server on :8123, build_server on :8124) is picked up with no
+    //     config.
+    //   • static deploy: the build passes empty VITE_* vars (see
+    //     docs/DEPLOY-STATIC.md) so these blank out and the features become
+    //     bring-your-own-endpoint — a visitor pastes their own URL in Settings
+    //     and nothing is contacted until they do.
+    liveUrl: import.meta.env.VITE_LIVE_URL ?? "http://127.0.0.1:8123",
+    buildUrl: import.meta.env.VITE_BUILD_URL ?? "http://127.0.0.1:8124",
     buildModel: "gpt2",
     buildSource: "hf",
     buildParams: {
@@ -468,7 +473,7 @@ export const appStore = createStore<AppState>()((set, get) => ({
       namer: "auto",
       edges: "knn",
       force: false,
-      embedHost: "",
+      embedHost: import.meta.env.VITE_EMBED_HOST ?? "http://localhost:11434",
       embedModel: "mxbai-embed-large",
       embedApi: "ollama",
     },
