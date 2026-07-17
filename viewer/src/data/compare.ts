@@ -4,6 +4,8 @@
  *  points the file is small (~400KB): plain fetch, no worker, and the CPU
  *  hover loop the atlas outgrew is perfectly fine here. */
 
+import { DATA_BASE } from "./base";
+
 export interface ComparePoint {
   source: string;
   source_idx: number;
@@ -66,7 +68,7 @@ export function compareInstances(data: CompareData): Float32Array {
 let cached: CompareData | null | undefined;
 
 /** null = no comparison exported yet (run `nebulai compare` first). */
-export async function loadCompare(base = "/out"): Promise<CompareData | null> {
+export async function loadCompare(base = DATA_BASE): Promise<CompareData | null> {
   if (cached !== undefined) return cached;
   try {
     const res = await fetch(`${base}/compare/compare.json`);

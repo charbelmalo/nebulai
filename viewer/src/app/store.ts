@@ -450,8 +450,12 @@ export const appStore = createStore<AppState>()((set, get) => ({
     probeIntervalMs: 15000,
     autoRun: false,
     useBridgeEndpoint: false,
-    liveUrl: "http://127.0.0.1:8123",
-    buildUrl: "http://127.0.0.1:8124",
+    // Static deploy (deploy/static): blank by default — the live Internals
+    // driver, on-demand build server and probe are bring-your-own-endpoint.
+    // A visitor pastes their own OpenAI-compatible / nebulai server URL in
+    // Settings; nothing is contacted until they do.
+    liveUrl: "",
+    buildUrl: "",
     buildModel: "gpt2",
     buildSource: "hf",
     buildParams: {
@@ -464,7 +468,7 @@ export const appStore = createStore<AppState>()((set, get) => ({
       namer: "auto",
       edges: "knn",
       force: false,
-      embedHost: "http://localhost:11434",
+      embedHost: "",
       embedModel: "mxbai-embed-large",
       embedApi: "ollama",
     },

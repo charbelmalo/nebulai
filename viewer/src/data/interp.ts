@@ -5,6 +5,8 @@
  *  next-token distributions). Every bundle's `meta.quantity`/`meta.formula`
  *  states exactly what the numbers are — surfaced in-view and on /guide. */
 
+import { DATA_BASE } from "./base";
+
 /** One weight matrix's singular-value spectrum + honest rank summaries. */
 export interface SpectrumMatrix {
   name: string;
@@ -810,68 +812,68 @@ async function fetchJSON<T>(url: string): Promise<T> {
 }
 
 /** `model` is the dataset dir id (e.g. "gpt2", "EleutherAI__pythia-70m"). */
-export function interpBase(model: string, base = "/out"): string {
+export function interpBase(model: string, base = DATA_BASE): string {
   return `${base}/${model}/interp`;
 }
 
-export const loadInterpIndex = (model: string, base = "/out") =>
+export const loadInterpIndex = (model: string, base = DATA_BASE) =>
   fetchJSON<InterpIndex>(`${interpBase(model, base)}/index.json`);
 
-export const loadWeights = (model: string, base = "/out") =>
+export const loadWeights = (model: string, base = DATA_BASE) =>
   fetchJSON<WeightsBundle>(`${interpBase(model, base)}/weights.json`);
 
-export const loadFourier = (model: string, base = "/out") =>
+export const loadFourier = (model: string, base = DATA_BASE) =>
   fetchJSON<FourierBundle>(`${interpBase(model, base)}/fourier.json`);
 
-export const loadEmbed = (model: string, base = "/out") =>
+export const loadEmbed = (model: string, base = DATA_BASE) =>
   fetchJSON<EmbedBundle>(`${interpBase(model, base)}/embed.json`);
 
-export const loadNeurons = (model: string, base = "/out") =>
+export const loadNeurons = (model: string, base = DATA_BASE) =>
   fetchJSON<NeuronsBundle>(`${interpBase(model, base)}/neurons.json`);
 
-export const loadSAE = (model: string, base = "/out") =>
+export const loadSAE = (model: string, base = DATA_BASE) =>
   fetchJSON<SAEBundle>(`${interpBase(model, base)}/sae.json`);
 
-export const loadSAEActs = (model: string, base = "/out") =>
+export const loadSAEActs = (model: string, base = DATA_BASE) =>
   fetchJSON<SAEActsBundle>(`${interpBase(model, base)}/sae_acts.json`);
 
-export const loadOVEigs = (model: string, base = "/out") =>
+export const loadOVEigs = (model: string, base = DATA_BASE) =>
   fetchJSON<OVEigsBundle>(`${interpBase(model, base)}/ov_eigs.json`);
 
-export const loadAttrib = (model: string, base = "/out") =>
+export const loadAttrib = (model: string, base = DATA_BASE) =>
   fetchJSON<AttribBundle>(`${interpBase(model, base)}/attrib.json`);
 
-export const loadComp = (model: string, base = "/out") =>
+export const loadComp = (model: string, base = DATA_BASE) =>
   fetchJSON<CompBundle>(`${interpBase(model, base)}/comp.json`);
 
-export const loadPatch = (model: string, base = "/out") =>
+export const loadPatch = (model: string, base = DATA_BASE) =>
   fetchJSON<PatchBundle>(`${interpBase(model, base)}/patch.json`);
 
-export const loadInduction = (model: string, base = "/out") =>
+export const loadInduction = (model: string, base = DATA_BASE) =>
   fetchJSON<InductionBundle>(`${interpBase(model, base)}/induction.json`);
 
-export const loadAblation = (model: string, base = "/out") =>
+export const loadAblation = (model: string, base = DATA_BASE) =>
   fetchJSON<AblationBundle>(`${interpBase(model, base)}/ablation.json`);
 
-export const loadOcclusion = (model: string, base = "/out") =>
+export const loadOcclusion = (model: string, base = DATA_BASE) =>
   fetchJSON<OcclusionBundle>(`${interpBase(model, base)}/occlusion.json`);
 
-export const loadTuned = (model: string, base = "/out") =>
+export const loadTuned = (model: string, base = DATA_BASE) =>
   fetchJSON<TunedBundle>(`${interpBase(model, base)}/tuned.json`);
 
-export const loadSAEWeb = (model: string, base = "/out") =>
+export const loadSAEWeb = (model: string, base = DATA_BASE) =>
   fetchJSON<SAEWebBundle>(`${interpBase(model, base)}/sae_web.json`);
 
-export const loadGrok = (model: string, base = "/out") =>
+export const loadGrok = (model: string, base = DATA_BASE) =>
   fetchJSON<GrokBundle>(`${interpBase(model, base)}/grok.json`);
 
-export const loadCompass = (model: string, base = "/out") =>
+export const loadCompass = (model: string, base = DATA_BASE) =>
   fetchJSON<CompassBundle>(`${interpBase(model, base)}/compass.json`);
 
-export const loadCofire = (model: string, base = "/out") =>
+export const loadCofire = (model: string, base = DATA_BASE) =>
   fetchJSON<CofireBundle>(`${interpBase(model, base)}/cofire.json`);
 
-export const loadHeads = (model: string, base = "/out") =>
+export const loadHeads = (model: string, base = DATA_BASE) =>
   fetchJSON<HeadsBundle>(`${interpBase(model, base)}/heads.json`);
 
 /** 2b — custom prompts. A trace computed by the local live server
@@ -892,7 +894,7 @@ export function putLiveTrace(model: string, slug: string, bundle: TraceBundle): 
   cache.set(liveTraceUrl(model, slug), bundle);
 }
 
-export const loadTrace = (model: string, slug: string, base = "/out") =>
+export const loadTrace = (model: string, slug: string, base = DATA_BASE) =>
   fetchJSON<TraceBundle>(
     isLiveTrace(slug)
       ? liveTraceUrl(model, slug)
@@ -927,7 +929,7 @@ export const loadLiveSAEActs = (model: string, slug: string) =>
 
 /** True if this model has interp bundles (feature nav gates on it, honestly —
  *  a model without bundles simply doesn't offer the interp views). */
-export async function hasInterp(model: string, base = "/out"): Promise<boolean> {
+export async function hasInterp(model: string, base = DATA_BASE): Promise<boolean> {
   try {
     await loadInterpIndex(model, base);
     return true;

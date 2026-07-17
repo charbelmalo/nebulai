@@ -13,6 +13,7 @@ import { mountChrome } from "./chrome/mount";
 import { applyUrlState, readUrlState, startUrlSync } from "./chrome/urlState";
 import { loadCompare } from "./data/compare";
 import { evictDataset, loadDataset, loadIndex } from "./data/loader";
+import { DATA_BASE } from "./data/base";
 import { AtlasDriver } from "./scene/drivers/AtlasDriver";
 import { ChordDriver } from "./scene/drivers/ChordDriver";
 import { CompareDriver } from "./scene/drivers/CompareDriver";
@@ -245,7 +246,7 @@ async function boot() {
           progress.style.width = `${((loaded / total) * 100).toFixed(1)}%`;
           say(`${entry.id} — ${(loaded / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`);
         },
-        "/out",
+        DATA_BASE,
         noCache,
       );
       appStore.getState().setDataset(entry.id, next);
@@ -271,7 +272,7 @@ async function boot() {
     switchViewMode,
     async refreshDatasets(datasetId) {
       if (appStore.getState().loading.active) return;
-      const index = await loadIndex("/out", true);
+      const index = await loadIndex(DATA_BASE, true);
       appStore.getState().setDatasets(index.datasets);
       const entry = index.datasets.find((d) => d.id === datasetId);
       if (!entry) return; // built into a different out root than the one served

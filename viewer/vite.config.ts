@@ -31,7 +31,10 @@ function serveOut(): Plugin {
 }
 
 export default defineConfig({
-  base: "./",
+  // Dev + relative-hosting default is "./"; a sub-path static deploy sets
+  // VITE_BASE (e.g. "/psychiX/nebulai-maps/") so BASE_URL — and thus DATA_BASE
+  // in src/data/base.ts — resolve the baked out/ tree under that sub-path.
+  base: process.env.VITE_BASE ?? "./",
   plugins: [preact(), serveOut()],
   server: { port: Number(process.env.PORT) || 5173 },
   build: { target: "es2022" },

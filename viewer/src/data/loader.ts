@@ -6,6 +6,7 @@ import type { Columns } from "./columns";
 import type { ClusterHull } from "./hulls";
 import type { ParseResponse } from "./parse.worker";
 import type { DatasetIndex } from "./schema";
+import { DATA_BASE } from "./base";
 
 export interface Dataset {
   columns: Columns;
@@ -15,7 +16,7 @@ export interface Dataset {
 
 const cache = new Map<string, Dataset>();
 
-export async function loadIndex(base = "/out", noCache = false): Promise<DatasetIndex> {
+export async function loadIndex(base = DATA_BASE, noCache = false): Promise<DatasetIndex> {
   const res = await fetch(`${base}/index.json`, noCache ? { cache: "no-store" } : undefined);
   if (!res.ok) throw new Error(`no dataset index at ${base}/index.json (${res.status})`);
   return res.json();
@@ -24,7 +25,7 @@ export async function loadIndex(base = "/out", noCache = false): Promise<Dataset
 export function loadDataset(
   path: string,
   onProgress?: (loaded: number, total: number) => void,
-  base = "/out",
+  base = DATA_BASE,
   noCache = false,
 ): Promise<Dataset> {
   const cached = noCache ? undefined : cache.get(path);
