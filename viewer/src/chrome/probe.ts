@@ -13,9 +13,9 @@ let probeTimer: number | null = null;
  *  `progress.latencyMs` and pushes an event on success or error. */
 export async function probeEndpoint(): Promise<void> {
   const st = appStore.getState();
-  const { endpoint, apiKey, useM4Worker } = st.probing;
-  const base = useM4Worker
-    ? "http://192.168.0.200:8100"
+  const { endpoint, apiKey, useBridgeEndpoint } = st.probing;
+  const base = useBridgeEndpoint
+    ? "http://localhost:8100"
     : (endpoint || "").replace(/\/+$/, "");
   if (!base) {
     st.pushProgressEvent("error", "No endpoint configured");

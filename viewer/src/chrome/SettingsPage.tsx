@@ -459,9 +459,9 @@ function ProbingTab() {
               label="Embed host"
               type="url"
               value={bp.embedHost}
-              placeholder="http://192.168.0.200:11434"
+              placeholder="http://localhost:11434"
               onChange={(v) => set("embedHost", v)}
-              hint="ollama on the M4 worker, or any OpenAI-compatible endpoint"
+              hint="a local ollama server, or any OpenAI-compatible endpoint"
             />
             <TextRow
               label="Embed model"
@@ -485,7 +485,7 @@ function ProbingTab() {
           value={bp.namer}
           options={[
             { value: "auto", label: "auto (ollama → OpenRouter → centroid)" },
-            { value: "ollama", label: "ollama (M4 worker)" },
+            { value: "ollama", label: "ollama (local)" },
             { value: "openrouter", label: "OpenRouter" },
             { value: "anthropic", label: "Anthropic — naming only (no embeddings API)" },
             { value: "none", label: "none (centroid tokens)" },
@@ -576,13 +576,13 @@ function ProbingTab() {
 
       <SettingsSection
         title="Endpoint"
-        hint="Point the naming/embedding chain at a custom OpenAI-compatible endpoint, or route through the M4 worker bridge."
+        hint="Point the naming/embedding chain at a custom OpenAI-compatible endpoint, or route through the bridge endpoint."
       >
         <ToggleRow
-          label="Route through M4 worker bridge"
-          checked={p.useM4Worker}
-          onChange={(v) => appStore.getState().setProbing("useM4Worker", v)}
-          hint="192.168.0.200:8100"
+          label="Route through bridge endpoint"
+          checked={p.useBridgeEndpoint}
+          onChange={(v) => appStore.getState().setProbing("useBridgeEndpoint", v)}
+          hint="localhost:8100"
         />
         <TextRow
           label="Base URL"

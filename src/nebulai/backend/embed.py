@@ -1,5 +1,5 @@
 """Text embeddings via an ollama or OpenAI-compatible embeddings endpoint
-(default: mxbai-embed-large on the M4 worker's ollama).
+(default: mxbai-embed-large on a local ollama server).
 
 Used by the cross-model comparison (compare.py): each model's named clusters
 are embedded in this neutral, model-independent semantic space so clouds from
@@ -16,7 +16,7 @@ import urllib.request
 
 import numpy as np
 
-_DEFAULT_OLLAMA_HOST = "http://192.168.0.200:11434"  # M4 worker
+_DEFAULT_OLLAMA_HOST = "http://localhost:11434"  # local ollama server
 _DEFAULT_EMBED_MODEL = "mxbai-embed-large"
 
 

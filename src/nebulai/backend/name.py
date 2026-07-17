@@ -1,7 +1,7 @@
 """Cluster naming with a pluggable backend chain.
 
-auto mode tries: ollama on the M4 worker (local, free, private) -> OpenRouter
-(key from env or the hermes .env) -> centroid fallback (title = the members
+auto mode tries: a local ollama server (free, private) -> OpenRouter
+(key from env or a .env file) -> centroid fallback (title = the members
 nearest the cluster centroid). The pipeline therefore always completes; the
 LLM namers simply activate when a reachable ollama or a key is present.
 Anthropic stays available via `--namer anthropic`.
@@ -45,9 +45,9 @@ _SCHEMA = {
     "additionalProperties": False,
 }
 
-_DEFAULT_ENV_FILE = "~/.hermes/.env"
+_DEFAULT_ENV_FILE = "~/.config/nebulai/.env"
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-_DEFAULT_OLLAMA_HOST = "http://192.168.0.200:11434"  # M4 worker
+_DEFAULT_OLLAMA_HOST = "http://localhost:11434"  # local ollama server
 
 
 def _representatives(
@@ -72,7 +72,7 @@ def _batch_lines(reps: dict[int, list[str]], cids: list[int]) -> str:
 
 def _load_openrouter_key(env_file: str | None) -> str | None:
     """os.environ first, then the last uncommented OPENROUTER_API_KEY= in the
-    hermes-style .env file."""
+    .env file."""
     key = os.environ.get("OPENROUTER_API_KEY")
     if key:
         return key.strip()
@@ -95,7 +95,7 @@ def _name_with_openrouter(
 ) -> dict[int, str]:
     key = _load_openrouter_key(env_file)
     if not key:
-        raise RuntimeError("no OPENROUTER_API_KEY in env or hermes .env")
+        raise RuntimeError("no OPENROUTER_API_KEY in env or .env file")
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -135,7 +135,7 @@ def _name_with_openrouter(
     return titles
 
 
-# --- ollama (M4 worker) ---------------------------------------------------
+# --- ollama ---------------------------------------------------
 
 def _ollama_pick_model(host: str, preferred: str) -> str | None:
     try:

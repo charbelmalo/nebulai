@@ -660,8 +660,8 @@ def main() -> None:
     )
     t.add_argument(
         "--embed-host",
-        default="http://192.168.0.200:11434",
-        help="[--source api] embeddings endpoint base URL (default: M4 worker)",
+        default="http://localhost:11434",
+        help="[--source api] embeddings endpoint base URL (default: local ollama server)",
     )
     t.add_argument(
         "--embed-model",
@@ -720,14 +720,14 @@ def main() -> None:
     )
     t.add_argument(
         "--ollama-host",
-        default="http://192.168.0.200:11434",
-        help="ollama base URL (default: M4 worker)",
+        default="http://localhost:11434",
+        help="ollama base URL (default: local ollama server)",
     )
     t.add_argument("--anthropic-model", default="claude-opus-4-8")
     t.add_argument(
         "--env-file",
         default=None,
-        help="path to a .env with OPENROUTER_API_KEY (default: ~/.hermes/.env)",
+        help="path to a .env with OPENROUTER_API_KEY (default: ~/.config/nebulai/.env)",
     )
     t.add_argument(
         "--edges",
@@ -814,14 +814,14 @@ def main() -> None:
     )
     s.add_argument(
         "--ollama-host",
-        default="http://192.168.0.200:11434",
-        help="ollama base URL (default: M4 worker)",
+        default="http://localhost:11434",
+        help="ollama base URL (default: local ollama server)",
     )
     s.add_argument("--anthropic-model", default="claude-opus-4-8")
     s.add_argument(
         "--env-file",
         default=None,
-        help="path to a .env with OPENROUTER_API_KEY (default: ~/.hermes/.env)",
+        help="path to a .env with OPENROUTER_API_KEY (default: ~/.config/nebulai/.env)",
     )
     s.add_argument(
         "--edges",
@@ -913,14 +913,14 @@ def main() -> None:
     )
     n.add_argument(
         "--ollama-host",
-        default="http://192.168.0.200:11434",
-        help="ollama base URL (default: M4 worker)",
+        default="http://localhost:11434",
+        help="ollama base URL (default: local ollama server)",
     )
     n.add_argument("--anthropic-model", default="claude-opus-4-8")
     n.add_argument(
         "--env-file",
         default=None,
-        help="path to a .env with OPENROUTER_API_KEY (default: ~/.hermes/.env)",
+        help="path to a .env with OPENROUTER_API_KEY (default: ~/.config/nebulai/.env)",
     )
     n.add_argument(
         "--edges",
@@ -992,8 +992,8 @@ def main() -> None:
     c.add_argument("--out", default="out", help="output directory root")
     c.add_argument(
         "--ollama-host",
-        default="http://192.168.0.200:11434",
-        help="ollama base URL hosting the embed model (default: M4 worker)",
+        default="http://localhost:11434",
+        help="ollama base URL hosting the embed model (default: local ollama server)",
     )
     c.add_argument("--embed-model", default="mxbai-embed-large")
     c.add_argument("--seed", type=int, default=42)

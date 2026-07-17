@@ -32,7 +32,7 @@ Outputs land in `out/<model>/`:
 1. **Front-end** — produce `Units`: ids + geometry vectors + display labels. For Plan C the geometry is the (mean-centered) embedding matrix itself, curated to drop byte-fragment and control tokens.
 2. **Reduce** — UMAP (cosine): a ~10-d space for clustering, 3-d for the flythrough, and a 2-d view projected from the 3-d one so the views stay aligned. Clustering never runs on the 2-d/3-d projections — they invent structure.
 3. **Cluster** — HDBSCAN; membership probability becomes per-point confidence.
-4. **Name** — each cluster's most-central members go to a namer. `--namer auto` (default) tries local **ollama on the M4 worker** → **OpenRouter** (key from `~/.hermes/.env`) → a centroid-token fallback. `--namer` and `--ollama-model` / `--openrouter-model` control this.
+4. **Name** — each cluster's most-central members go to a namer. `--namer auto` (default) tries **a local ollama server** → **OpenRouter** (key from `~/.config/nebulai/.env`) → a centroid-token fallback. `--namer` and `--ollama-model` / `--openrouter-model` control this.
 5. **Export + render** — `nebulai.json`, static PNG, interactive HTML.
 
 ## Comparing models
@@ -50,7 +50,7 @@ uv run nebulai compare gpt2 distilgpt2 EleutherAI/pythia-70m
 Different models don't share an embedding basis, so we **don't** concatenate raw
 geometries (that just splits into per-model blobs — an artifact, not a finding).
 Instead each model's *named clusters* are embedded in a neutral third-party
-space (`mxbai-embed-large` on the M4 worker), co-reduced, and re-clustered. A
+space (`mxbai-embed-large` on the local ollama server), co-reduced, and re-clustered. A
 meta-cluster drawing from several models is a **shared concept**; one from a
 single model is **unique**. The command prints a concept-overlap (Jaccard)
 table and per-model unique counts.

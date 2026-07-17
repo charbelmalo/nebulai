@@ -94,7 +94,7 @@ def test_build_cmd_full_params():
 
 
 def test_build_cmd_seed_zero_is_kept_and_api_flags():
-    cmd = build_cmd("gpt2", "api", {"seed": 0, "embed_host": "http://192.168.0.200:11434", "embed_model": "mxbai-embed-large"})
+    cmd = build_cmd("gpt2", "api", {"seed": 0, "embed_host": "http://localhost:11434", "embed_model": "mxbai-embed-large"})
     assert cmd[cmd.index("--seed") + 1] == "0"  # 0 is a valid seed, not falsy-dropped
     assert cmd[cmd.index("--source") + 1] == "api"
     assert cmd[cmd.index("--embed-model") + 1] == "mxbai-embed-large"

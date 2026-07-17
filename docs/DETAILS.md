@@ -177,13 +177,13 @@ exactly the ambiguous ones.
 `--namer auto` tries each backend in order, falling through on *any*
 exception. The order favors local + free + private first:
 
-1. **`ollama`** — the M4 worker at `http://192.168.0.200:11434`; probes
+1. **`ollama`** — a local ollama server at `http://localhost:11434`; probes
    `/api/tags` first (fast fail if unreachable, and it never selects an `embed`
    model), then `/api/generate` with `format=json`. Default model
    `liquidai/lfm2.5-1.2b-instruct` — small, free, local, good enough for 2–5-word
    titles.
 2. **`openrouter`** — default `openai/gpt-oss-120b:free`; key from
-   `OPENROUTER_API_KEY` or the last uncommented line of `~/.hermes/.env`.
+   `OPENROUTER_API_KEY` or the last uncommented line of `~/.config/nebulai/.env`.
    Structured output via `response_format` json_schema, batched **15 per call**.
 3. **`centroid`** — zero-dependency floor: joins the top-4 centroid-nearest
    member strings with `" · "` (e.g. ` Monday ·  Tuesday ·  Friday ·  Sunday`).

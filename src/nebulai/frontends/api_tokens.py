@@ -29,7 +29,7 @@ def api_dataset_id(model_id: str, embed_model: str) -> str:
 
 def load_api_token_units(
     model_id: str = "gpt2",
-    embed_host: str = "http://192.168.0.200:11434",
+    embed_host: str = "http://localhost:11434",
     embed_model: str = "mxbai-embed-large",
     api: str = "ollama",
     api_key: str | None = None,

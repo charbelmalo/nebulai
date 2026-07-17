@@ -205,7 +205,7 @@ export interface Probing {
   liveProbe: boolean; // ping /models on config change
   probeIntervalMs: number; // 5000–60000 — recurring health check
   autoRun: boolean; // rebuild the map when config changes
-  useM4Worker: boolean; // route through 192.168.0.200 (m4worker-bridge)
+  useBridgeEndpoint: boolean; // route naming/embedding through a custom bridge endpoint
   liveUrl: string; // Internals #25 live probe server (nebulai live_server)
   buildUrl: string; // map build server (nebulai build_server)
   buildModel: string; // HF model id to build (curated pick or custom)
@@ -449,7 +449,7 @@ export const appStore = createStore<AppState>()((set, get) => ({
     liveProbe: false,
     probeIntervalMs: 15000,
     autoRun: false,
-    useM4Worker: false,
+    useBridgeEndpoint: false,
     liveUrl: "http://127.0.0.1:8123",
     buildUrl: "http://127.0.0.1:8124",
     buildModel: "gpt2",
@@ -464,7 +464,7 @@ export const appStore = createStore<AppState>()((set, get) => ({
       namer: "auto",
       edges: "knn",
       force: false,
-      embedHost: "http://192.168.0.200:11434",
+      embedHost: "http://localhost:11434",
       embedModel: "mxbai-embed-large",
       embedApi: "ollama",
     },
