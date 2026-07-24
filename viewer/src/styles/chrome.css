@@ -3811,6 +3811,14 @@ body.page-sessions #stage {
   color: var(--text-dim);
 }
 
+/* the "this axis is eased" disclosure — only rendered when the driver actually
+   curved an axis, so it stays a statement of fact rather than boilerplate */
+.sessions-legend-scale {
+  display: inline-block;
+  margin-top: 6px;
+  color: var(--text-faint);
+}
+
 .sessions-legend-hint {
   text-transform: none;
   letter-spacing: 0;
@@ -4133,9 +4141,31 @@ body.page-sessions #stage {
   font-weight: 600;
 }
 
+/* Axis tick labels for the emissive field. Positioned by the driver in CSS
+   pixels via `translate` (never `transform` — the tooltip's entrance animation
+   owns transform, and these share the overlay). `top/left: 0` puts the
+   translate origin at the overlay's corner so the driver can hand us projected
+   coordinates directly. Quiet enough to read as calibration, not as data. */
+.session-axis-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  font: 500 9px/1 var(--font-mono);
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  white-space: nowrap;
+  pointer-events: none;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+  z-index: 10;
+}
+
 /* hover tooltip — transient: glass */
 .session-tooltip {
   position: absolute;
+  /* anchor the translate origin to the overlay corner — the driver hands us
+     projected CSS-pixel coordinates and moves us with `translate` */
+  top: 0;
+  left: 0;
   z-index: 20;
   min-width: 180px;
   max-width: 280px;

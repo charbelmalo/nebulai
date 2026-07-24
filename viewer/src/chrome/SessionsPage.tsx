@@ -19,7 +19,7 @@ import {
   type SessionAnalysis,
   type ToolCategory,
 } from "./sessionlog";
-import { SessionPlotDriver, CATEGORY_RGB } from "../scene/sessions/SessionPlotDriver";
+import { SessionFieldDriver, CATEGORY_CSS } from "../scene/sessions/SessionFieldDriver";
 import {
   deleteSessionAnalysis,
   loadAllSessionAnalyses,
@@ -32,6 +32,10 @@ import { $sessions } from "./state";
 const $pinned = signal<{ sessionId: string; index: number } | null>(null);
 /** Categories currently dimmed in the plot (legend-key toggles). */
 const $dimmedCats = signal<ToolCategory[]>([]);
+/** Which axes the driver actually eased (asinh) for the current data. Only the
+ *  driver knows — a mild spread stays linear — and the legend must not claim a
+ *  compression that didn't happen. */
+const $easedAxes = signal<string[]>([]);
 
 const CATEGORY_HELP: Record<ToolCategory, string> = {
   orient: "read / search / fetch",
@@ -105,7 +109,7 @@ export function SessionsPage() {
 function SessionPlot(props: { analyses: SessionAnalysis[] }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
-  const driverRef = useRef<SessionPlotDriver | null>(null);
+  const driverRef = useRef<SessionFieldDriver | null>(null);
   const ready = useSignal(false);
 
   // init once
@@ -115,7 +119,7 @@ function SessionPlot(props: { analyses: SessionAnalysis[] }) {
     const host = canvas?.parentElement;
     if (!canvas || !overlay || !host) return;
     let disposed = false;
-    const driver = new SessionPlotDriver();
+    const driver = new SessionFieldDriver();
     driver.onSelect = (sel) => {
       $pinned.value = sel;
     };
@@ -127,6 +131,7 @@ function SessionPlot(props: { analyses: SessionAnalysis[] }) {
           return;
         }
         driverRef.current = driver;
+        window.__sessionDriver = driver; // e2e + debugging handle, as with __driver
         const r = host.getBoundingClientRect();
         driver.resize(r.width, r.height, window.devicePixelRatio || 1);
         ready.value = true;
@@ -144,6 +149,7 @@ function SessionPlot(props: { analyses: SessionAnalysis[] }) {
       ro.disconnect();
       driverRef.current?.dispose();
       driverRef.current = null;
+      delete window.__sessionDriver;
     };
   }, []);
 
@@ -152,6 +158,12 @@ function SessionPlot(props: { analyses: SessionAnalysis[] }) {
   useEffect(() => {
     if (!ready.value) return;
     driverRef.current?.setSessions(props.analyses);
+    const d = driverRef.current?.describe();
+    $easedAxes.value = d
+      ? (["x", "y", "z"] as const)
+          .filter((ax) => d.curved[ax])
+          .map((ax) => ({ x: "time", y: "context", z: "new-context" })[ax])
+      : [];
     // drop a pinned turn whose session left the active set
     const p = $pinned.value;
     if (p && !props.analyses.some((a) => a.id === p.sessionId)) $pinned.value = null;
@@ -309,6 +321,7 @@ function SessionsSide(props: { dragOver: boolean; setDragOver: (v: boolean) => v
 
 function SessionsLegend() {
   const dimmed = $dimmedCats.value;
+  const eased = $easedAxes.value;
   return (
     <div class="sessions-legend">
       <div class="sessions-legend-title">
@@ -332,7 +345,7 @@ function SessionsLegend() {
               >
                 <span
                   class="sessions-key-dot"
-                  style={{ background: `rgb(${CATEGORY_RGB[c].join(",")})` }}
+                  style={{ background: CATEGORY_CSS[c] }}
                 />
                 <span class="sessions-key-label">{c}</span>
                 <span class="sessions-key-help">{CATEGORY_HELP[c]}</span>
@@ -342,8 +355,20 @@ function SessionsLegend() {
         })}
       </ul>
       <div class="sessions-legend-axes">
-        X time · Y context (cache-read) · Z new-context/turn (cache-write) · size ∝ tools ·
-        faded = sub-agent · drag to orbit · <b>click a node to dissect it</b>
+        X time · Y context (cache-read) · Z new-context/turn (cache-write) · glow = output
+        tokens (ranked) · size = tools used · red = a tool failed · faded = sub-agent ·
+        trail = turn order, lights up around what you point at · drag to orbit ·{" "}
+        <b>click a node to dissect it</b>
+        {eased.length > 0 && (
+          <>
+            <br />
+            <span class="sessions-legend-scale">
+              {eased.join(", ")} {eased.length > 1 ? "axes are" : "axis is"} eased so the
+              quiet turns aren't crushed against the wall — spacing changes, readings
+              don't. Tick labels and tooltip values are exact.
+            </span>
+          </>
+        )}
       </div>
     </div>
   );
@@ -419,7 +444,7 @@ function TurnInspector(props: { analyses: SessionAnalysis[] }) {
       <div class="sessions-inspect-cat">
         <span
           class="sessions-key-dot"
-          style={{ background: `rgb(${CATEGORY_RGB[t.category].join(",")})` }}
+          style={{ background: CATEGORY_CSS[t.category] }}
         />
         {t.category}
         <span class="sessions-inspect-cathelp">{CATEGORY_HELP[t.category]}</span>

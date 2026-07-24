@@ -27,6 +27,7 @@ declare global {
     __compareDriver?: CompareDriver;
     __chordDriver?: ChordDriver;
     __hierDriver?: HierarchyDriver;
+    __sessionDriver?: { describe(): unknown };
   }
 }
 

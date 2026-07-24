@@ -49,6 +49,11 @@ export interface SessionTurn {
   textLen: number; // visible assistant prose length (chars)
 
   category: ToolCategory; // dominant category of this turn's tools
+  /** Tool calls issued by THIS turn that came back flagged is_error.
+   *  `undefined` — not 0 — on records persisted before per-turn attribution
+   *  existed: the raw transcript is never stored, so those genuinely cannot
+   *  know, and the UI says "not recorded" rather than printing a false zero. */
+  errors?: number;
   cumOutput: number; // cumulative output tokens through this turn (monotonic)
 
   /** First ≤240 chars of the user prompt this turn was serving (the latest
@@ -138,8 +143,14 @@ export function categorizeTool(name: string): ToolCategory {
 }
 
 /** Dominant category for a turn: most frequent among its tools; `reflect`
- *  when the turn made no tool call at all. */
-function dominantCategory(tools: string[]): ToolCategory {
+ *  when the turn made no tool call at all.
+ *
+ *  Exported because `tools[]` — not `category` — is the durable field. Analyses
+ *  persisted by another build can carry a category this build has no colour or
+ *  legend row for, and a renderer that trusts the stored value blanks its whole
+ *  node layer on the first unknown one. Re-deriving from the stored tools is
+ *  always safe: it's the same computation that produced the field originally. */
+export function dominantCategory(tools: string[]): ToolCategory {
   if (tools.length === 0) return "reflect";
   const counts = new Map<ToolCategory, number>();
   for (const t of tools) {
@@ -289,23 +300,31 @@ function num(u: Record<string, number> | undefined, k: string): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
-/** Count tool failures on one line: the audit format's top-level
- *  `tool_use_result.is_error`, plus the transcript format's user-message
- *  `tool_result` blocks flagged `is_error`. (The result line's session-level
- *  `is_error` is captured separately as authoritative.isError, not here.) */
-function countErrors(o: RawLine): number {
-  let n = 0;
-  if (o.type !== "result" && o.tool_use_result && o.tool_use_result.is_error) n++;
+/** Tool failures on one line, with the `tool_use_id`s they belong to so each
+ *  failure can be charged to the turn that made the call.
+ *
+ *  The transcript format flags failures on `tool_result` blocks; the audit
+ *  format ALSO carries a top-level `tool_use_result.is_error` describing the
+ *  same failure, so the top-level flag only counts when no block already did —
+ *  otherwise every audit-format failure is counted twice. (The result line's
+ *  session-level `is_error` is captured separately as authoritative.isError.) */
+function lineErrors(o: RawLine): { total: number; byToolUse: string[] } {
+  const byToolUse: string[] = [];
+  let total = 0;
   const content = o.message?.content;
   if (Array.isArray(content)) {
     for (const block of content) {
       if (block && typeof block === "object") {
         const b = block as Record<string, unknown>;
-        if (b.type === "tool_result" && b.is_error) n++;
+        if (b.type === "tool_result" && b.is_error) {
+          total++;
+          if (typeof b.tool_use_id === "string") byToolUse.push(b.tool_use_id);
+        }
       }
     }
   }
-  return n;
+  if (total === 0 && o.type !== "result" && o.tool_use_result?.is_error) total = 1;
+  return { total, byToolUse };
 }
 
 /** Parse a Claude Code transcript into an honest session trajectory.
@@ -332,6 +351,10 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
   // latest real user prompt, tracked per agent context (main vs each sub-agent)
   // so a sub-agent's task brief doesn't clobber the main conversation's prompt
   const lastPrompt = new Map<string, string>();
+  // tool_use_id → the fold key of the response that issued it, so a failure
+  // reported on a later user line is charged to the turn that caused it
+  const toolUseOwner = new Map<string, string>();
+  const errorsByReq = new Map<string, number>();
 
   for (const line of lines) {
     let o: RawLine;
@@ -349,7 +372,12 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
     }
     if (o.cwd && !cwd) cwd = o.cwd;
     if (o.gitBranch && !gitBranch) gitBranch = o.gitBranch;
-    errorCount += countErrors(o);
+    const errs = lineErrors(o);
+    errorCount += errs.total;
+    for (const id of errs.byToolUse) {
+      const owner = toolUseOwner.get(id);
+      if (owner) errorsByReq.set(owner, (errorsByReq.get(owner) ?? 0) + 1);
+    }
 
     // terminal audit result line — authoritative totals (captured, not folded)
     if (o.type === "result") {
@@ -404,6 +432,8 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
           const b = block as Record<string, unknown>;
           if (b.type === "tool_use" && typeof b.name === "string") {
             acc.tools.push(b.name);
+            // remember who issued this call so its failure lands on this turn
+            if (typeof b.id === "string") toolUseOwner.set(b.id, rid);
             const inp = b.input as Record<string, unknown> | undefined;
             const p = (inp?.file_path ?? inp?.path) as string | undefined;
             if (typeof p === "string") acc.files.push(p);
@@ -485,6 +515,7 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
       thinkingBlocks: acc.thinkingBlocks,
       textLen: acc.textLen,
       category,
+      errors: errorsByReq.get(rid) ?? 0,
       cumOutput,
       promptPreview: acc.promptPreview,
       textPreview: acc.textPreview,
