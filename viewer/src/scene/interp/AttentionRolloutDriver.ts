@@ -96,7 +96,7 @@ export class AttentionRolloutDriver implements InterpDriver {
     this.labelRoot.className = "interp-roll-labels";
     overlay.appendChild(this.labelRoot);
     this.ctrlRoot = document.createElement("div");
-    this.ctrlRoot.className = "interp-roll-ctrl";
+    this.ctrlRoot.className = "transport interp-transport"; // buildControls fills it
     overlay.appendChild(this.ctrlRoot);
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
@@ -330,37 +330,105 @@ export class AttentionRolloutDriver implements InterpDriver {
     this.labelRoot.appendChild(dcap);
   }
 
+  /** The depth transport. Built imperatively because that is this page's
+   *  contract — InterpPage hands every driver an `overlay` element and each one
+   *  owns the DOM inside it — but it uses the SHARED `.transport` / `.tp-*`
+   *  classes, so it is the same control the sessions playhead and the compare
+   *  layout tour use.
+   *
+   *  HONESTY: depth is an ORDINAL layer axis, not time. The readout names the
+   *  layer it has accumulated through and counts layers; a seconds display
+   *  would describe the animation, not the model. Layer numbers stay
+   *  0-indexed, matching how the model names them (L0 … L{n-1}). */
   private buildControls(): void {
     this.ctrlRoot.textContent = "";
+    this.ctrlRoot.className = "transport interp-transport";
+    this.ctrlRoot.setAttribute("role", "group");
+    this.ctrlRoot.setAttribute("aria-label", "Rollout depth");
+
     const play = document.createElement("button");
     play.type = "button";
-    play.className = "interp-roll-play";
-    play.textContent = this.playing ? "❚❚ pause" : "▶ cascade";
+    play.className = "tp-btn tp-play";
     play.addEventListener("click", () => this.togglePlay());
+
+    const restart = document.createElement("button");
+    restart.type = "button";
+    restart.className = "tp-btn";
+    restart.textContent = "↺";
+    restart.title = "Restart the cascade from L0";
+    restart.setAttribute("aria-label", "Restart the cascade from the first layer");
+    restart.addEventListener("click", () => {
+      this.stopPlay();
+      this.setDepth(0);
+      this.startPlay();
+    });
+
     const slider = document.createElement("input");
     slider.type = "range";
-    slider.className = "interp-roll-slider";
+    slider.className = "tp-scrub";
     slider.min = "0";
     slider.max = String(Math.max(0, this.nLayer - 1));
+    slider.step = "1";
     slider.value = String(this.depth);
+    slider.setAttribute("aria-label", "Cumulative depth");
     slider.addEventListener("input", () => {
-      this.stopPlay();
-      this.setDepth(Number(slider.value));
+      // read the dragged value FIRST: stopPlay → syncControls rewrites
+      // slider.value back to the current depth, so reading after it would
+      // discard the drag and snap to where playback happened to be.
+      const want = Number(slider.value);
+      this.stopPlay(); // scrubbing takes the wheel, exactly as in the other two
+      this.setDepth(want);
     });
+
     const read = document.createElement("span");
-    read.className = "interp-roll-read";
-    read.textContent = `cumulative through layer ${this.depth} / ${this.nLayer - 1}`;
-    this.ctrlRoot.append(play, slider, read);
-    this.ctrlEls = { play, slider, read };
+    read.className = "tp-stage";
+    read.setAttribute("aria-hidden", "true");
+    const now = document.createElement("span");
+    now.className = "tp-now";
+    read.appendChild(now);
+
+    const count = document.createElement("span");
+    count.className = "tp-count";
+    count.title = "layers accumulated, of the whole stack";
+
+    this.ctrlRoot.append(play, restart, slider, read, count);
+    this.ctrlEls = { play, slider, now, count };
+    this.syncControls();
   }
-  private ctrlEls: { play: HTMLButtonElement; slider: HTMLInputElement; read: HTMLElement } | null = null;
+  private ctrlEls: {
+    play: HTMLButtonElement;
+    slider: HTMLInputElement;
+    now: HTMLElement;
+    count: HTMLElement;
+  } | null = null;
+
+  /** Single writer for every control's text — the readout can only ever say
+   *  what `depth`/`playing` actually are. */
+  private syncControls(): void {
+    const c = this.ctrlEls;
+    if (!c) return;
+    const last = Math.max(0, this.nLayer - 1);
+    c.play.textContent = this.playing ? "⏸" : "▶";
+    c.play.setAttribute("aria-label", this.playing ? "Pause the cascade" : "Play the cascade");
+    c.slider.value = String(this.depth);
+    c.slider.style.setProperty(
+      "--tp-progress",
+      `${last > 0 ? ((this.depth / last) * 100).toFixed(1) : 0}%`,
+    );
+    c.slider.setAttribute(
+      "aria-valuetext",
+      `cumulative through layer ${this.depth} of ${last}`,
+    );
+    c.now.textContent = `through L${this.depth}`;
+    c.count.textContent = String(this.depth);
+    const total = document.createElement("i");
+    total.textContent = `/${last}`;
+    c.count.appendChild(total);
+  }
 
   private setDepth(d: number): void {
     this.depth = Math.max(0, Math.min(this.nLayer - 1, d | 0));
-    if (this.ctrlEls) {
-      this.ctrlEls.slider.value = String(this.depth);
-      this.ctrlEls.read.textContent = `cumulative through layer ${this.depth} / ${this.nLayer - 1}`;
-    }
+    this.syncControls();
     this.pushLayers();
   }
 
@@ -371,7 +439,7 @@ export class AttentionRolloutDriver implements InterpDriver {
   private startPlay(): void {
     if (this.playing || this.nLayer < 2) return;
     this.playing = true;
-    if (this.ctrlEls) this.ctrlEls.play.textContent = "❚❚ pause";
+    this.syncControls();
     if (this.depth >= this.nLayer - 1) this.setDepth(0); // restart from the top
     this.timer = window.setInterval(() => {
       if (this.depth >= this.nLayer - 1) {
@@ -387,7 +455,7 @@ export class AttentionRolloutDriver implements InterpDriver {
       clearInterval(this.timer);
       this.timer = 0;
     }
-    if (this.ctrlEls) this.ctrlEls.play.textContent = "▶ cascade";
+    this.syncControls();
   }
 
   private pick(e: PointerEvent): Cell | null {

@@ -46,11 +46,16 @@
     var(--ramp-4)
   );
 
-  /* radius ladder — cards 24, sub-cards 16, controls 12 */
-  --radius-pill: 999px;
-  --radius-card: 24px;
-  --radius-card-sm: 16px;
-  --radius-ctl: 12px;
+  /* straight-corner theme — all radii flattened to 0 */
+  --radius-pill: 0px;
+  --radius-card: 0px;
+  --radius-card-sm: 0px;
+  --radius-ctl: 0px;
+
+  /* exception: real form inputs (select, text, color, switch, tabs, radio)
+     keep their rounded shape so on/off and pressed states stay legible */
+  --radius-form-ctl: 12px;
+  --radius-form-pill: 999px;
 
   /* elevation — soft, never harsh */
   --shadow-card:

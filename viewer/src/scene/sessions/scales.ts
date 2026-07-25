@@ -73,15 +73,23 @@ function evenTicks(count: number, toValue: (u: number) => number) {
 /** A sensible starting `k` for a set of values: bend the axis where the bulk of
  *  the data actually sits, so the median lands near the middle of the axis
  *  rather than pinned against zero by a handful of outliers. Returns 0 (linear)
- *  when the spread is mild enough that curving it would be theatre. */
-export function suggestK(values: number[], max: number): number {
+ *  when the spread is mild enough that curving it would be theatre.
+ *
+ *  `force` overrides that mild-spread guard — the user explicitly asked to ease
+ *  this axis, so we curve it even on a gentle distribution. The result is still
+ *  monotone and exactly invertible; only the spacing tightens. A genuinely flat
+ *  axis (no positive spread at all) still returns 0, because there is nothing to
+ *  bend and asinhScale would report a curve that isn't visible. */
+export function suggestK(values: number[], max: number, force = false): number {
   if (!(max > 0) || values.length === 0) return 0;
   const positive = values.filter((v) => v > 0).sort((a, b) => a - b);
   if (positive.length === 0) return 0;
   const median = positive[positive.length >> 1] ?? 0;
   if (!(median > 0)) return 0;
   // a mild spread (top value within ~8× the median) reads fine linearly
-  if (max / median < 8) return 0;
+  if (!force && max / median < 8) return 0;
+  // nothing to bend if the whole axis is one value
+  if (!(max > median)) return 0;
   // Place the median at ~0.45 of the axis: solve asinh(k·med)/asinh(k·max)=0.45.
   // The ratio rises monotonically from med/max (as k→0, the linear limit) to 1
   // (as k→∞, where both terms go logarithmic), so a geometric bisection over a

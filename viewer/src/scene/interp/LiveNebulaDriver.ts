@@ -146,7 +146,7 @@ export class LiveNebulaDriver implements InterpDriver {
       color: "var(--text, #e8eaf6)",
       background: "rgba(16, 20, 34, 0.85)",
       border: "1px solid rgba(148, 156, 190, 0.35)",
-      borderRadius: "8px",
+      borderRadius: "0",
       padding: "7px 10px",
       outline: "none",
     } as CSSStyleDeclaration);

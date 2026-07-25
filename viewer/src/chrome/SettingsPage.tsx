@@ -38,7 +38,9 @@ import {
   clearSessionAnalyses as clearPersistedSessions,
   deleteSessionAnalysis,
 } from "./sessionStore";
-import { RadioRow, SelectRow, SliderRow, Tabs, TextRow, ToggleRow } from "./controls";
+import { ColorRow, RadioRow, SelectRow, SliderRow, Tabs, TextRow, ToggleRow } from "./controls";
+import { CATEGORY_ORDER } from "./sessionlog";
+import type { SessionsAppearance, SessionsAxisMode } from "../scene/sessions/appearance";
 
 const TABS = ["General", "Appearance", "Model Probing", "Snapshot", "Sessions", "Data", "About"];
 
@@ -200,14 +202,14 @@ function GeneralTab() {
 // ── Appearance ─────────────────────────────────────────────────────────────
 
 function AppearanceTab() {
-  const sub = useSignal<"atlas" | "chord" | "hierarchy" | "compare">("atlas");
+  const sub = useSignal<"atlas" | "chord" | "hierarchy" | "compare" | "sessions">("atlas");
   const a = $appearance.value;
 
   return (
     <>
       <div class="settings-subtabs">
         <Tabs
-          tabs={["atlas", "chord", "hierarchy", "compare"]}
+          tabs={["atlas", "chord", "hierarchy", "compare", "sessions"]}
           active={sub.value}
           onChange={(t) => (sub.value = t as typeof sub.value)}
         />
@@ -375,6 +377,274 @@ function AppearanceTab() {
           />
         </SettingsSection>
       )}
+
+      {sub.value === "sessions" && <SessionsAppearanceControls a={a.sessions} />}
+    </>
+  );
+}
+
+// ── Appearance › Sessions — the emissive-particle field ──────────────────────
+
+const CATEGORY_LABEL: Record<(typeof CATEGORY_ORDER)[number], string> = {
+  orient: "Orient (read / search)",
+  plan: "Plan (task lifecycle)",
+  edit: "Edit (write files)",
+  exec: "Exec (run commands)",
+  deliver: "Deliver (present / notify)",
+  reflect: "Reflect (text / thinking)",
+};
+
+const AXIS_MODES = [
+  { value: "auto", label: "Auto (data decides)" },
+  { value: "linear", label: "Linear" },
+  { value: "eased", label: "Eased (asinh)" },
+];
+
+function SessionsAppearanceControls(props: { a: SessionsAppearance }) {
+  const a = props.a;
+  const set = <K extends keyof SessionsAppearance>(key: K, value: SessionsAppearance[K]) =>
+    appStore.getState().setAppearance("sessions", key, value);
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  const mult = (v: number) => `${v.toFixed(2)}×`;
+
+  return (
+    <>
+      <SettingsSection
+        title="Field — how each turn glows"
+        hint="Brightness ranks each turn by output tokens; these knobs shape that ramp. Encodings stay honest — the tooltip always prints raw values."
+      >
+        <SliderRow
+          label="Point size"
+          value={a.pointSize}
+          min={0.4}
+          max={2.5}
+          step={0.05}
+          format={mult}
+          onChange={(v) => set("pointSize", v)}
+        />
+        <SliderRow
+          label="Glow contrast"
+          value={a.glowContrast}
+          min={1}
+          max={2.6}
+          step={0.05}
+          format={(v) => v.toFixed(2)}
+          onChange={(v) => set("glowContrast", v)}
+        />
+        <SliderRow
+          label="Mote floor"
+          value={a.moteFloor}
+          min={0}
+          max={0.5}
+          step={0.01}
+          format={pct}
+          onChange={(v) => set("moteFloor", v)}
+        />
+        <SliderRow
+          label="Glow strength"
+          value={a.glowStrength}
+          min={1.2}
+          max={3.2}
+          step={0.05}
+          format={(v) => v.toFixed(2)}
+          onChange={(v) => set("glowStrength", v)}
+        />
+        <SliderRow
+          label="Saturation floor"
+          value={a.saturation}
+          min={0.2}
+          max={1}
+          step={0.01}
+          format={pct}
+          onChange={(v) => set("saturation", v)}
+        />
+      </SettingsSection>
+
+      <SettingsSection title="States — hover, selection, sub-agents, failures">
+        <SliderRow
+          label="Hover emphasis"
+          value={a.hoverEmphasis}
+          min={1}
+          max={3}
+          step={0.05}
+          format={mult}
+          onChange={(v) => set("hoverEmphasis", v)}
+        />
+        <SliderRow
+          label="Selection emphasis"
+          value={a.selectEmphasis}
+          min={1}
+          max={3.5}
+          step={0.05}
+          format={mult}
+          onChange={(v) => set("selectEmphasis", v)}
+        />
+        <SliderRow
+          label="Sub-agent opacity"
+          value={a.subAgentOpacity}
+          min={0.2}
+          max={1}
+          step={0.01}
+          format={pct}
+          onChange={(v) => set("subAgentOpacity", v)}
+        />
+        <ToggleRow
+          label="Mark failures red"
+          checked={a.markFailures}
+          onChange={(v) => set("markFailures", v)}
+        />
+        <SliderRow
+          label="Failure glow floor"
+          value={a.failureGlow}
+          min={0.5}
+          max={1}
+          step={0.01}
+          format={pct}
+          onChange={(v) => set("failureGlow", v)}
+        />
+        <SliderRow
+          label="Dimmed opacity"
+          value={a.dimmedOpacity}
+          min={0.02}
+          max={0.6}
+          step={0.01}
+          format={pct}
+          onChange={(v) => set("dimmedOpacity", v)}
+        />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Trails — the turn-order path"
+        hint="The whole path sits near-subliminal; the run around the turn you point at lights up."
+      >
+        <ToggleRow
+          label="Show trails"
+          checked={a.showTrails}
+          onChange={(v) => set("showTrails", v)}
+        />
+        <SliderRow
+          label="Ambient opacity"
+          value={a.trailOpacity}
+          min={0}
+          max={0.15}
+          step={0.002}
+          format={(v) => `${(v * 100).toFixed(1)}%`}
+          onChange={(v) => set("trailOpacity", v)}
+        />
+        <SliderRow
+          label="Focus opacity"
+          value={a.trailFocusOpacity}
+          min={0.1}
+          max={1}
+          step={0.01}
+          format={pct}
+          onChange={(v) => set("trailFocusOpacity", v)}
+        />
+        <SliderRow
+          label="Focus span"
+          value={a.trailFocusSpan}
+          min={2}
+          max={40}
+          step={1}
+          format={(v) => `±${Math.round(v)} turns`}
+          onChange={(v) => set("trailFocusSpan", v)}
+        />
+        <SliderRow
+          label="Ribbon width"
+          value={a.trailWidth}
+          min={0.0006}
+          max={0.006}
+          step={0.0002}
+          format={(v) => v.toFixed(4)}
+          onChange={(v) => set("trailWidth", v)}
+        />
+      </SettingsSection>
+
+      <SettingsSection title="Scaffold — frame, grid, labels">
+        <ToggleRow
+          label="Show frame & grid"
+          checked={a.showFrame}
+          onChange={(v) => set("showFrame", v)}
+        />
+        <SliderRow
+          label="Frame opacity"
+          value={a.frameOpacity}
+          min={0}
+          max={1}
+          step={0.01}
+          format={pct}
+          onChange={(v) => set("frameOpacity", v)}
+        />
+        <ColorRow label="Frame color" value={a.frameColor} onChange={(v) => set("frameColor", v)} />
+        <ToggleRow
+          label="Drop-lines on hover"
+          checked={a.showProbe}
+          onChange={(v) => set("showProbe", v)}
+        />
+        <ToggleRow
+          label="Axis tick labels"
+          checked={a.showLabels}
+          onChange={(v) => set("showLabels", v)}
+        />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Axes — spacing only"
+        hint="Eased axes use an asinh curve so quiet turns aren't crushed against the wall. Every mode stays monotone and exactly invertible — tick labels and tooltips read true values; only the spacing changes."
+      >
+        <SelectRow
+          label="Time (X)"
+          value={a.axisTime}
+          options={AXIS_MODES}
+          onChange={(v) => set("axisTime", v as SessionsAxisMode)}
+        />
+        <SelectRow
+          label="Context (Y)"
+          value={a.axisContext}
+          options={AXIS_MODES}
+          onChange={(v) => set("axisContext", v as SessionsAxisMode)}
+        />
+        <SelectRow
+          label="New context (Z)"
+          value={a.axisNewContext}
+          options={AXIS_MODES}
+          onChange={(v) => set("axisNewContext", v as SessionsAxisMode)}
+        />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Colours — category hues"
+        hint="Drive the legend, the inspector and the field from one place, so a chip and a node can never disagree."
+      >
+        {CATEGORY_ORDER.map((c) => (
+          <ColorRow
+            key={c}
+            label={CATEGORY_LABEL[c]}
+            value={a.categoryColors[c]}
+            onChange={(v) => set("categoryColors", { ...a.categoryColors, [c]: v })}
+          />
+        ))}
+        <ColorRow
+          label="Neutral (quiet turns)"
+          value={a.neutralColor}
+          onChange={(v) => set("neutralColor", v)}
+        />
+        <ColorRow
+          label="Failure red"
+          value={a.errorColor}
+          onChange={(v) => set("errorColor", v)}
+        />
+      </SettingsSection>
+
+      <div class="settings-actions">
+        <button
+          type="button"
+          class="btn-ghost"
+          onClick={() => appStore.getState().resetSessionsAppearance()}
+        >
+          Reset Sessions appearance to defaults
+        </button>
+      </div>
     </>
   );
 }
@@ -888,7 +1158,6 @@ function SessionsTab() {
 // ── Data ───────────────────────────────────────────────────────────────────
 
 function DataTab() {
-  const caps = $capabilities.value;
   return (
     <SettingsSection
       title="Dataset & view"
@@ -916,13 +1185,9 @@ function DataTab() {
           {
             value: "compare",
             label: "Compare",
-            disabled: caps?.tier !== "webgpu" || !$compareData.value,
-            hint:
-              caps?.tier !== "webgpu"
-                ? "webgpu only"
-                : !$compareData.value
-                  ? "run `nebulai compare`"
-                  : undefined,
+            // no tier gate — see the same list in Sidebar.tsx
+            disabled: !$compareData.value,
+            hint: !$compareData.value ? "run `nebulai compare`" : undefined,
           },
         ]}
         onChange={(v) => requestViewMode(v as ViewMode)}

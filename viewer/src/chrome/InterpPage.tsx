@@ -190,6 +190,11 @@ export function InterpPage() {
       const sz = sizeNow();
       d.resize(sz.w, sz.h, dprOf());
       driverRef.current = d;
+      // e2e + debugging handle, matching main.ts's __driver/__compareDriver.
+      // Earns its keep on the static views: they render on demand, so a
+      // measurement script has no other way to force a fresh frame — and a
+      // WebGPU surface read without one comes back empty.
+      (window as unknown as { __interpDriver?: unknown }).__interpDriver = d;
       phase.value = "data";
       // record which bundle files this load actually reads, so the legend's
       // download button can offer exactly the view's source data (1d)
@@ -568,7 +573,13 @@ export function InterpPage() {
               : "Interpretability chart"
           }
         >
-          <canvas ref={canvasRef} class="interp-canvas" />
+          {/* Keyed by feature so every driver switch gets a FRESH canvas. A
+              canvas element binds one context type for its whole lifetime, so
+              once a three/webgpu driver has taken this element no deck.gl
+              driver can ever get a WebGL context on it again (and vice versa)
+              — the switch just silently draws nothing. Keying is cheap here:
+              25 features, and only a human switching between them. */}
+          <canvas key={interp.featureId} ref={canvasRef} class="interp-canvas" />
           <div ref={overlayRef} class="interp-overlay" />
         </div>
 

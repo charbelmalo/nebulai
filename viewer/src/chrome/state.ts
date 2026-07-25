@@ -22,6 +22,7 @@ import {
   type ViewMode,
 } from "../app/store";
 import type { Capabilities } from "../app/capabilities";
+import type { CompareTourState } from "../app/actions";
 import type { CompareData } from "../data/compare";
 import type { Dataset } from "../data/loader";
 import type { DatasetEntry } from "../data/schema";
@@ -51,6 +52,13 @@ export const $interpSelection = signal<InterpSelection | null>(s.interpSelection
 export const $tour = signal<TourRef | null>(s.tour);
 export const $compareData = signal<CompareData | null>(s.compareData);
 export const $compare = signal<CompareUI>(s.compare);
+
+/** The one signal here that does NOT mirror a store slice: the compare layout
+ *  tour lives on a GPU uniform inside the driver, and main.ts pumps it here as
+ *  the driver reports. Putting it in the store would mean a write per frame and
+ *  would break "chrome writes the store; the driver only reads". null = the
+ *  compare driver hasn't been built yet. */
+export const $compareTour = signal<CompareTourState | null>(null);
 
 appStore.subscribe((st) => {
   if (st.capabilities !== $capabilities.value) $capabilities.value = st.capabilities;

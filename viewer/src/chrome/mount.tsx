@@ -4,7 +4,7 @@
 import { effect } from "@preact/signals";
 import { render } from "preact";
 import { Sidebar } from "./Sidebar";
-import { ComparePanel } from "./ComparePanel";
+import { ComparePanel, CompareTransport } from "./ComparePanel";
 import { GuidePage } from "./GuidePage";
 import { InterpPage } from "./InterpPage";
 import { LegendCard } from "./LegendCard";
@@ -33,6 +33,7 @@ function Chrome() {
       <TopBar />
       {onMap && <Sidebar />}
       {onMap && ($viewMode.value === "compare" ? <ComparePanel /> : <LegendCard />)}
+      {onMap && $viewMode.value === "compare" && <CompareTransport />}
       {onMap && $viewMode.value === "atlas" && <SearchPanel />}
       {page === "snapshot" && <SnapshotMap />}
       {page === "interp" && <InterpPage />}

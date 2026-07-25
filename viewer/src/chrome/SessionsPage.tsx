@@ -19,13 +19,14 @@ import {
   type SessionAnalysis,
   type ToolCategory,
 } from "./sessionlog";
-import { SessionFieldDriver, CATEGORY_CSS } from "../scene/sessions/SessionFieldDriver";
+import { SessionFieldDriver, type PlaybackState } from "../scene/sessions/SessionFieldDriver";
+import { categoryColor } from "../scene/sessions/appearance";
 import {
   deleteSessionAnalysis,
   loadAllSessionAnalyses,
   saveSessionAnalysis,
 } from "./sessionStore";
-import { $sessions } from "./state";
+import { $appearance, $sessions, $settings } from "./state";
 
 /** Pinned turn = the node last clicked in the plot. Page-level (not persisted):
  *  the inspector, the plot highlight, and keyboard nav all read/write it. */
@@ -36,6 +37,12 @@ const $dimmedCats = signal<ToolCategory[]>([]);
  *  driver knows — a mild spread stays linear — and the legend must not claim a
  *  compression that didn't happen. */
 const $easedAxes = signal<string[]>([]);
+/** The live driver, published so the transport (a sibling of the plot) can drive
+ *  it. Null until the GPU init resolves / after teardown. */
+const $driver = signal<SessionFieldDriver | null>(null);
+/** Latest timeline-transport snapshot, emitted by the driver as the sweep
+ *  advances. Drives the play/pause button, scrubber, and time readout. */
+const $playback = signal<PlaybackState | null>(null);
 
 const CATEGORY_HELP: Record<ToolCategory, string> = {
   orient: "read / search / fetch",
@@ -84,6 +91,7 @@ export function SessionsPage() {
           <SessionPlot analyses={active} />
           <SessionsLegend />
           <TurnInspector analyses={active} />
+          {active.length > 0 && <SessionTransport />}
           {active.length === 0 && (
             <div class="sessions-empty">
               <h2>Plot an agent session</h2>
@@ -123,6 +131,9 @@ function SessionPlot(props: { analyses: SessionAnalysis[] }) {
     driver.onSelect = (sel) => {
       $pinned.value = sel;
     };
+    driver.onPlayback = (s) => {
+      $playback.value = s;
+    };
     driver
       .init(canvas, overlay)
       .then(() => {
@@ -131,7 +142,9 @@ function SessionPlot(props: { analyses: SessionAnalysis[] }) {
           return;
         }
         driverRef.current = driver;
+        $driver.value = driver;
         window.__sessionDriver = driver; // e2e + debugging handle, as with __driver
+        driver.setReducedMotion(appStore.getState().settings.reducedMotion);
         const r = host.getBoundingClientRect();
         driver.resize(r.width, r.height, window.devicePixelRatio || 1);
         ready.value = true;
@@ -149,6 +162,8 @@ function SessionPlot(props: { analyses: SessionAnalysis[] }) {
       ro.disconnect();
       driverRef.current?.dispose();
       driverRef.current = null;
+      $driver.value = null;
+      $playback.value = null;
       delete window.__sessionDriver;
     };
   }, []);
@@ -179,6 +194,33 @@ function SessionPlot(props: { analyses: SessionAnalysis[] }) {
     if (ready.value) driverRef.current?.setCategoryFilter(dimmed);
   }, [dimmed, ready.value]);
 
+  // live appearance — Settings › Appearance › Sessions. Most knobs are uniforms
+  // (no rebuild); an axis-mode change reshapes the field, so recompute which
+  // axes ended up eased for the legend's honesty note.
+  const appearance = $appearance.value.sessions;
+  useEffect(() => {
+    const d = driverRef.current;
+    if (!ready.value || !d) return;
+    d.setAppearance(appearance);
+    const desc = d.describe();
+    $easedAxes.value = (["x", "y", "z"] as const)
+      .filter((ax) => desc.curved[ax])
+      .map((ax) => ({ x: "time", y: "context", z: "new-context" })[ax]);
+  }, [appearance, ready.value]);
+
+  // global Settings › bloom toggle (webgpu rung only)
+  const bloom = $settings.value.bloom;
+  useEffect(() => {
+    if (ready.value) driverRef.current?.setBloom(bloom);
+  }, [bloom, ready.value]);
+
+  // global Settings › reduced motion — kills the wavefront flare (the reveal
+  // itself still plays, just without the pulse)
+  const reducedMotion = $settings.value.reducedMotion;
+  useEffect(() => {
+    if (ready.value) driverRef.current?.setReducedMotion(reducedMotion);
+  }, [reducedMotion, ready.value]);
+
   return (
     // req 10 — keyboard focus + ARIA readout for the 3-D GPU plot. The host is
     // the tab stop (no per-node DOM); exact turn values are announced by the
@@ -187,11 +229,18 @@ function SessionPlot(props: { analyses: SessionAnalysis[] }) {
       class="sessions-canvas-host"
       tabIndex={0}
       role="img"
+      onKeyDown={(e) => {
+        // Space toggles the timeline (video-player convention); don't scroll
+        if ((e.key === " " || e.key === "Spacebar") && props.analyses.length > 0) {
+          e.preventDefault();
+          driverRef.current?.togglePlay();
+        }
+      }}
       aria-label={
         props.analyses.length
           ? `3-D session trajectory plot: ${props.analyses.length} session${
               props.analyses.length === 1 ? "" : "s"
-            }. Each turn is placed by wall-clock time, context size, and new context this turn. Hover a node for exact values.`
+            }. Each turn is placed by wall-clock time, context size, and new context this turn. Hover a node for exact values. Press space to play the session as a timeline.`
           : "3-D session trajectory plot (no sessions loaded)"
       }
     >
@@ -322,6 +371,7 @@ function SessionsSide(props: { dragOver: boolean; setDragOver: (v: boolean) => v
 function SessionsLegend() {
   const dimmed = $dimmedCats.value;
   const eased = $easedAxes.value;
+  const cfg = $appearance.value.sessions;
   return (
     <div class="sessions-legend">
       <div class="sessions-legend-title">
@@ -345,7 +395,7 @@ function SessionsLegend() {
               >
                 <span
                   class="sessions-key-dot"
-                  style={{ background: CATEGORY_CSS[c] }}
+                  style={{ background: categoryColor(cfg, c) }}
                 />
                 <span class="sessions-key-label">{c}</span>
                 <span class="sessions-key-help">{CATEGORY_HELP[c]}</span>
@@ -370,6 +420,77 @@ function SessionsLegend() {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── timeline transport — play the session start→finish ─────────────────────
+
+function SessionTransport() {
+  const d = $driver.value;
+  const pb = $playback.value;
+  if (!d || !pb || !pb.hasData) return null;
+  return (
+    <div class="transport sessions-transport" role="group" aria-label="Session timeline playback">
+      <button
+        type="button"
+        class="tp-btn tp-play"
+        // at rest playhead is parked at the end, and play() restarts from the top,
+        // so a plain play glyph reads truer than a replay one
+        aria-label={pb.playing ? "Pause timeline" : "Play timeline from start"}
+        onClick={() => d.togglePlay()}
+      >
+        {pb.playing ? "⏸" : "▶"}
+      </button>
+      <button
+        type="button"
+        class="tp-btn"
+        aria-label="Restart from beginning"
+        title="Restart"
+        onClick={() => d.restart()}
+      >
+        ↺
+      </button>
+      <input
+        class="tp-scrub"
+        type="range"
+        min={0}
+        max={1}
+        step={0.001}
+        value={pb.playhead}
+        aria-label="Timeline position"
+        aria-valuetext={`${fmtSpan(pb.tSec)} of ${fmtSpan(pb.totalSec)}, ${pb.revealed} of ${pb.total} turns`}
+        // dragging the scrubber pauses, then seeks — so it never fights the sweep
+        onInput={(e) => {
+          const v = Number((e.currentTarget as HTMLInputElement).value);
+          d.pause();
+          d.seek(v);
+        }}
+        style={{
+          "--tp-progress": `${(pb.playhead * 100).toFixed(1)}%`,
+        }}
+      />
+      <span class="tp-time" aria-hidden="true">
+        <span class="tp-now">{fmtSpan(pb.tSec)}</span>
+        <span class="tp-sep">/</span>
+        <span class="tp-total">{fmtSpan(pb.totalSec)}</span>
+      </span>
+      <span class="tp-count" title="turns revealed by the wavefront">
+        {pb.revealed}
+        <i>/{pb.total}</i>
+      </span>
+      <label class="tp-speed">
+        <span class="visually-hidden">Playback speed</span>
+        <select
+          value={String(pb.speed)}
+          onChange={(e) => d.setSpeed(Number((e.currentTarget as HTMLSelectElement).value))}
+        >
+          <option value="0.5">0.5×</option>
+          <option value="1">1×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+        </select>
+      </label>
     </div>
   );
 }
@@ -401,6 +522,7 @@ function TurnInspector(props: { analyses: SessionAnalysis[] }) {
   if (!pin || !a || !t) return null;
 
   const files = [...new Set(t.files)];
+  const cfg = $appearance.value.sessions;
   return (
     <div class="sessions-inspect" role="dialog" aria-label={`Response ${t.index + 1} of ${a.name}`}>
       <div class="sessions-inspect-head">
@@ -444,7 +566,7 @@ function TurnInspector(props: { analyses: SessionAnalysis[] }) {
       <div class="sessions-inspect-cat">
         <span
           class="sessions-key-dot"
-          style={{ background: CATEGORY_CSS[t.category] }}
+          style={{ background: categoryColor(cfg, t.category) }}
         />
         {t.category}
         <span class="sessions-inspect-cathelp">{CATEGORY_HELP[t.category]}</span>

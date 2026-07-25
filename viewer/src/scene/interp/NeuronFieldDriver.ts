@@ -3,7 +3,7 @@
  *  mlp.c_proj that the neuron adds to the residual stream (scaled by its
  *  activation). Nothing is a synthetic layout: positions are real PC scores of
  *  the mean-centered write-direction matrix, dot size is the real ‖w_out‖₂, and
- *  color is the neuron's layer (viridis ramp, luminance strictly ↑ with depth).
+ *  color is the neuron's layer (viridis ramp).
  *
  *  Each neuron also carries its direct-path logit readout — the token its write
  *  direction most promotes and most suppresses through the model's own final-LN
@@ -13,26 +13,35 @@
  *  monotonically with depth (≈2.2 → 5.2 — late layers write hardest), and
  *  PC1+PC2 explain only ~3.3% of variance — a low-D shadow of a 768-D space.
  *
- *  deck.gl (WebGL2), camera off, static (redraws on hover / layer isolate).
+ *  RENDERING: three/webgpu + TSL emissive field (`field2d.ts`), not a deck.gl
+ *  scatter. 36,864 hard-edged discs overplot into one flat silhouette, so the
+ *  density structure — which is most of what a field this size has to say — was
+ *  being discarded before it reached the screen. Additive soft sprites let
+ *  overlap sum, so crowded regions read bright and sparse ones dark.
+ *
+ *  WHAT CHANGED IN THE ENCODING, stated plainly because it matters: brightness
+ *  used to be a pure function of layer (viridis luminance rises with depth, so
+ *  "brighter = deeper" was readable). It no longer is. Brightness now carries
+ *  the RANK of ‖w_out‖₂, and layer is carried by HUE — which viridis varies
+ *  independently of luminance (blue → teal → green → yellow), so the two
+ *  channels stay separable and hover always gives the exact layer. Size is
+ *  still linear in the real norm; rank is monotone in the same quantity, so the
+ *  two norm channels can never disagree about which neuron writes harder.
+ *  Rank rather than magnitude because the norm distribution is long-tailed.
+ *
+ *  Draw order no longer needs the deterministic shuffle the deck.gl version
+ *  used to defeat layer-on-top-of-layer painting: addition is commutative, so
+ *  an additive field has no painter's-order bias to correct.
+ *
+ *  Camera off, static (redraws on hover / layer isolate).
  *  Source: neurons.json — PCA computed offline in float64 (768×768 covariance
  *  eigendecomposition), readout in float32 through the tied W_E. */
 
-import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
 import { type NeuronsBundle, loadNeurons } from "../../data/interp";
-import {
-  ACCENT,
-  crosshair,
-  MARKER_HOT,
-  markerPoly,
-  type Seg as ThemeSeg,
-  type Vec2,
-  withAlpha,
-} from "./chart-theme";
+import { EmissiveField2D, FieldMarker, rankNormalize, type Field2DLook } from "./field2d";
 import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
-
-type LayersModule = typeof import("@deck.gl/layers");
 
 const GL = 60; // px gutters (axis captions clear of the data)
 const GR = 60;
@@ -41,8 +50,9 @@ const GB = 88; // extra room for the layer-isolate chip row
 const FIT = 0.94;
 
 /** Viridis sampled at t = 0.25 + 0.75·L/11 (low end clipped so layer 0 stays
- *  legible on the dark stage). Luminance is strictly increasing with layer, so
- *  "brighter = deeper" reads truthfully; hover always gives the exact layer. */
+ *  legible on the dark stage). HUE advances monotonically with layer — that is
+ *  the channel the reader uses now that brightness carries the write norm (see
+ *  the header); hover always gives the exact layer. */
 export const LAYER_COLORS: [number, number, number][] = [
   [59, 82, 138],
   [51, 100, 141],
@@ -57,10 +67,52 @@ export const LAYER_COLORS: [number, number, number][] = [
   [209, 226, 38],
   [253, 231, 37],
 ];
-const DIM_RGBA: [number, number, number, number] = [118, 126, 158, 22];
+
+/** Tuned by measurement against the DENSEST state — all 12 layers on, where PC1
+ *  and PC2 carry 2.4% and 0.9% of the variance, so 36864 neurons pile into one
+ *  small blob at the origin and only a handful of outliers escape it.
+ *
+ *  That density is why this view needs a far WEAKER bloom than the embedding
+ *  constellation next door (strength 0.14/radius 0.08 here vs 0.45/0.32 there),
+ *  and why raising the threshold — the lever that fixed the embedding view —
+ *  does almost nothing here: the additive core sums well past 4.0 in linear
+ *  space, so it clears any threshold worth setting. Strength and radius are the
+ *  only honest levers left, and the thing they have to protect is FILL, not
+ *  extent: measured against a bloom-off frame, bloom barely moves the p95 radius
+ *  of lit pixels (56 px vs 58 px — the outlier neurons genuinely reach that far)
+ *  but it multiplies the count of lit pixels 12×, from 623 to 7470. In a field
+ *  where brightness IS density, glow poured into the gap between the core and
+ *  those outliers reads as neurons that are not there.
+ *
+ *  Measured on the all-layers state (fraction of lit pixels, max channel >0.12):
+ *  before, lit 65.8% / mean L 0.273 / 9.5% blown — a fog with no structure.
+ *  After, lit 12.2% / L 0.060 / 5.6% blown, and only 1.3% of lit pixels fall
+ *  below 0.15 saturation, i.e. the viridis layer hue survives essentially
+ *  everywhere except the true core. */
+const LOOK: Field2DLook = {
+  pointPx: 1.8,
+  emissiveMin: 0.14,
+  emissiveMax: 1.5,
+  glowGamma: 2.2,
+  moteFloor: 0.12,
+  // isolate mode: the other 11 layers stay as faint context rather than
+  // disappearing — a view that deletes its non-selected mass is lying about how
+  // much of it there is. Far lower than it looks: 33792 dimmed points ADD, so
+  // the background's brightness is its density and the level has to be set
+  // against the sum, not against one point. At 0.03 the residue still out-summed
+  // the 3072 isolated ones and the core stayed the all-layers yellow; at 0.012
+  // the mean lit pixel measures (78,102,64) with L3 isolated — the layer's own
+  // viridis green — while the context cloud is still plainly visible.
+  dimLevel: 0.012,
+  bloom: { strength: 0.14, radius: 0.08, threshold: 2.0 },
+};
+
+/** Global brightness while a neuron is focused. */
+const HOVER_DIM = 0.42;
 
 interface NeuronPt {
-  position: [number, number];
+  x: number;
+  y: number;
   z: number; // PC3 (hover only)
   norm: number; // exact ‖w_out‖₂
   layer: number;
@@ -74,25 +126,17 @@ interface NeuronPt {
 
 export class NeuronFieldDriver implements InterpDriver {
   readonly animated = false;
-  private deck: Deck<OrthographicView[]> | null = null;
-  private layersMod!: LayersModule;
+  private field = new EmissiveField2D(LOOK);
   private canvas!: HTMLCanvasElement;
   private tooltip!: InterpTooltip;
+  private marker!: FieldMarker;
   private labelRoot!: HTMLElement;
   private chipRoot!: HTMLElement;
 
   private bundle: NeuronsBundle | null = null;
   private pts: NeuronPt[] = [];
-  /** draw-order copy, deterministically shuffled — in layer order L11 would
-   *  always paint over L0..L10 in dense regions, a systematic z-order bias. */
-  private drawPts: NeuronPt[] = [];
-  private byLayer: NeuronPt[][] = [];
   private anchors: NeuronPt[] = [];
   private isolate: number | null = null; // layer to isolate, null = all
-  /** cached complement of the isolated layer — recomputed only on isolate
-   *  change, so hover-driven pushLayers reuses stable data refs (deck skips
-   *  attribute regeneration when the array identity is unchanged). */
-  private dimPts: NeuronPt[] = [];
   private minX = 0;
   private maxX = 1;
   private minY = 0;
@@ -103,25 +147,14 @@ export class NeuronFieldDriver implements InterpDriver {
 
   private cssW = 1;
   private cssH = 1;
-  private dpr = 1;
   private disposers: Array<() => void> = [];
 
-  async init(canvas: HTMLCanvasElement, _tier: GpuTier, overlay: HTMLElement): Promise<void> {
+  async init(canvas: HTMLCanvasElement, tier: GpuTier, overlay: HTMLElement): Promise<void> {
     this.canvas = canvas;
-    const [core, layers] = await Promise.all([import("@deck.gl/core"), import("@deck.gl/layers")]);
-    this.layersMod = layers;
-    this.deck = new core.Deck({
-      canvas,
-      views: [new core.OrthographicView({ id: "ortho", flipY: false })],
-      viewState: this.viewState(),
-      controller: false,
-      useDevicePixels: Math.min(this.dpr, 2),
-      layers: [],
-      width: this.cssW,
-      height: this.cssH,
-    }) as unknown as Deck<OrthographicView[]>;
+    await this.field.init(canvas, tier);
 
     this.tooltip = new InterpTooltip(overlay);
+    this.marker = new FieldMarker(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-neuron-labels";
     overlay.appendChild(this.labelRoot);
@@ -146,7 +179,6 @@ export class NeuronFieldDriver implements InterpDriver {
     const dMlp = b.meta.d_mlp;
     const c = b.coords;
     const pts: NeuronPt[] = new Array(n);
-    const byLayer: NeuronPt[][] = Array.from({ length: b.meta.n_layer }, () => []);
     let minX = Infinity;
     let maxX = -Infinity;
     let minY = Infinity;
@@ -157,12 +189,12 @@ export class NeuronFieldDriver implements InterpDriver {
       const x = c[i * 2] ?? 0;
       const y = c[i * 2 + 1] ?? 0;
       const nm = b.norm[i] ?? 0;
-      const layer = Math.floor(i / dMlp);
-      const p: NeuronPt = {
-        position: [x, y],
+      pts[i] = {
+        x,
+        y,
         z: b.z[i] ?? 0,
         norm: nm,
-        layer,
+        layer: Math.floor(i / dMlp),
         idx: i % dMlp,
         topTok: b.top_tok[i] ?? "",
         topVal: b.top_val[i] ?? 0,
@@ -170,8 +202,6 @@ export class NeuronFieldDriver implements InterpDriver {
         botVal: b.bot_val[i] ?? 0,
         id: i,
       };
-      pts[i] = p;
-      byLayer[layer]?.push(p);
       if (x < minX) minX = x;
       if (x > maxX) maxX = x;
       if (y < minY) minY = y;
@@ -180,8 +210,6 @@ export class NeuronFieldDriver implements InterpDriver {
       if (nm > nmax) nmax = nm;
     }
     this.pts = pts;
-    this.drawPts = shuffled(pts);
-    this.byLayer = byLayer;
     this.minX = minX;
     this.maxX = maxX;
     this.minY = minY;
@@ -190,7 +218,8 @@ export class NeuronFieldDriver implements InterpDriver {
     this.normMax = nmax;
     this.hover = null;
     this.isolate = null;
-    this.dimPts = [];
+    this.marker.hide();
+    this.field.setDim(1);
 
     // landmarks: the REAL extremes only (PC1/PC2 range ends + max write norm),
     // each labelled with its layer and the token its direction most promotes.
@@ -202,10 +231,10 @@ export class NeuronFieldDriver implements InterpDriver {
         return best;
       };
       for (const p of [
-        extreme((p) => p.position[0], +1),
-        extreme((p) => p.position[0], -1),
-        extreme((p) => p.position[1], +1),
-        extreme((p) => p.position[1], -1),
+        extreme((p) => p.x, +1),
+        extreme((p) => p.x, -1),
+        extreme((p) => p.y, +1),
+        extreme((p) => p.y, -1),
         extreme((p) => p.norm, +1),
       ]) {
         set.set(p.id, p);
@@ -214,8 +243,9 @@ export class NeuronFieldDriver implements InterpDriver {
     this.anchors = [...set.values()];
 
     this.buildChips();
-    this.deck?.setProps({ viewState: this.viewState() });
-    this.pushLayers();
+    this.pushField();
+    this.field.fitInset(minX, minY, maxX, maxY, this.inset(), FIT);
+    this.field.render();
     this.positionLabels();
   }
 
@@ -229,85 +259,51 @@ export class NeuronFieldDriver implements InterpDriver {
     return LAYER_COLORS[p.layer] ?? [205, 210, 224];
   }
 
-  private pushLayers(): void {
-    if (!this.deck || !this.pts.length) return;
-    const { ScatterplotLayer, LineLayer, SolidPolygonLayer } = this.layersMod;
-    const active = this.isolate === null ? this.drawPts : (this.byLayer[this.isolate] ?? []);
-    const dimmed = this.dimPts;
+  private inset() {
+    return { left: GL, right: GR, top: GT, bottom: GB };
+  }
 
-    // markers/crosshair live in world (PC) space, so pixel-authored sizes are
-    // scaled by world-units-per-pixel (mirrors the WeightSpectrum template).
-    const wpp = 1 / this.zoomPx();
-    const bounds = { x0: this.minX, y0: this.minY, x1: this.maxX, y1: this.maxY };
-    // crosshair guides snap onto the hovered neuron (req 4)
-    const cross: ThemeSeg[] = this.hover
-      ? crosshair(this.hover.position[0], this.hover.position[1], bounds, 3 * wpp, 4 * wpp)
-      : [];
-    // hover LED diamond (translucent glow under a full-alpha core) replaces the
-    // old white outline ring (req 4)
-    interface Marker {
-      poly: Vec2[];
-      color: [number, number, number, number];
+  /** Upload the field once per dataset. Unlike the deck.gl version there is no
+   *  per-hover or per-isolate layer rebuild: isolate flips one float per point
+   *  (`setActive`) and hover only moves DOM chrome, so 36k attributes are built
+   *  exactly once. */
+  private pushField(): void {
+    const n = this.pts.length;
+    if (!n) return;
+    const pos = new Float32Array(n * 2);
+    const color = new Float32Array(n * 3);
+    const radius = new Float32Array(n);
+    const norms = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const p = this.pts[i] as NeuronPt;
+      pos[i * 2] = p.x;
+      pos[i * 2 + 1] = p.y;
+      const [r, g, b] = this.colorOf(p);
+      color[i * 3] = r / 255;
+      color[i * 3 + 1] = g / 255;
+      color[i * 3 + 2] = b / 255;
+      radius[i] = this.radiusOf(p.norm);
+      norms[i] = p.norm;
     }
-    const mr = this.hover ? (this.radiusOf(this.hover.norm) + 2) * wpp : 0;
-    const marks: Marker[] = this.hover
-      ? [
-          {
-            poly: markerPoly(this.hover.position[0], this.hover.position[1], mr * 2.1),
-            color: withAlpha(MARKER_HOT, 0.22),
-          },
-          {
-            poly: markerPoly(this.hover.position[0], this.hover.position[1], mr),
-            color: withAlpha(MARKER_HOT, 1),
-          },
-        ]
-      : [];
+    this.field.setData({ count: n, pos, color, rank: rankNormalize(norms), radius });
+    this.applyIsolate();
+  }
 
-    this.deck.setProps({
-      layers: [
-        // isolate mode: the other 11 layers stay as faint context, unpickable
-        new ScatterplotLayer<NeuronPt>({
-          id: "neuron-dim",
-          data: dimmed,
-          getPosition: (p) => [p.position[0], p.position[1], 0],
-          getFillColor: DIM_RGBA,
-          getRadius: (p) => this.radiusOf(p.norm),
-          radiusUnits: "pixels",
-          pickable: false,
-        }),
-        new ScatterplotLayer<NeuronPt>({
-          id: "neuron-active",
-          data: active,
-          // the field dims to defer to the focused marker on hover (req 3)
-          opacity: this.hover ? 0.38 : 1,
-          getPosition: (p) => [p.position[0], p.position[1], 0],
-          getFillColor: (p) => {
-            const [r, g, bl] = this.colorOf(p);
-            return [r, g, bl, 150];
-          },
-          getRadius: (p) => this.radiusOf(p.norm),
-          radiusUnits: "pixels",
-          pickable: true,
-        }),
-        new LineLayer<ThemeSeg>({
-          id: "neuron-crosshair",
-          data: cross,
-          getSourcePosition: (e) => [e.source[0], e.source[1], 0],
-          getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: withAlpha(ACCENT, 0.5),
-          getWidth: 1,
-          widthUnits: "pixels",
-          pickable: false,
-        }),
-        new SolidPolygonLayer<Marker>({
-          id: "neuron-marker",
-          data: marks,
-          getPolygon: (m) => m.poly,
-          getFillColor: (m) => m.color,
-          pickable: false,
-        }),
-      ],
-    });
+  private applyIsolate(): void {
+    if (this.isolate === null) {
+      this.field.setActive(null);
+      return;
+    }
+    const n = this.pts.length;
+    const active = new Float32Array(n);
+    for (let i = 0; i < n; i++) active[i] = (this.pts[i] as NeuronPt).layer === this.isolate ? 1 : 0;
+    this.field.setActive(active);
+  }
+
+  private dataBoxPx(): { x0: number; y0: number; x1: number; y1: number } {
+    const [x0, y1] = this.field.worldToScreen(this.minX, this.minY);
+    const [x1, y0] = this.field.worldToScreen(this.maxX, this.maxY);
+    return { x0, y0, x1, y1 };
   }
 
   private buildChips(): void {
@@ -326,63 +322,18 @@ export class NeuronFieldDriver implements InterpDriver {
       }
       btn.addEventListener("click", () => {
         this.isolate = this.isolate === layer ? null : layer;
-        this.dimPts =
-          this.isolate === null ? [] : this.drawPts.filter((p) => p.layer !== this.isolate);
         this.hover = null;
+        this.marker.hide();
         this.tooltip.hide();
+        this.field.setDim(1);
         this.buildChips();
-        this.pushLayers();
+        this.applyIsolate();
+        this.field.render();
       });
       this.chipRoot.appendChild(btn);
     };
     mk("all", null);
     for (let l = 0; l < this.bundle.meta.n_layer; l++) mk(`L${l}`, l);
-  }
-
-  // ---- isometric layout: equal px per PC unit so distances stay faithful -----
-  private availW(): number {
-    return Math.max(1, this.cssW - GL - GR);
-  }
-  private availH(): number {
-    return Math.max(1, this.cssH - GT - GB);
-  }
-  private spanX(): number {
-    return Math.max(1e-3, this.maxX - this.minX);
-  }
-  private spanY(): number {
-    return Math.max(1e-3, this.maxY - this.minY);
-  }
-  private zoomPx(): number {
-    return Math.max(1, Math.min(this.availW() / this.spanX(), this.availH() / this.spanY()) * FIT);
-  }
-  private dataCX(): number {
-    return (this.minX + this.maxX) / 2;
-  }
-  private dataCY(): number {
-    return (this.minY + this.maxY) / 2;
-  }
-  private drawCX(): number {
-    return GL + this.availW() / 2;
-  }
-  private drawCY(): number {
-    return GT + this.availH() / 2;
-  }
-  private worldToScreen(wx: number, wy: number): [number, number] {
-    const z = this.zoomPx();
-    return [this.drawCX() + (wx - this.dataCX()) * z, this.drawCY() - (wy - this.dataCY()) * z];
-  }
-  private viewState() {
-    const z = this.zoomPx();
-    return {
-      ortho: {
-        target: [
-          this.dataCX() + (this.cssW / 2 - this.drawCX()) / z,
-          this.dataCY() + (this.drawCY() - this.cssH / 2) / z,
-          0,
-        ] as [number, number, number],
-        zoom: Math.log2(z),
-      },
-    };
   }
 
   private positionLabels(): void {
@@ -392,26 +343,27 @@ export class NeuronFieldDriver implements InterpDriver {
     const pc1 = ((evr[0] ?? 0) * 100).toFixed(1);
     const pc2 = ((evr[1] ?? 0) * 100).toFixed(1);
 
-    const cap = (cls: string, text: string, sx: number, sy: number, color?: string) => {
+    const cap = (cls: string, text: string, sx: number, sy: number) => {
       const el = document.createElement("div");
       el.className = cls;
       el.textContent = text;
-      if (color) el.style.color = color;
       el.style.transform = `translate(${sx.toFixed(1)}px, ${sy.toFixed(1)}px)`;
       this.labelRoot.appendChild(el);
     };
     // PC1 caption at the bottom-right of the data bbox (right-mid would sit
     // under the top-right legend card); PC2 caption above the data top.
-    const [rx] = this.worldToScreen(this.maxX, this.dataCY());
-    const [, by] = this.worldToScreen(this.dataCX(), this.minY);
+    const dataCX = (this.minX + this.maxX) / 2;
+    const dataCY = (this.minY + this.maxY) / 2;
+    const [rx] = this.field.worldToScreen(this.maxX, dataCY);
+    const [, by] = this.field.worldToScreen(dataCX, this.minY);
     cap("interp-neuron-axis", `PC1 → · ${pc1}% var`, rx - 96, by + 14);
-    const [tx, ty] = this.worldToScreen(this.dataCX(), this.maxY);
+    const [tx, ty] = this.field.worldToScreen(dataCX, this.maxY);
     cap("interp-neuron-axis", `PC2 ↑ · ${pc2}% var`, tx + 8, ty + 2);
 
     // anchor labels: real extreme neurons, tinted by their layer's exact color.
     // Labels flip to the left of their point when they'd clip the right edge.
     for (const p of this.anchors) {
-      const [sx, sy] = this.worldToScreen(p.position[0], p.position[1]);
+      const [sx, sy] = this.field.worldToScreen(p.x, p.y);
       const [r, g, b] = this.colorOf(p);
       const el = document.createElement("div");
       el.className = "interp-neuron-anchor";
@@ -425,18 +377,27 @@ export class NeuronFieldDriver implements InterpDriver {
   }
 
   private onPointerMove(e: PointerEvent): void {
-    if (!this.deck) return;
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const info = this.deck.pickObject({ x, y, radius: 5, layerIds: ["neuron-active"] }) as
-      | PickingInfo
-      | null;
-    const p = (info?.object as NeuronPt | undefined) ?? null;
-    const changed = (p?.id ?? -1) !== (this.hover?.id ?? -1);
-    if (changed) {
+    let p: NeuronPt | null = null;
+    const hit = this.field.pickAt(x, y, 6);
+    if (hit >= 0) {
+      const cand = (this.pts[hit] as NeuronPt) ?? null;
+      // isolate mode dims the other layers but keeps them on screen as context;
+      // context is not pickable, exactly as the dim scatter layer wasn't
+      p = cand && (this.isolate === null || cand.layer === this.isolate) ? cand : null;
+    }
+    if ((p?.id ?? -1) !== (this.hover?.id ?? -1)) {
       this.hover = p;
-      this.pushLayers();
+      this.field.setDim(p ? HOVER_DIM : 1);
+      if (p) {
+        const [sx, sy] = this.field.worldToScreen(p.x, p.y);
+        this.marker.show(sx, sy, this.radiusOf(p.norm) + 2, this.dataBoxPx());
+      } else {
+        this.marker.hide();
+      }
+      this.field.render();
     }
     if (!p) {
       this.tooltip.hide();
@@ -447,7 +408,7 @@ export class NeuronFieldDriver implements InterpDriver {
     const rows: TipRow[] = [
       { kind: "label", text: `L${p.layer} · neuron ${p.idx}`, swatch: [lc[0], lc[1], lc[2]] },
       {
-        text: `PC1 ${p.position[0].toFixed(2)} · PC2 ${p.position[1].toFixed(2)} · PC3 ${p.z.toFixed(2)}`,
+        text: `PC1 ${p.x.toFixed(2)} · PC2 ${p.y.toFixed(2)} · PC3 ${p.z.toFixed(2)}`,
       },
       { text: "‖w_out‖₂", value: p.norm.toFixed(2), hot: true },
       { text: `promotes “${fmtTok(p.topTok)}” · Δlogit +${p.topVal.toFixed(2)}` },
@@ -461,7 +422,9 @@ export class NeuronFieldDriver implements InterpDriver {
   private onLeave(): void {
     if (this.hover) {
       this.hover = null;
-      this.pushLayers();
+      this.marker.hide();
+      this.field.setDim(1);
+      this.field.render();
     }
     this.tooltip.hide();
     this.canvas.style.cursor = "";
@@ -474,13 +437,14 @@ export class NeuronFieldDriver implements InterpDriver {
   resize(width: number, height: number, dpr: number): void {
     this.cssW = width;
     this.cssH = height;
-    this.dpr = dpr;
-    this.deck?.setProps({
-      width,
-      height,
-      useDevicePixels: Math.min(dpr, 2),
-      viewState: this.viewState(),
-    });
+    this.field.resize(width, height, dpr); // re-applies the stored fit itself
+    // the marker and tooltip are anchored in screen px, so a resize invalidates
+    // both — drop the hover rather than leave chrome pointing at nothing
+    this.hover = null;
+    this.marker.hide();
+    this.tooltip.hide();
+    this.field.setDim(1);
+    this.field.render();
     this.positionLabels();
   }
 
@@ -488,34 +452,13 @@ export class NeuronFieldDriver implements InterpDriver {
     for (const d of this.disposers) d();
     this.disposers = [];
     this.tooltip?.dispose();
+    this.marker?.dispose();
     this.labelRoot?.remove();
     this.chipRoot?.remove();
-    this.deck?.finalize();
-    this.deck = null;
+    this.field.dispose();
   }
 }
 
 function fmtTok(s: string): string {
   return s.replace(/^ /, "␣").replace(/\n/g, "⏎") || "∅";
-}
-
-/** Deterministic Fisher–Yates (mulberry32) — same order every load, but no
- *  systematic layer-on-top-of-layer painting in overplotted regions. */
-function shuffled<T>(arr: T[]): T[] {
-  const out = arr.slice();
-  let seed = 0x9e3779b9;
-  const rand = () => {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(rand() * (i + 1));
-    const tmp = out[i] as T;
-    out[i] = out[j] as T;
-    out[j] = tmp;
-  }
-  return out;
 }

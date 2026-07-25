@@ -639,7 +639,7 @@ export class CofireDriver implements InterpDriver {
       const [r, g, b] = this.ramp(this.countT(cv));
       sw.style.width = "9px";
       sw.style.height = "9px";
-      sw.style.borderRadius = "2px";
+      sw.style.borderRadius = "0";
       sw.style.background = `rgb(${r},${g},${b})`;
       sw.title = `co-count ${cv}`;
       leg.appendChild(sw);

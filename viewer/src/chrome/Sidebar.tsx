@@ -90,13 +90,10 @@ export function Sidebar() {
               {
                 value: "compare",
                 label: "Compare",
-                disabled: caps?.tier !== "webgpu" || !$compareData.value,
-                hint:
-                  caps?.tier !== "webgpu"
-                    ? "webgpu only"
-                    : !$compareData.value
-                      ? "run `nebulai compare`"
-                      : undefined,
+                // no tier gate: the field is TSL, so the forceWebGL rung draws
+                // the same scene without bloom (verified on ?gpu=webgl)
+                disabled: !$compareData.value,
+                hint: !$compareData.value ? "run `nebulai compare`" : undefined,
               },
             ]}
             onChange={(v) => requestViewMode(v as ViewMode)}

@@ -3,11 +3,11 @@
    so they aren't re-decided per component. */
 
 :root {
-  /* One radius scale; derive everything else from it. */
-  --r-sm: 8px;
-  --r-md: 12px;
-  --r-lg: 24px;
-  --r-pill: 999px;
+  /* straight-corner theme — all radii flattened to 0 */
+  --r-sm: 0px;
+  --r-md: 0px;
+  --r-lg: 0px;
+  --r-pill: 0px;
 }
 
 /* ---------------------------------------------------------------------------

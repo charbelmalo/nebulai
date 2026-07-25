@@ -117,6 +117,8 @@ export const INTERP_FEATURES: InterpFeature[] = [
       { label: "token with leading space · ␣word", rgb: "245,190,92" },
       { label: "token with no leading space · word", rgb: "92,198,236" },
       { label: "star size = embedding norm ‖W_E‖₂", rgb: "205,210,224" },
+      { label: "glow = rank of that same norm", rgb: "205,210,224" },
+      { label: "brighter regions = more stars overlapping", rgb: "205,210,224" },
     ],
     note: "PC1+PC2 ≈ 2.6% of variance — a shadow, not the whole space",
     legendCorner: "tr",
@@ -147,10 +149,12 @@ export const INTERP_FEATURES: InterpFeature[] = [
       "plus each neuron's most-promoted/suppressed token through the tied W_E. " +
       "Direct path only — no downstream-layer effects, positive activation assumed.",
     legend: [
-      { label: "layer 0 neuron", rgb: "59,82,138" },
+      { label: "layer 0 neuron · hue = layer", rgb: "59,82,138" },
       { label: "layer 6", rgb: "54,181,120" },
       { label: "layer 11", rgb: "253,231,37" },
       { label: "dot size = write norm ‖w_out‖₂", rgb: "205,210,224" },
+      { label: "glow = rank of that same norm, not depth", rgb: "205,210,224" },
+      { label: "brighter regions = more neurons overlapping", rgb: "205,210,224" },
     ],
     note: "direct-path readout only · PC1+PC2 ≈ 3.3% var · click a chip to isolate a layer",
     legendCorner: "tr",

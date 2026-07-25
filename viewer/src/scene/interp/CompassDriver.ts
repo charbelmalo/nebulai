@@ -492,7 +492,7 @@ export class CompassDriver implements InterpDriver {
       const [r, g, bl] = LAYER_COLORS[L] ?? [205, 210, 224];
       sw.style.width = narrow ? "8px" : "9px";
       sw.style.height = narrow ? "8px" : "9px";
-      sw.style.borderRadius = "2px";
+      sw.style.borderRadius = "0";
       sw.style.background = `rgb(${r},${g},${bl})`;
       sw.title = `L${L}: best match for ${com.layer_counts[L]} features`;
       leg.appendChild(sw);

@@ -152,6 +152,33 @@ export function Tabs(props: {
   );
 }
 
+export function ColorRow(props: {
+  label: string;
+  value: string; // #rrggbb
+  onChange: (value: string) => void;
+  hint?: string;
+}) {
+  const id = `col-${props.label.replace(/\s+/g, "-").toLowerCase()}`;
+  return (
+    <label class="ctl-row ctl-row-color" for={id}>
+      <span class="ctl-label">
+        {props.label}
+        {props.hint ? <span class="ctl-hint"> {props.hint}</span> : null}
+      </span>
+      <span class="ctl-color-wrap">
+        <span class="ctl-color-hex">{props.value}</span>
+        <input
+          id={id}
+          class="ctl-color"
+          type="color"
+          value={props.value}
+          onInput={(e) => props.onChange((e.currentTarget as HTMLInputElement).value)}
+        />
+      </span>
+    </label>
+  );
+}
+
 export function TextRow(props: {
   label: string;
   value: string;

@@ -134,6 +134,7 @@ export function SnapshotMap() {
           disabled={!activeLog}
           value={snap.turnIndex}
           max={maxTurn}
+          role={currentTurn?.role ?? null}
           onChange={(i) => appStore.getState().setTurnIndex(i)}
         />
       </footer>
@@ -421,55 +422,90 @@ function SnapshotGraph(props: {
   );
 }
 
+/** Turn transport for the snapshot map — the shared `.transport` shell, same as
+ *  the sessions playhead and the compare layout tour.
+ *
+ *  HONESTY: turns are an ORDINAL axis. `ConversationTurn.ts` is optional and
+ *  means wall-clock arrival, not position in the conversation, so this readout
+ *  counts turns and names the speaker — there is no clock, exactly as in the
+ *  compare tour. */
 function SnapshotScrubber(props: {
   disabled: boolean;
   value: number;
   max: number;
+  role: string | null;
   onChange: (i: number) => void;
 }) {
   const snap = $snapshot.value;
+  const pct = props.max > 0 ? (props.value / props.max) * 100 : 0;
+  // Scrubbing or stepping takes the wheel — the same rule as the sessions
+  // playhead and the rollout depth. Without it the autoplay timer keeps
+  // advancing under the drag and the turn the user picked is gone in 800ms.
+  const seek = (i: number) => {
+    if (snap.playing) appStore.getState().setPlaying(false);
+    props.onChange(i);
+  };
   return (
-    <div class={`snapshot-scrubber${props.disabled ? " is-disabled" : ""}`}>
+    <div
+      class={`transport snapshot-transport${props.disabled ? " is-disabled" : ""}`}
+      role="group"
+      aria-label="Conversation turns"
+    >
       <button
         type="button"
-        class="btn-ghost"
+        class="tp-btn tp-play"
+        disabled={props.disabled}
+        aria-label={snap.playing ? "Stop playback" : "Play conversation"}
+        onClick={() => appStore.getState().setPlaying(!snap.playing)}
+      >
+        {snap.playing ? "⏸" : "▶"}
+      </button>
+      <button
+        type="button"
+        class="tp-btn"
         disabled={props.disabled || props.value === 0}
-        onClick={() => props.onChange(Math.max(0, props.value - 1))}
+        onClick={() => seek(Math.max(0, props.value - 1))}
         aria-label="Previous turn"
+        title="Previous turn"
       >
         ‹
       </button>
       <button
         type="button"
-        class="btn-ghost"
-        disabled={props.disabled}
-        onClick={() => appStore.getState().setPlaying(!snap.playing)}
-      >
-        {snap.playing ? "◼ stop" : "▶ play"}
-      </button>
-      <input
-        type="range"
-        class="ctl-slider snapshot-range"
-        min={0}
-        max={props.max}
-        value={props.value}
-        disabled={props.disabled}
-        onInput={(e) =>
-          props.onChange(Number((e.currentTarget as HTMLInputElement).value))
-        }
-      />
-      <span class="snapshot-scrubber-pos">
-        {props.disabled ? "—" : `${props.value + 1} / ${props.max + 1}`}
-      </span>
-      <button
-        type="button"
-        class="btn-ghost"
+        class="tp-btn"
         disabled={props.disabled || props.value === props.max}
-        onClick={() => props.onChange(Math.min(props.max, props.value + 1))}
+        onClick={() => seek(Math.min(props.max, props.value + 1))}
         aria-label="Next turn"
+        title="Next turn"
       >
         ›
       </button>
+      <input
+        type="range"
+        class="tp-scrub"
+        min={0}
+        max={props.max}
+        step={1}
+        value={props.value}
+        disabled={props.disabled}
+        aria-label="Turn"
+        aria-valuetext={
+          props.disabled
+            ? "no conversation loaded"
+            : `turn ${props.value + 1} of ${props.max + 1}${props.role ? `, ${props.role}` : ""}`
+        }
+        onInput={(e) => seek(Number((e.currentTarget as HTMLInputElement).value))}
+        style={{ "--tp-progress": `${pct.toFixed(1)}%` }}
+      />
+      {props.role && (
+        <span class="tp-stage" aria-hidden="true">
+          <span class="tp-now">{props.role}</span>
+        </span>
+      )}
+      <span class="tp-count" title="turn position in the conversation">
+        {props.disabled ? "—" : props.value + 1}
+        <i>/{props.disabled ? "—" : props.max + 1}</i>
+      </span>
     </div>
   );
 }

@@ -52,6 +52,7 @@ import {
 } from "three/tsl";
 import { appStore } from "../../app/store";
 import {
+  CATEGORY_ORDER,
   dominantCategory,
   type SessionAnalysis,
   type SessionTurn,
@@ -60,67 +61,73 @@ import {
 import { createBloomPipeline, type BloomPipeline } from "../post/bloom";
 import { IdPicker } from "../picking";
 import { asinhScale, suggestK, type AxisScale } from "./scales";
+import {
+  DEFAULT_SESSIONS_APPEARANCE,
+  hexToRgb,
+  orderedCategoryRgb,
+  type SessionsAppearance,
+  type SessionsAxisMode,
+} from "./appearance";
 
 /** Cube side in world units; the cube is centred on the origin. */
 const CUBE = 1;
 const HALF = CUBE / 2;
 
-/** Category hue at full strength, 0–1 per channel. Quiet turns are washed
- *  toward NEUTRAL — see the saturation ramp in buildField(). */
-const CATEGORY_RGB: Record<ToolCategory, [number, number, number]> = {
-  orient: [0.36, 0.78, 0.93],
-  plan: [0.96, 0.75, 0.36],
-  edit: [0.49, 0.87, 0.59],
-  exec: [0.78, 0.51, 0.94],
-  deliver: [0.94, 0.47, 0.59],
-  reflect: [0.59, 0.62, 0.71],
-};
-/** What a low-magnitude turn desaturates toward: cool, dim, recedes. Kept close
- *  in luminance to the hues above so the wash costs saturation, not identity. */
-const NEUTRAL: [number, number, number] = [0.42, 0.52, 0.72];
-/** The one place red is allowed. */
-const ERROR_RGB: [number, number, number] = [1, 0.33, 0.3];
-
-// ── tuning ───────────────────────────────────────────────────────────────────
-const POINT_SIZE = 0.0105; // world units, before the glow ramp
-/** Applied to the output-token RANK. 1.7 puts the median turn at 0.31 and the
- *  top decile above 0.84 — a dim field with a scattering of hot points, on any
- *  distribution. Below ~1.4 the field washes back out to the flat scatter this
- *  replaced; above ~2.4 the mid-range turns go black and the density read that
- *  makes a busy stretch legible goes with them. */
-const GLOW_GAMMA = 1.7;
-const BASE_ALPHA = 0.17;
-const PEAK_ALPHA = 1;
-/** Emissive multiplier at the two ends of the glow ramp. The ceiling is
- *  deliberately modest: additive blending already sums overlapping sprites, so
- *  a high ceiling clips every dense region to white and throws away the hue
- *  that carries category identity. Only the top of the ramp clears the bloom
- *  threshold (0.55), which is what makes a spike glow instead of everything. */
+// ── fixed tuning (not user-facing) ───────────────────────────────────────────
+const POINT_SIZE = 0.0105; // world-unit base; the pointSize knob multiplies it
+const PEAK_ALPHA = 1; // the top of the mote-alpha ramp
+/** Emissive multiplier at the BOTTOM of the glow ramp. The ceiling is the
+ *  user-facing `glowStrength`; this floor stays fixed — it only sets how dark
+ *  the quietest lit mote is, and the bloom read keys on the ceiling. */
 const EMISSIVE_MIN = 0.34;
-const EMISSIVE_MAX = 2.1;
-/** How much of its category hue a quiet turn keeps. A floor this high means
- *  dimness alone does the figure-ground work; the wash only takes the edge off,
- *  so a 1-tool `edit` still reads green rather than as generic haze. */
-const SAT_FLOOR = 0.6;
-const TRAIL_ALPHA = 0.028; // ambient: structure, not subject
-const TRAIL_FOCUS_ALPHA = 0.5; // the run around the hovered/pinned turn
-const TRAIL_FOCUS_SPAN = 14; // turns either side of it
-const TRAIL_WIDTH = 0.0016;
-const DIM_ALPHA = 0.16; // a category dimmed via the legend — never hidden
-const FRAME_RGB = 0x2c3446;
 
-/** The legend's swatch colour for a category, as CSS 0–255 — the single source
- *  of truth, so a legend chip and a node can never disagree. */
-export const CATEGORY_CSS: Record<ToolCategory, string> = Object.fromEntries(
-  (Object.keys(CATEGORY_RGB) as ToolCategory[]).map((c) => [
-    c,
-    `rgb(${CATEGORY_RGB[c].map((v) => Math.round(v * 255)).join(",")})`,
-  ]),
-) as Record<ToolCategory, string>;
+// ── timeline playback ────────────────────────────────────────────────────────
+/** Wall-clock seconds for one full start→finish sweep at 1×. The sweep advances
+ *  linearly in axis-space, so on an eased time axis idle gaps compress and the
+ *  replay never stalls; on a linear axis it plays in true proportional time. */
+const PLAY_BASE_SECONDS = 22;
+/** Axis-space width of the ignite fade — a turn eases in over this band as the
+ *  playhead reaches its timestamp rather than popping on. */
+const REVEAL_FADE = 0.015;
+/** Axis-space width of the wavefront glow trailing just behind the playhead. */
+const PULSE_WIDTH = 0.06;
+/** Extra emissive (×) a turn carries at the instant the wavefront passes it. */
+const PULSE_AMT = 1.6;
+/** Extra trail alpha at the growing tip of the path during playback. */
+const TRAIL_PULSE = 0.6;
+
+/** Which categories this build can colour directly; a stored analysis carrying
+ *  anything else is re-derived from its tools (see rebuild()). */
+const VALID_CATEGORIES = new Set<ToolCategory>(CATEGORY_ORDER);
+/** Category → its index in CATEGORY_ORDER, the slot its colour uniform lives in. */
+const CATEGORY_INDEX: Record<ToolCategory, number> = Object.fromEntries(
+  CATEGORY_ORDER.map((c, i) => [c, i]),
+) as Record<ToolCategory, number>;
 
 export interface TurnRef {
   sessionId: string;
   index: number;
+}
+
+/** A snapshot of the timeline transport, emitted to the transport UI. The
+ *  playhead is a pure position in [0,1] along the honest time axis; `tSec` is
+ *  its exact inverse (axes.x.toValue), so the readout never lies about where in
+ *  wall-clock time the sweep is. */
+export interface PlaybackState {
+  playing: boolean;
+  /** 0..1 sweep position along the time axis */
+  playhead: number;
+  /** wall-clock seconds at the playhead — the honest inverse of `playhead` */
+  tSec: number;
+  /** wall-clock seconds at the end of the run (the time-axis maximum) */
+  totalSec: number;
+  /** turns whose timestamp the wavefront has reached */
+  revealed: number;
+  /** turns in total across every loaded session */
+  total: number;
+  /** replay rate multiplier (0.5 / 1 / 2 / 4) */
+  speed: number;
+  hasData: boolean;
 }
 
 interface FieldNode {
@@ -137,16 +144,10 @@ interface Axes {
   z: AxisScale;
 }
 
-/** Per-axis asinh bend. 0 = plain linear. `null` = pick one from the data. */
-export interface ScaleK {
-  x: number | null;
-  y: number | null;
-  z: number | null;
-}
-
 export class SessionFieldDriver {
   onSelect: ((sel: TurnRef | null) => void) | null = null;
   onHover: ((sel: TurnRef | null) => void) | null = null;
+  onPlayback: ((state: PlaybackState) => void) | null = null;
 
   private canvas!: HTMLCanvasElement;
   private overlay!: HTMLElement;
@@ -160,7 +161,12 @@ export class SessionFieldDriver {
   private analyses: SessionAnalysis[] = [];
   private nodes: FieldNode[] = [];
   private axes: Axes = { x: asinhScale(1, 0), y: asinhScale(1, 0), z: asinhScale(1, 0) };
-  private scaleK: ScaleK = { x: null, y: null, z: null };
+  /** The live look. Every value here is either a uniform (updated in place, no
+   *  rebuild) or a cheap CPU pass; only the three axis modes force a geometry
+   *  rebuild, because they change where the motes sit. */
+  private cfg: SessionsAppearance = { ...DEFAULT_SESSIONS_APPEARANCE };
+  /** honours the global Settings → bloom toggle (webgpu rung only). */
+  private bloomOn = true;
 
   // ── gpu objects ────────────────────────────────────────────────────────
   private field: THREE.Sprite | null = null;
@@ -169,12 +175,40 @@ export class SessionFieldDriver {
   private trail: THREE.InstancedMesh | null = null;
   private trailMat: THREE.MeshBasicNodeMaterial | null = null;
   private frame3: THREE.LineSegments | null = null;
+  private frameMat: THREE.LineBasicNodeMaterial | null = null;
   private probe: THREE.LineSegments | null = null;
+  private sweep: THREE.LineSegments | null = null;
+  private sweepMat: THREE.LineBasicNodeMaterial | null = null;
   private picker: IdPicker | null = null;
 
+  // ── live uniforms (see cfg) ──────────────────────────────────────────────
   private uHover = uniform(-1);
   private uSelected = uniform(-1);
-  private uSize = uniform(POINT_SIZE);
+  private uSize = uniform(POINT_SIZE * DEFAULT_SESSIONS_APPEARANCE.pointSize);
+  private uGamma = uniform(DEFAULT_SESSIONS_APPEARANCE.glowContrast);
+  private uMoteFloor = uniform(DEFAULT_SESSIONS_APPEARANCE.moteFloor);
+  private uGlowMax = uniform(DEFAULT_SESSIONS_APPEARANCE.glowStrength);
+  private uSatFloor = uniform(DEFAULT_SESSIONS_APPEARANCE.saturation);
+  private uHoverEmph = uniform(DEFAULT_SESSIONS_APPEARANCE.hoverEmphasis);
+  private uSelectEmph = uniform(DEFAULT_SESSIONS_APPEARANCE.selectEmphasis);
+  private uSubOpacity = uniform(DEFAULT_SESSIONS_APPEARANCE.subAgentOpacity);
+  private uMarkFail = uniform(DEFAULT_SESSIONS_APPEARANCE.markFailures ? 1 : 0);
+  private uFailFloor = uniform(DEFAULT_SESSIONS_APPEARANCE.failureGlow);
+  private uNeutral = uniform(new THREE.Vector3(...hexToRgb(DEFAULT_SESSIONS_APPEARANCE.neutralColor)));
+  private uError = uniform(new THREE.Vector3(...hexToRgb(DEFAULT_SESSIONS_APPEARANCE.errorColor)));
+  private uCats = orderedCategoryRgb(DEFAULT_SESSIONS_APPEARANCE).map(
+    (rgb) => uniform(new THREE.Vector3(...rgb)),
+  );
+  private uTrailAlpha = uniform(DEFAULT_SESSIONS_APPEARANCE.trailOpacity);
+  private uTrailFocusAlpha = uniform(DEFAULT_SESSIONS_APPEARANCE.trailFocusOpacity);
+  private uTrailWidth = uniform(DEFAULT_SESSIONS_APPEARANCE.trailWidth);
+  // ── timeline playback (uniform-driven; no rebuild) ───────────────────────
+  /** wavefront position along the time axis, 0..1. Rest = 1 (all revealed). */
+  private uPlayhead = uniform(1);
+  private uRevealFade = uniform(REVEAL_FADE);
+  private uPulse = uniform(0); // wavefront glow amount; 0 unless playing
+  private uPulseWidth = uniform(PULSE_WIDTH);
+  private uTrailPulse = uniform(0); // growing-tip trail boost; 0 unless playing
   /** per-instance legend dimming, CPU-written */
   private visArray = new Float32Array(0);
   private visAttr: THREE.InstancedBufferAttribute | null = null;
@@ -209,6 +243,18 @@ export class SessionFieldDriver {
   private hiddenCats = new Set<ToolCategory>();
   private raf = 0;
   private disposed = false;
+
+  // ── playback runtime state ───────────────────────────────────────────────
+  private playing = false;
+  /** mirror of uPlayhead; the loop advances this and pushes it to the uniform */
+  private playhead = 1;
+  private playSpeed = 1;
+  private playReducedMotion = false;
+  /** every node's seq (unit time position), sorted ascending, for a cheap
+   *  revealed-count binary search */
+  private seqSorted = new Float32Array(0);
+  private lastClock = 0;
+  private lastEmit = 0;
   private labels: HTMLElement[] = [];
   private tooltipEl: HTMLElement | null = null;
   private abort = new AbortController();
@@ -231,8 +277,13 @@ export class SessionFieldDriver {
 
     this.buildFrame();
     this.buildProbe();
+    this.buildSweep();
+    this.applyScaffold();
 
-    // bloom rides only the real WebGPU rung, exactly as in AtlasDriver
+    // bloom rides only the real WebGPU rung, exactly as in AtlasDriver. It is
+    // built once here and toggled by the render-path choice in loop(), so the
+    // global Settings → bloom switch flips live with no teardown.
+    this.bloomOn = appStore.getState().settings.bloom;
     if (this.webgpu) {
       this.bloomPipe = createBloomPipeline(this.renderer, this.scene, this.camera, "full");
     }
@@ -253,11 +304,71 @@ export class SessionFieldDriver {
     this.rebuild();
   }
 
-  /** Override the asinh bend on one or more axes (null = auto from the data).
-   *  Display-only: it changes spacing, never a value. */
-  setScaleK(k: Partial<ScaleK>): void {
-    this.scaleK = { ...this.scaleK, ...k };
-    this.rebuild();
+  /** Apply a full appearance config. Most knobs are uniforms or a cheap CPU
+   *  pass and update in place; only an axis-mode change reshapes the field, so
+   *  only that path rebuilds the geometry. */
+  setAppearance(cfg: SessionsAppearance): void {
+    const prev = this.cfg;
+    this.cfg = cfg;
+    this.applyUniforms();
+    this.applyScaffold();
+    this.applyVisibility(); // dimmedOpacity may have changed
+    this.updateTrailFocus(); // trailFocusSpan may have changed
+    this.layoutLabels(); // showLabels may have changed
+    const axisChanged =
+      prev.axisTime !== cfg.axisTime ||
+      prev.axisContext !== cfg.axisContext ||
+      prev.axisNewContext !== cfg.axisNewContext;
+    if (axisChanged) this.rebuild();
+    else this.cameraDirty = true;
+  }
+
+  /** Honour the global Settings → bloom switch (webgpu rung only). */
+  setBloom(on: boolean): void {
+    this.bloomOn = on;
+    this.cameraDirty = true;
+  }
+
+  /** Push every live-tunable value from cfg into its uniform. */
+  private applyUniforms(): void {
+    const c = this.cfg;
+    this.uSize.value = POINT_SIZE * c.pointSize;
+    this.uGamma.value = c.glowContrast;
+    this.uMoteFloor.value = c.moteFloor;
+    this.uGlowMax.value = c.glowStrength;
+    this.uSatFloor.value = c.saturation;
+    this.uHoverEmph.value = c.hoverEmphasis;
+    this.uSelectEmph.value = c.selectEmphasis;
+    this.uSubOpacity.value = c.subAgentOpacity;
+    this.uMarkFail.value = c.markFailures ? 1 : 0;
+    this.uFailFloor.value = c.failureGlow;
+    this.uNeutral.value.set(...hexToRgb(c.neutralColor));
+    this.uError.value.set(...hexToRgb(c.errorColor));
+    const cats = orderedCategoryRgb(c);
+    for (let i = 0; i < this.uCats.length; i++) this.uCats[i]!.value.set(...cats[i]!);
+    this.uTrailAlpha.value = c.trailOpacity;
+    this.uTrailFocusAlpha.value = c.trailFocusOpacity;
+    this.uTrailWidth.value = c.trailWidth;
+  }
+
+  /** Frame / grid / probe / trail visibility straight from cfg. */
+  private applyScaffold(): void {
+    const c = this.cfg;
+    if (this.frame3) this.frame3.visible = c.showFrame;
+    if (this.frameMat) {
+      this.frameMat.opacity = c.frameOpacity;
+      this.frameMat.color.set(c.frameColor);
+    }
+    if (this.trail) this.trail.visible = c.showTrails;
+    if (!c.showProbe && this.probe) this.probe.visible = false;
+    else this.updateProbe();
+  }
+
+  /** Resolve an axis mode to an asinh bend against the data. Honest in all
+   *  three modes — see appearance.ts. */
+  private axisK(mode: SessionsAxisMode, vals: number[], max: number): number {
+    if (mode === "linear") return 0;
+    return suggestK(vals, max, mode === "eased");
   }
 
   setSelected(sel: TurnRef | null): void {
@@ -281,15 +392,132 @@ export class SessionFieldDriver {
     this.cameraDirty = true;
   }
 
+  // ── timeline transport ─────────────────────────────────────────────────────
+
+  /** Start (or resume) the sweep. Replays from the top if it was parked at the
+   *  end. No-op with no data loaded. */
+  play(): void {
+    if (this.nodes.length === 0) return;
+    if (this.playhead >= 0.9999) this.playhead = 0;
+    this.playing = true;
+    this.lastClock = performance.now();
+    this.updatePlayback();
+  }
+
+  pause(): void {
+    this.playing = false;
+    this.updatePlayback();
+  }
+
+  togglePlay(): void {
+    if (this.playing) this.pause();
+    else this.play();
+  }
+
+  /** Jump to the top and play from there. */
+  restart(): void {
+    this.playhead = 0;
+    this.playing = this.nodes.length > 0;
+    this.lastClock = performance.now();
+    this.updatePlayback();
+  }
+
+  /** Move the playhead to a unit position without changing play/pause state —
+   *  the transport scrubber pauses first, then seeks. */
+  seek(u: number): void {
+    this.playhead = clamp(u, 0, 1);
+    this.updatePlayback();
+  }
+
+  setSpeed(mult: number): void {
+    this.playSpeed = mult > 0 ? mult : 1;
+    this.lastClock = performance.now(); // so the new rate applies from now, not retroactively
+    this.emitPlayback(true);
+  }
+
+  /** Reduced motion kills the wavefront flare but keeps the progressive reveal;
+   *  the sweep still plays, it just doesn't pulse. */
+  setReducedMotion(on: boolean): void {
+    this.playReducedMotion = on;
+    this.updatePlayback(false);
+  }
+
+  /** Park the sweep at fully-revealed and stop — the resting state, applied on
+   *  every dataset/axis rebuild so loading data shows everything. */
+  private resetPlayback(): void {
+    this.playing = false;
+    this.playhead = 1;
+    this.uPlayhead.value = 1;
+    this.uPulse.value = 0;
+    this.uTrailPulse.value = 0;
+    this.updateSweep();
+    this.emitPlayback(true);
+  }
+
+  /** Push playhead + derived pulse amounts to the uniforms and refresh the
+   *  sweep plane. The pulse only lives while actively playing (and not under
+   *  reduced motion), so a paused mid-run scrub is calm. */
+  private updatePlayback(emit = true): void {
+    this.uPlayhead.value = this.playhead;
+    const motion = this.playing && !this.playReducedMotion;
+    this.uPulse.value = motion ? PULSE_AMT : 0;
+    this.uTrailPulse.value = motion ? TRAIL_PULSE : 0;
+    this.updateSweep();
+    if (emit) this.emitPlayback(true);
+  }
+
+  /** # of turns whose seq ≤ playhead — a binary search over the sorted column. */
+  private revealedCount(): number {
+    const a = this.seqSorted;
+    let lo = 0;
+    let hi = a.length;
+    while (lo < hi) {
+      const m = (lo + hi) >> 1;
+      if (a[m]! <= this.playhead) lo = m + 1;
+      else hi = m;
+    }
+    return lo;
+  }
+
+  private playbackState(): PlaybackState {
+    const total = this.nodes.length;
+    return {
+      playing: this.playing,
+      playhead: this.playhead,
+      // honest inverse: the time axis maps the unit playhead back to real seconds
+      tSec: total > 0 ? this.axes.x.toValue(clamp(this.playhead, 0, 1)) : 0,
+      totalSec: total > 0 ? this.axes.x.max : 0,
+      revealed: this.revealedCount(),
+      total,
+      speed: this.playSpeed,
+      hasData: total > 0,
+    };
+  }
+
+  /** Emit at most ~18 Hz while playing; discrete transport events force it. */
+  private emitPlayback(force = false): void {
+    if (!this.onPlayback) return;
+    const now = performance.now();
+    if (!force && now - this.lastEmit < 55) return;
+    this.lastEmit = now;
+    this.onPlayback(this.playbackState());
+  }
+
   /** Debug/e2e handle: what the driver believes it is drawing. */
   describe() {
     return {
       nodes: this.nodes.length,
       webgpu: this.webgpu,
-      bloom: this.bloomPipe !== null,
+      bloom: this.bloomPipe !== null && this.bloomOn,
       k: { x: this.axes.x.k, y: this.axes.y.k, z: this.axes.z.k },
       curved: { x: this.axes.x.curved, y: this.axes.y.curved, z: this.axes.z.curved },
       camera: { az: this.az, el: this.el, dist: this.dist },
+      playback: {
+        playing: this.playing,
+        playhead: this.playhead,
+        revealed: this.revealedCount(),
+        speed: this.playSpeed,
+      },
     };
   }
 
@@ -298,6 +526,8 @@ export class SessionFieldDriver {
   private rebuild(): void {
     this.clearData();
     if (this.analyses.length === 0) {
+      this.seqSorted = new Float32Array(0);
+      this.resetPlayback();
       this.layoutLabels();
       this.cameraDirty = true;
       return;
@@ -315,14 +545,14 @@ export class SessionFieldDriver {
         zs.push(t.cacheWrite);
       }
     }
-    const mk = (vals: number[], forced: number | null): AxisScale => {
+    const mk = (vals: number[], mode: SessionsAxisMode): AxisScale => {
       const max = vals.reduce((m, v) => (v > m ? v : m), 0);
-      return asinhScale(max, forced ?? suggestK(vals, max));
+      return asinhScale(max, this.axisK(mode, vals, max));
     };
     this.axes = {
-      x: mk(xs, this.scaleK.x),
-      y: mk(ys, this.scaleK.y),
-      z: mk(zs, this.scaleK.z),
+      x: mk(xs, this.cfg.axisTime),
+      y: mk(ys, this.cfg.axisContext),
+      z: mk(zs, this.cfg.axisNewContext),
     };
 
     let maxTools = 1;
@@ -345,8 +575,9 @@ export class SessionFieldDriver {
         // a stored analysis can carry a category this build has no colour for
         // (written by another build; the raw transcript is never persisted, so
         // it can't be re-parsed) — re-derive from the tools that WERE stored
-        const t =
-          raw.category in CATEGORY_RGB ? raw : { ...raw, category: dominantCategory(raw.tools) };
+        const t = VALID_CATEGORIES.has(raw.category)
+          ? raw
+          : { ...raw, category: dominantCategory(raw.tools) };
         const pos = new THREE.Vector3(
           this.axes.x.toUnit(t.tSec) * CUBE - HALF,
           this.axes.y.toUnit(t.cacheRead) * CUBE - HALF,
@@ -362,16 +593,32 @@ export class SessionFieldDriver {
     this.buildTrail(trailSegs);
     this.applyVisibility();
     this.layoutLabels();
+
+    // a fresh dataset always shows fully-revealed; playback is opt-in from the
+    // transport. Cache the sorted seq column for the revealed-count search.
+    const seqs = this.nodes.map((nd) => (nd.pos.x + HALF) / CUBE);
+    seqs.sort((a, b) => a - b);
+    this.seqSorted = Float32Array.from(seqs);
+    this.resetPlayback();
+
     this.cameraDirty = true;
   }
 
   private buildField(maxTools: number): void {
     const n = this.nodes.length;
     const pos = new Float32Array(n * 3);
-    const color = new Float32Array(n * 3);
-    const glow = new Float32Array(n);
-    const size = new Float32Array(n);
-    const sub = new Float32Array(n);
+    // RAW per-turn attributes only — every mapping (gamma, saturation, hue,
+    // emissive) lives in the shader against uniforms, so the appearance knobs
+    // retune the field in place without rebuilding a buffer. The five scalars
+    // are PACKED into two attributes and swizzled in TSL: WebGPU caps a material
+    // at 8 vertex buffers and rejects the ninth SILENTLY (see the ChordDriver
+    // note in the skill), and adding the playback `seq` as its own attribute
+    // would have tipped iPos+5 scalars+iVis+uv over that edge.
+    //   iA = (rank, toolFrac, catIndex, fail)      iB = (sub, seq)
+    // seq is the turn's position along the honest time axis in [0,1] — the exact
+    // coordinate the playback wavefront (uPlayhead) sweeps through.
+    const packA = new Float32Array(n * 4);
+    const packB = new Float32Array(n * 2);
     this.visArray = new Float32Array(n).fill(1);
 
     const rank = outputRank(this.nodes);
@@ -382,40 +629,86 @@ export class SessionFieldDriver {
       pos[i * 3] = node.pos.x;
       pos[i * 3 + 1] = node.pos.y;
       pos[i * 3 + 2] = node.pos.z;
-
-      // Brightness carries output tokens, RANKED within the loaded sessions —
-      // see outputRank(). The gamma is what keeps the bulk of the field dim:
-      // the median turn lands near 0.22, the top decile above 0.79, whatever
-      // the underlying distribution looks like. That contrast IS the
-      // figure-ground the old flat scatter never had.
-      const g = Math.pow(rank[i]!, GLOW_GAMMA);
-      const failed = (t.errors ?? 0) > 0;
-      glow[i] = failed ? Math.max(g, 0.85) : g;
-      // Size is a SECOND channel on a second attribute: tool calls this turn.
-      // Deliberately a narrow range — it separates a 5-tool turn from a
-      // 0-tool one without competing with brightness for attention.
-      size[i] = 0.55 + 0.45 * Math.min(t.tools.length / maxTools, 1);
-      sub[i] = t.isSidechain ? 1 : 0;
-
-      const cat = CATEGORY_RGB[t.category] ?? NEUTRAL;
-      const base = failed ? ERROR_RGB : cat;
-      // saturation ramps with magnitude: quiet turns wash toward neutral so
-      // they read as field, loud ones carry their category at full strength
-      const sat = failed ? 1 : SAT_FLOOR + (1 - SAT_FLOOR) * glow[i]!;
-      for (let c = 0; c < 3; c++) {
-        const n0 = NEUTRAL[c] ?? 0;
-        color[i * 3 + c] = n0 + ((base[c] ?? 0) - n0) * sat;
-      }
+      packA[i * 4] = rank[i]!; // output-token rank, 0..1 (see outputRank)
+      packA[i * 4 + 1] = Math.min(t.tools.length / maxTools, 1); // tools / max
+      packA[i * 4 + 2] = CATEGORY_INDEX[t.category] ?? 0; // category slot, 0..5
+      packA[i * 4 + 3] = (t.errors ?? 0) > 0 ? 1 : 0; // failure flag
+      packB[i * 2] = t.isSidechain ? 1 : 0; // sub-agent flag
+      packB[i * 2 + 1] = (node.pos.x + HALF) / CUBE; // seq: unit time position
     }
 
     const iPos = instancedBufferAttribute<"vec3">(new THREE.InstancedBufferAttribute(pos, 3), "vec3");
-    const iColor = instancedBufferAttribute<"vec3">(new THREE.InstancedBufferAttribute(color, 3), "vec3");
-    const iGlow = instancedBufferAttribute<"float">(new THREE.InstancedBufferAttribute(glow, 1), "float");
-    const iSize = instancedBufferAttribute<"float">(new THREE.InstancedBufferAttribute(size, 1), "float");
-    const iSub = instancedBufferAttribute<"float">(new THREE.InstancedBufferAttribute(sub, 1), "float");
+    const iA = instancedBufferAttribute<"vec4">(new THREE.InstancedBufferAttribute(packA, 4), "vec4");
+    const iB = instancedBufferAttribute<"vec2">(new THREE.InstancedBufferAttribute(packB, 2), "vec2");
     this.visAttr = new THREE.InstancedBufferAttribute(this.visArray, 1);
     this.visAttr.setUsage(THREE.DynamicDrawUsage);
     const iVis = instancedDynamicBufferAttribute<"float">(this.visAttr, "float");
+
+    // unpack — every downstream term reads these exactly as before
+    const iRank = iA.x;
+    const iTool = iA.y;
+    const iCat = iA.z;
+    const iFail = iA.w;
+    const iSub = iB.x;
+    const iSeq = iB.y;
+
+    // ── shared shader terms ──
+    // Brightness carries output tokens, RANKED (see outputRank), shaped by the
+    // glow-contrast gamma: higher gamma keeps the bulk of the field dark and
+    // sharpens the spikes. A failed turn (when markFailures is on) is floored
+    // to failureGlow so it always reads.
+    const glow0 = iRank.pow(this.uGamma);
+    const failOn = iFail.mul(this.uMarkFail); // 0 or 1
+    const glow = mix(glow0, glow0.max(this.uFailFloor), failOn);
+    // Size is a SECOND channel: tool calls this turn, over a deliberately
+    // narrow range so it never competes with brightness.
+    const toolSize = float(0.55).add(iTool.mul(0.45));
+
+    const hovered = instanceIndex.toFloat().equal(this.uHover);
+    const picked = instanceIndex.toFloat().equal(this.uSelected);
+    const emphasis = select(picked, this.uSelectEmph, select(hovered, this.uHoverEmph, float(1)));
+
+    // category hue: pick the matching per-category uniform by index. iCat holds
+    // exact integers 0..5 in CATEGORY_ORDER; the 0.5 thresholds bracket each.
+    const catColor = select(
+      iCat.lessThan(0.5),
+      this.uCats[0]!,
+      select(
+        iCat.lessThan(1.5),
+        this.uCats[1]!,
+        select(
+          iCat.lessThan(2.5),
+          this.uCats[2]!,
+          select(
+            iCat.lessThan(3.5),
+            this.uCats[3]!,
+            select(iCat.lessThan(4.5), this.uCats[4]!, this.uCats[5]!),
+          ),
+        ),
+      ),
+    );
+    const base = mix(catColor, this.uError, failOn);
+    // saturation ramps with magnitude: quiet turns wash toward neutral, loud
+    // ones carry full category hue; a marked failure is always full saturation.
+    const satNormal = this.uSatFloor.add(float(1).sub(this.uSatFloor).mul(glow));
+    const sat = mix(satNormal, float(1), failOn);
+    const rgb = mix(this.uNeutral, base, sat);
+
+    // ── timeline reveal + wavefront glow ──
+    // A turn ignites exactly as the wavefront reaches its timestamp, easing in
+    // over REVEAL_FADE just ahead of it (smoothstep edges must increase on WGSL,
+    // so the fade band is seq-fade → seq). At rest uPlayhead = 1 ≥ every seq, so
+    // reveal = 1 for all and the plot is identical to a static render.
+    const reveal = this.uPlayhead.smoothstep(iSeq.sub(this.uRevealFade), iSeq);
+    // extra emissive right at the wavefront, decaying over uPulseWidth behind it.
+    // uPulse is 0 unless actively playing (and stays 0 under reduced motion), so
+    // this whole term vanishes at rest.
+    const behind = this.uPlayhead.sub(iSeq).max(0);
+    const pulse = behind
+      .smoothstep(float(0), this.uPulseWidth)
+      .oneMinus()
+      .mul(reveal)
+      .mul(this.uPulse);
 
     const material = new THREE.SpriteNodeMaterial({
       transparent: true,
@@ -424,29 +717,33 @@ export class SessionFieldDriver {
       blending: THREE.AdditiveBlending,
     });
 
-    const hovered = instanceIndex.toFloat().equal(this.uHover);
-    const picked = instanceIndex.toFloat().equal(this.uSelected);
-    const emphasis = select(picked, float(2.6), select(hovered, float(1.9), float(1)));
-
     material.positionNode = iPos;
     // the bright turns also spread a little wider — the two channels reinforce
-    // rather than fight, and a hot core with a wide halo is what reads as glow
-    material.scaleNode = this.uSize.mul(iSize).mul(float(0.7).add(iGlow.mul(1.1))).mul(emphasis);
-
-    // emissive: the top of the range exceeds 1.0 on purpose — that headroom is
-    // what the bloom threshold (0.55) keys on, so only real spikes glow
-    material.colorNode = iColor.mul(mix(float(EMISSIVE_MIN), float(EMISSIVE_MAX), iGlow));
+    // rather than fight, and a hot core with a wide halo is what reads as glow.
+    // The wavefront gives a small extra pop as it ignites each turn.
+    material.scaleNode = this.uSize
+      .mul(toolSize)
+      .mul(float(0.7).add(glow.mul(1.1)))
+      .mul(emphasis)
+      .mul(float(1).add(pulse.mul(0.45)));
+    // emissive: the ceiling (glowStrength) exceeds 1.0 on purpose — that
+    // headroom is what the bloom threshold keys on, so only real spikes glow.
+    // The wavefront pulse pushes an igniting turn transiently over that ceiling.
+    material.colorNode = rgb
+      .mul(mix(float(EMISSIVE_MIN), this.uGlowMax, glow))
+      .mul(float(1).add(pulse));
 
     // soft radial falloff — no hard edge, so overlapping points accumulate
     // rather than occlude
     const d = uv().sub(0.5).length();
     const disc = d.smoothstep(0.06, 0.5).oneMinus();
-    const alpha = mix(float(BASE_ALPHA), float(PEAK_ALPHA), iGlow);
-    const subDim = mix(float(1), float(0.5), iSub);
+    const alpha = mix(this.uMoteFloor, float(PEAK_ALPHA), glow);
+    const subDim = mix(float(1), this.uSubOpacity, iSub);
     material.opacityNode = disc
       .mul(select(picked.or(hovered), float(1), alpha))
       .mul(subDim)
-      .mul(iVis);
+      .mul(iVis)
+      .mul(reveal); // unrevealed turns are fully transparent until the sweep arrives
 
     this.fieldMat = material;
     const sprite = new THREE.Sprite(material);
@@ -457,13 +754,21 @@ export class SessionFieldDriver {
     this.scene.add(sprite);
 
     // id companion for GPU picking — shares the same attribute nodes so a pick
-    // can never drift from what is on screen
+    // can never drift from what is on screen. Its base scale matches the field
+    // (minus the hover/select emphasis) so the hit target tracks the mote.
     const idMat = new THREE.SpriteNodeMaterial({ transparent: false });
     idMat.positionNode = iPos;
-    idMat.scaleNode = this.uSize.mul(iSize).mul(float(0.7).add(iGlow.mul(1.1))).mul(2.4); // finger-friendly
+    idMat.scaleNode = this.uSize.mul(toolSize).mul(float(0.7).add(glow.mul(1.1))).mul(2.4); // finger-friendly
     const id = instanceIndex.add(1).toFloat();
     idMat.colorNode = vec3(id.mod(256), id.div(256).floor().mod(256), id.div(65536).floor()).div(255);
-    idMat.opacityNode = select(d.lessThan(0.45), float(1), float(0)).mul(iVis.step(0.5).oneMinus().oneMinus());
+    // only fully-visible, already-revealed motes are pickable — a legend-dimmed
+    // category (iVis < 1) or a turn the wavefront has not reached (reveal < 1)
+    // drops out of picking, so a hover can never land on something unseen.
+    idMat.opacityNode = select(
+      d.lessThan(0.45),
+      select(iVis.greaterThanEqual(0.999).and(reveal.greaterThanEqual(0.999)), float(1), float(0)),
+      float(0),
+    );
     idMat.alphaTest = 0.5;
     const idSprite = new THREE.Sprite(idMat);
     idSprite.count = n;
@@ -535,16 +840,37 @@ export class SessionFieldDriver {
     const mid = aStart.add(aEnd).mul(0.5);
     const perpRaw = cameraPosition.sub(mid).cross(dir);
     const perp = perpRaw.div(perpRaw.length().max(1e-6));
-    material.positionNode = aStart.add(dir.mul(t)).add(perp.mul(across.mul(TRAIL_WIDTH)));
+    // growth: how far the wavefront has advanced across this segment's time span,
+    // 0..1. Clamping the along-ribbon parameter `t` to `frac` collapses the
+    // not-yet-drawn tail onto the wavefront point (zero area → invisible), so the
+    // path draws itself turn by turn. At rest uPlayhead = 1 ≥ seqEnd, frac = 1,
+    // and the full ribbon is drawn exactly as before.
+    //
+    // The endpoints' seq is DERIVED from their X rather than carried in its own
+    // attribute — X is the time axis, so this is the same number, and an extra
+    // attribute here would be the ninth vertex buffer. An InstancedMesh on a
+    // PlaneGeometry already binds position+normal+uv+instanceMatrix (4) before
+    // aStart/aEnd/aColor/aFocus (4), which is exactly the WebGPU max of 8; the
+    // ninth is rejected SILENTLY at pipeline creation and the trail vanishes.
+    const seqStart = aStart.x.add(HALF).div(CUBE);
+    const seqEnd = aEnd.x.add(HALF).div(CUBE);
+    const frac = this.uPlayhead.sub(seqStart).div(seqEnd.sub(seqStart).max(1e-4)).clamp(0, 1);
+    const grown = t.min(frac);
+    material.positionNode = aStart.add(dir.mul(grown)).add(perp.mul(across.mul(this.uTrailWidth)));
     material.colorNode = aColor;
     const edgeFade = across.abs().mul(2).smoothstep(0.2, 1).oneMinus();
-    material.opacityNode = edgeFade.mul(mix(float(TRAIL_ALPHA), float(TRAIL_FOCUS_ALPHA), aFocus));
+    // a brief brightening while a segment is actively growing (0 < frac < 1)
+    const activeTip = frac.smoothstep(0, 0.12).mul(frac.smoothstep(0.88, 1).oneMinus()).mul(this.uTrailPulse);
+    material.opacityNode = edgeFade.mul(
+      mix(this.uTrailAlpha, this.uTrailFocusAlpha, aFocus).add(activeTip),
+    );
 
     this.trailMat = material;
     const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1, 1, 1), material, n);
     mesh.count = n;
     mesh.frustumCulled = false;
     mesh.renderOrder = 2;
+    mesh.visible = this.cfg.showTrails;
     this.trail = mesh;
     this.scene.add(mesh);
   }
@@ -572,14 +898,16 @@ export class SessionFieldDriver {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
     const mat = new THREE.LineBasicNodeMaterial({
-      color: FRAME_RGB,
+      color: new THREE.Color(this.cfg.frameColor),
       transparent: true,
-      opacity: 0.5,
+      opacity: this.cfg.frameOpacity,
       depthWrite: false,
     });
+    this.frameMat = mat;
     this.frame3 = new THREE.LineSegments(geo, mat);
     this.frame3.frustumCulled = false;
     this.frame3.renderOrder = 1;
+    this.frame3.visible = this.cfg.showFrame;
     this.scene.add(this.frame3);
   }
 
@@ -606,7 +934,7 @@ export class SessionFieldDriver {
   private updateProbe(): void {
     const i = this.selected ?? this.hovered;
     if (!this.probe) return;
-    if (i === null || i < 0 || i >= this.nodes.length) {
+    if (!this.cfg.showProbe || i === null || i < 0 || i >= this.nodes.length) {
       this.probe.visible = false;
       return;
     }
@@ -623,11 +951,54 @@ export class SessionFieldDriver {
     this.probe.visible = true;
   }
 
+  /** The wavefront marker — a bright rectangle in the context/new-context plane
+   *  that rides the playhead across the time axis. It reads as the "now" line of
+   *  the replay and blooms softly on the WebGPU rung. Hidden at rest. */
+  private buildSweep(): void {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(8 * 3), 3));
+    const mat = new THREE.LineBasicNodeMaterial({
+      color: new THREE.Color(0x4d8dff), // --accent
+      transparent: true,
+      opacity: 0.85,
+      depthWrite: false,
+      depthTest: false,
+    });
+    this.sweepMat = mat;
+    this.sweep = new THREE.LineSegments(geo, mat);
+    this.sweep.frustumCulled = false;
+    this.sweep.renderOrder = 5;
+    this.sweep.visible = false;
+    this.scene.add(this.sweep);
+  }
+
+  private updateSweep(): void {
+    if (!this.sweep) return;
+    const active = this.nodes.length > 0 && (this.playing || this.playhead < 0.9999);
+    if (!active) {
+      this.sweep.visible = false;
+      return;
+    }
+    const x = this.playhead * CUBE - HALF;
+    const arr = (this.sweep.geometry.getAttribute("position") as THREE.BufferAttribute)
+      .array as Float32Array;
+    // rectangle in the Y/Z plane at x, as four edges (8 vertices)
+    arr.set([
+      x, -HALF, -HALF, x, HALF, -HALF,
+      x, HALF, -HALF, x, HALF, HALF,
+      x, HALF, HALF, x, -HALF, HALF,
+      x, -HALF, HALF, x, -HALF, -HALF,
+    ]);
+    (this.sweep.geometry.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
+    this.sweep.visible = true;
+  }
+
   /** Light the run of segments around the active turn and let the rest fall back
-   *  to ambient. A linear ramp over TRAIL_FOCUS_SPAN turns, so the emphasis has
+   *  to ambient. A linear ramp over trailFocusSpan turns, so the emphasis has
    *  a direction you can follow rather than a hard edge. */
   private updateTrailFocus(): void {
     if (!this.focusAttr) return;
+    const span = Math.max(1, this.cfg.trailFocusSpan);
     const i = this.selected ?? this.hovered;
     const active = i === null ? null : this.nodes[i];
     for (let s = 0; s < this.trailKeys.length; s++) {
@@ -637,7 +1008,7 @@ export class SessionFieldDriver {
         continue;
       }
       const d = Math.abs(key.index - active.index);
-      this.focusArray[s] = d > TRAIL_FOCUS_SPAN ? 0 : 1 - d / TRAIL_FOCUS_SPAN;
+      this.focusArray[s] = d > span ? 0 : 1 - d / span;
     }
     this.focusAttr.needsUpdate = true;
     this.cameraDirty = true;
@@ -645,8 +1016,9 @@ export class SessionFieldDriver {
 
   private applyVisibility(): void {
     if (!this.visAttr) return;
+    const dim = this.cfg.dimmedOpacity;
     for (let i = 0; i < this.nodes.length; i++) {
-      this.visArray[i] = this.hiddenCats.has(this.nodes[i]!.turn.category) ? DIM_ALPHA : 1;
+      this.visArray[i] = this.hiddenCats.has(this.nodes[i]!.turn.category) ? dim : 1;
     }
     this.visAttr.needsUpdate = true;
     this.cameraDirty = true;
@@ -674,11 +1046,40 @@ export class SessionFieldDriver {
       this.cameraDirty = false;
     }
 
+    this.advancePlayback();
     this.maybePick();
 
-    if (this.bloomPipe) this.bloomPipe.post.render();
+    // bloom rides the webgpu rung and only when the global toggle is on;
+    // otherwise render straight so the switch is live with no teardown
+    if (this.bloomPipe && this.bloomOn) this.bloomPipe.post.render();
     else this.renderer.render(this.scene, this.camera);
   };
+
+  /** Advance the playhead by wall-clock time while playing. The sweep moves
+   *  linearly in axis space, so on an eased time axis idle gaps compress and the
+   *  replay never stalls; PLAY_BASE_SECONDS is one full pass at 1×. */
+  private advancePlayback(): void {
+    if (!this.playing || this.nodes.length === 0) return;
+    const now = performance.now();
+    // cap dt so returning from a backgrounded tab doesn't teleport the sweep
+    const dt = Math.min((now - this.lastClock) / 1000, 0.1);
+    this.lastClock = now;
+    const dur = PLAY_BASE_SECONDS / Math.max(this.playSpeed, 1e-3);
+    this.playhead += dt / dur;
+    if (this.playhead >= 1) {
+      this.playhead = 1;
+      this.playing = false;
+      this.uPlayhead.value = 1;
+      this.uPulse.value = 0;
+      this.uTrailPulse.value = 0;
+      this.updateSweep();
+      this.emitPlayback(true);
+      return;
+    }
+    this.uPlayhead.value = this.playhead;
+    this.updateSweep();
+    this.emitPlayback(false);
+  }
 
   resize(width: number, height: number, dpr: number): void {
     if (width < 2 || height < 2) return;
@@ -821,7 +1222,7 @@ export class SessionFieldDriver {
   private layoutLabels(): void {
     if (!this.overlay) return;
     const specs: { pos: THREE.Vector3; text: string }[] = [];
-    if (this.nodes.length > 0) {
+    if (this.cfg.showLabels && this.nodes.length > 0) {
       const TICKS = 4;
       for (const { u, value } of this.axes.x.ticks(TICKS)) {
         specs.push({ pos: new THREE.Vector3(u * CUBE - HALF, -HALF, HALF), text: fmtSecs(value) });
@@ -967,12 +1368,20 @@ export class SessionFieldDriver {
       this.frame3.geometry.dispose();
       (this.frame3.material as THREE.Material).dispose();
       this.frame3 = null;
+      this.frameMat = null;
     }
     if (this.probe) {
       this.scene.remove(this.probe);
       this.probe.geometry.dispose();
       (this.probe.material as THREE.Material).dispose();
       this.probe = null;
+    }
+    if (this.sweep) {
+      this.scene.remove(this.sweep);
+      this.sweep.geometry.dispose();
+      (this.sweep.material as THREE.Material).dispose();
+      this.sweep = null;
+      this.sweepMat = null;
     }
     this.bloomPipe?.dispose();
     this.bloomPipe = null;

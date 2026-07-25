@@ -1,7 +1,7 @@
 /* App shell: layered stage + chrome.
    Editorial dark system — hierarchy through scale, spacing, and contrast:
    · monochrome type, ONE chrome accent (--accent); the ramp is data-only
-   · cards: 24px radius, 1px hairline, opaque graphite, soft elevation
+   · cards: sharp corners (0 radius), 1px hairline, opaque graphite, soft elevation
    · glass (backdrop blur) ONLY on transient overlays + floating controls
    · motion: 160–240ms ease-out; lifts of 1–2px, never bounces */
 
@@ -35,7 +35,7 @@ body {
   height: 8px;
 }
 *::-webkit-scrollbar-thumb {
-  border-radius: 999px;
+  border-radius: 0;
   background: var(--hairline-strong);
 }
 *::-webkit-scrollbar-track {
@@ -161,7 +161,7 @@ body {
   flex: none;
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  border-radius: 0;
   background: var(--dot, var(--text-dim));
 }
 
@@ -293,7 +293,7 @@ body {
   width: 28px;
   height: 28px;
   border: none;
-  border-radius: 50%;
+  border-radius: 0;
   background: transparent;
   color: var(--text-dim);
   font-size: 15px;
@@ -316,7 +316,7 @@ body {
   width: 42px;
   height: 42px;
   border: 1px solid var(--hairline);
-  border-radius: 50%;
+  border-radius: 0;
   background: var(--glass-bg);
   backdrop-filter: var(--glass-blur);
   box-shadow: var(--shadow-card);
@@ -375,7 +375,7 @@ body {
   max-width: 148px;
   padding: 6px 10px;
   border: 1px solid var(--hairline);
-  border-radius: var(--radius-ctl);
+  border-radius: var(--radius-form-ctl);
   background: var(--bg-pill);
   color: var(--text);
   font: 500 12px/1.2 var(--font-ui);
@@ -405,7 +405,7 @@ body {
   height: 21px;
   padding: 2px;
   border: 1px solid var(--hairline);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-form-pill);
   background: var(--bg-pill);
   cursor: pointer;
   transition:
@@ -465,14 +465,14 @@ body {
   display: flex;
   gap: 3px;
   padding: 3px;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-form-pill);
   background: color-mix(in srgb, var(--bg-pill) 65%, transparent);
 }
 
 .ctl-tab {
   padding: 5px 13px;
   border: none;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-form-pill);
   background: transparent;
   color: var(--text-dim);
   font: 600 12px/1.2 var(--font-ui);
@@ -688,7 +688,7 @@ body {
   width: 10px;
   height: 10px;
   flex: none;
-  border-radius: 50%;
+  border-radius: 0;
   box-shadow: 0 0 6px rgb(255 255 255 / 8%);
 }
 
@@ -991,7 +991,7 @@ body {
   width: 36px;
   height: 36px;
   border: 1px solid var(--hairline);
-  border-radius: 50%;
+  border-radius: 0;
   background: transparent;
   color: var(--text-dim);
   font-size: 14px;
@@ -1149,7 +1149,7 @@ body {
 .ctl-input {
   padding: 8px 12px;
   border: 1px solid var(--hairline);
-  border-radius: var(--radius-ctl);
+  border-radius: var(--radius-form-ctl);
   background: var(--bg-pill);
   color: var(--text);
   font: 500 12px/1.2 var(--font-mono);
@@ -1163,6 +1163,53 @@ body {
 .ctl-input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* colour picker row — swatch + live hex readout */
+.ctl-color-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ctl-color-hex {
+  color: var(--text-dim);
+  font: 500 11px/1.2 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-transform: uppercase;
+}
+
+.ctl-color {
+  width: 28px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-form-ctl);
+  background: none;
+  cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease-out);
+}
+
+.ctl-color:hover {
+  border-color: var(--accent);
+}
+
+.ctl-color:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* normalise the native swatch chrome across engines */
+.ctl-color::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+.ctl-color::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+.ctl-color::-moz-color-swatch {
+  border: none;
+  border-radius: 2px;
 }
 
 .settings-empty {
@@ -1289,7 +1336,7 @@ body {
 .progress-node-dot {
   width: 8px;
   height: 8px;
-  border-radius: 50%;
+  border-radius: 0;
   background: var(--hairline-strong);
 }
 
@@ -1811,7 +1858,7 @@ body.page-sessions #stage {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--hairline);
-  border-radius: var(--radius-ctl);
+  border-radius: var(--radius-form-ctl);
   background: var(--bg-pill);
   color: var(--text);
   font: 500 11px/1.5 var(--font-mono);
@@ -2048,33 +2095,7 @@ body.page-sessions #stage {
   padding: 14px 32px 24px;
 }
 
-.snapshot-scrubber {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 10px 18px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-pill);
-  background: var(--glass-bg);
-  backdrop-filter: var(--glass-blur);
-  box-shadow: var(--shadow-card);
-}
-
-.snapshot-scrubber.is-disabled {
-  opacity: 0.6;
-}
-
-.snapshot-range {
-  flex: 1;
-  accent-color: var(--accent);
-}
-
-.snapshot-scrubber-pos {
-  color: var(--text-dim);
-  font: 500 11px/1.2 var(--font-mono);
-  min-width: 60px;
-  text-align: right;
-}
+/* the scrubber itself is the shared `.transport` — see that block */
 
 .visually-hidden {
   position: absolute;
@@ -2265,7 +2286,7 @@ body.page-sessions #stage {
   width: 6px;
   height: 6px;
   margin-left: auto;
-  border-radius: 50%;
+  border-radius: 0;
   background: var(--accent);
   box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 60%, transparent);
 }
@@ -2287,7 +2308,7 @@ body.page-sessions #stage {
   flex: none;
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  border-radius: 0;
   background: var(--accent);
 }
 
@@ -2666,6 +2687,17 @@ body.page-sessions #stage {
   bottom: 62px;
 }
 
+/* A driver that builds a bottom-centre transport owns that whole band, so a
+   bottom-docked legend has to clear the transport itself — not just the chip
+   row above it. 24 (transport offset) + 48 (shell) + 12 (gap). Applies
+   expanded too: an expanded corner-br card reaches far enough left to sit
+   right on top of the centred transport. Scoped with :has so the ~20 views
+   without a transport keep their tighter 62px. */
+.interp-stage:has(.interp-transport) .interp-legend.corner-bl,
+.interp-stage:has(.interp-transport) .interp-legend.corner-br {
+  bottom: 84px;
+}
+
 .interp-legend-head {
   display: flex;
   align-items: baseline;
@@ -2861,7 +2893,7 @@ body.page-sessions #stage {
 .interp-status-switch {
   padding: 6px 14px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 0;
   background: var(--text);
   color: var(--bg);
   font: 600 12px/1.2 var(--font-ui);
@@ -2948,7 +2980,7 @@ body.page-sessions #stage {
   flex: none;
   width: 5px;
   height: 5px;
-  border-radius: 50%;
+  border-radius: 0;
   background: var(--accent);
 }
 
@@ -2980,7 +3012,7 @@ body.page-sessions #stage {
   min-width: 160px;
   padding: 6px 12px;
   border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--hairline));
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-form-pill);
   background: var(--bg);
   color: var(--text);
   font: 500 11.5px/1.2 var(--font-ui);
@@ -3185,46 +3217,21 @@ body.page-sessions #stage {
   transform-origin: center center;
   translate: -50% 0;
 }
-.interp-roll-ctrl {
+/* Rollout depth transport — the shared `.transport` shell (see that block).
+   Centred over the interp stage rather than edge-anchored: the stage has no
+   side rails to clear, and the matrix it sits under is itself centred.
+   `left:0; right:0` + justify-content, NOT `left:50%` + translateX — the
+   latter caps a shrink-to-fit row at 50% of the containing block and wraps it
+   early (same trap as the interp legend chips). */
+.interp-transport {
   position: absolute;
-  left: 50%;
+  left: 0;
+  right: 0;
   bottom: 24px;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 9px 16px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-pill);
-  background: var(--glass-bg);
-  backdrop-filter: var(--glass-blur);
-  box-shadow: var(--shadow-card);
-}
-.interp-roll-play {
-  padding: 5px 13px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--text);
-  font: 600 11px/1 var(--font-mono);
-  cursor: pointer;
-  white-space: nowrap;
-  transition:
-    color var(--t-fast) var(--ease-out),
-    border-color var(--t-fast) var(--ease-out);
-}
-.interp-roll-play:hover {
-  border-color: var(--text);
-}
-.interp-roll-slider {
-  width: 180px;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-.interp-roll-read {
-  font: 500 11px/1 var(--font-mono);
-  color: var(--text-dim);
-  white-space: nowrap;
+  z-index: 3;
+  width: min(560px, calc(100% - 48px));
+  margin: 0 auto;
+  pointer-events: auto;
 }
 
 /* Residual-Stream Ribbon (#8) — per-token end labels + layer ticks */
@@ -3258,6 +3265,44 @@ body.page-sessions #stage {
 }
 .interp-rs-ycap {
   transform-origin: left center;
+}
+
+/* Hover chrome for the emissive 2D fields (see scene/interp/field2d.ts).
+   DOM, not scene geometry, and deliberately so: those fields render additively
+   through bloom, so a crosshair drawn in the scene would glow like a dense
+   cluster of real points. Chrome that blooms reads as a measurement. */
+.interp-field-marker {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease-out);
+}
+.interp-field-marker.is-on {
+  opacity: 1;
+}
+.interp-fm-h,
+.interp-fm-v {
+  position: absolute;
+  left: 0;
+  top: 0;
+  background: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.interp-fm-h {
+  height: 1px;
+}
+.interp-fm-v {
+  width: 1px;
+}
+.interp-fm-dot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  background: var(--danger);
+  /* the diamond lives in `transform`; position is written to `translate` so the
+     two can never clobber each other */
+  transform: rotate(45deg);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent);
 }
 
 /* Embedding Constellation (#15) — axis captions + real-extreme anchor labels */
@@ -3589,7 +3634,7 @@ body.page-sessions #stage {
   width: 100%;
   resize: vertical;
   border: 1px solid var(--hairline);
-  border-radius: var(--radius-ctl);
+  border-radius: var(--radius-form-ctl);
   background: var(--bg);
   color: var(--text);
   font: 400 11px/1.45 var(--font-mono);
@@ -3791,7 +3836,7 @@ body.page-sessions #stage {
 .sessions-key-dot {
   width: 9px;
   height: 9px;
-  border-radius: 50%;
+  border-radius: 0;
   flex: 0 0 auto;
 }
 .sessions-key-label {
@@ -4228,6 +4273,202 @@ body.page-sessions #stage {
   text-align: right;
 }
 
+/* ── transport (shared) ────────────────────────────────────────────────────
+   The play/scrub/speed bar. Shared deliberately: the app grew three of these
+   independently (sessions timeline, snapshot scrubber, attention rollout) and
+   they drifted apart visually. `.transport` is the look; each view adds a
+   positioning modifier (`.sessions-transport`, `.compare-transport`). What
+   the scrubber MEANS is per-view — a clock in sessions, a position in a
+   presentation in compare — so only the chrome is shared, never the readout.
+   Interactive, so it opts back into pointer events over the canvas. */
+/* The shell carries LOOK ONLY — no positioning. Two of the three transports
+   float over a full-bleed canvas and one sits in a page footer; baking
+   `position:absolute` in here meant the in-flow one had to undo it. */
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-card);
+}
+/* the two that float over a canvas */
+.sessions-transport,
+.compare-transport {
+  position: absolute;
+  z-index: 3;
+  pointer-events: auto;
+}
+/* clears the inspector/stats column on the right (344px) so it never underlaps */
+.sessions-transport {
+  left: 18px;
+  right: 344px;
+  bottom: 18px;
+}
+.snapshot-transport.is-disabled {
+  opacity: 0.6;
+}
+.tp-btn:disabled,
+.tp-scrub:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.tp-btn:disabled:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+/* Clears the right-hand legend rail (right:32 + width:256 = 288) and sits ABOVE
+   the centred status/MetaLine pill at bottom:32 — the map views keep dataset
+   provenance visible at all times and the transport must not cover it. */
+.compare-transport {
+  left: 18px;
+  right: 336px;
+  bottom: 74px;
+}
+.tp-btn {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 0;
+  border: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+.tp-btn:hover {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+.tp-btn:active {
+  transform: scale(0.94);
+}
+.tp-play {
+  background: var(--accent);
+  border-color: transparent;
+  color: #061018;
+  font-size: 13px;
+}
+.tp-play:hover {
+  background: color-mix(in srgb, var(--accent) 86%, white);
+}
+.tp-scrub {
+  flex: 1 1 auto;
+  min-width: 60px;
+  height: 4px;
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  border-radius: 0;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0%,
+    var(--accent) var(--tp-progress, 0%),
+    color-mix(in srgb, var(--text) 16%, transparent) var(--tp-progress, 0%),
+    color-mix(in srgb, var(--text) 16%, transparent) 100%
+  );
+  cursor: pointer;
+}
+.tp-scrub::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 0;
+  background: #fff;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 55%, transparent);
+  cursor: grab;
+}
+.tp-scrub::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 0;
+  background: #fff;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 55%, transparent);
+  cursor: grab;
+}
+.tp-scrub:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+/* Discrete-stop variant: the tick gradient rides ON TOP of the fill gradient,
+   so the ticks stay put while the fill sweeps. Tick positions come from the
+   driver (--tp-ticks) — never hard-coded here, or they'd drift the moment the
+   dwell/transition weighting changed. */
+.tp-scrub-ticked {
+  --tp-tick: color-mix(in srgb, var(--text) 42%, transparent);
+  height: 6px;
+  background-image: var(--tp-ticks, none),
+    linear-gradient(
+      to right,
+      var(--accent) 0%,
+      var(--accent) var(--tp-progress, 0%),
+      color-mix(in srgb, var(--text) 16%, transparent) var(--tp-progress, 0%),
+      color-mix(in srgb, var(--text) 16%, transparent) 100%
+    );
+}
+.tp-time {
+  flex: none;
+  font: 500 11px/1 var(--font-mono);
+  color: var(--text);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+/* Compare's readout: layout NAMES, never a clock — the view has no time axis. */
+.tp-stage {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  min-width: 0;
+  font: 500 11px/1 var(--font-mono);
+  color: var(--text);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.tp-stage .tp-now {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tp-sep {
+  color: var(--text-faint);
+  margin: 0 3px;
+}
+.tp-total {
+  color: var(--text-dim);
+}
+.tp-count {
+  flex: none;
+  font: 600 11px/1 var(--font-mono);
+  color: var(--accent);
+  white-space: nowrap;
+}
+.tp-count i {
+  color: var(--text-faint);
+  font-style: normal;
+  font-weight: 500;
+}
+.tp-speed {
+  flex: none;
+  display: flex;
+}
+.tp-speed select {
+  font: 500 11px/1 var(--font-mono);
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  padding: 5px 6px;
+  cursor: pointer;
+}
+
 @media (max-width: 900px) {
   .sessions-shell {
     grid-template-columns: 1fr;
@@ -4238,6 +4479,12 @@ body.page-sessions #stage {
   }
   .sessions-stats {
     display: none;
+  }
+  .sessions-transport {
+    right: 12px;
+    left: 12px;
+    bottom: 12px;
+    gap: 8px;
   }
 }
 
@@ -4349,7 +4596,7 @@ body.page-sessions #stage {
   margin-top: 10px;
   padding: 7px 10px;
   border: 1px solid var(--hairline);
-  border-radius: var(--radius-ctl);
+  border-radius: var(--radius-form-ctl);
   background: var(--bg-pill);
   color: var(--text);
   font: 400 12px/1.4 var(--font-ui);

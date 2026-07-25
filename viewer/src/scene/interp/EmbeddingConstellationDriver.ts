@@ -11,27 +11,30 @@
  *
  *  Axes are drawn to a single isometric scale (equal px per PC unit) so on-screen
  *  distances are faithful; PC1 simply spans a wider range than PC2 because it
- *  carries more variance. deck.gl (WebGL2), camera off, static (redraw on hover).
+ *  carries more variance.
+ *
+ *  RENDERING: three/webgpu + TSL emissive field (`field2d.ts`), not a deck.gl
+ *  scatter. 50,257 hard-edged discs overplot into one flat silhouette — the
+ *  density that this view is largely ABOUT was being thrown away. Additive
+ *  soft sprites let overlap sum, so the crowded PC1 spine reads as bright and
+ *  the sparse periphery as dark, which is the real distribution. Two encodings
+ *  now carry the norm: size is linear in ‖W_E‖₂ exactly as before, and glow is
+ *  its RANK. Rank is monotone in the norm, so the two channels can never
+ *  disagree about which star is bigger; rank rather than magnitude because the
+ *  norm distribution is long-tailed and a linear ramp would hand the whole
+ *  visible range to a few outliers. Hover chrome stays in the DOM overlay —
+ *  anything in the scene blooms, and a marker that blooms reads as data.
+ *
+ *  Camera off, static (redraw on hover).
  *
  *  Source: embed.json → PCA of W_E computed offline in float64 (eigendecomp of
  *  the 768×768 covariance; coords = Wc·V). */
 
-import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
 import { type EmbedBundle, loadEmbed } from "../../data/interp";
-import {
-  ACCENT,
-  crosshair,
-  MARKER_HOT,
-  markerPoly,
-  type Seg as ThemeSeg,
-  type Vec2,
-  withAlpha,
-} from "./chart-theme";
+import { EmissiveField2D, FieldMarker, rankNormalize, type Field2DLook } from "./field2d";
 import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
-
-type LayersModule = typeof import("@deck.gl/layers");
 
 const GL = 60; // px gutters (axis captions + anchor labels)
 const GR = 60;
@@ -42,8 +45,43 @@ const FIT = 0.94; // leave a little breathing room around the data bbox
 const SPACE: [number, number, number] = [245, 190, 92]; // leading-space token (warm)
 const NOSPACE: [number, number, number] = [92, 198, 236]; // non-space token (cool)
 
+/** Tuned by measurement against the DENSEST region — the core where tens of
+ *  thousands of common tokens pile up — not by eye.
+ *
+ *  The metric is the fraction of LIT pixels (max channel > 0.12) whose
+ *  saturation has collapsed below 0.15, i.e. gone white: that fraction IS the
+ *  fraction of the frame where the warm/cool leading-space split — the whole
+ *  colour encoding, and the finding this view exists to show — has been
+ *  destroyed. First honest numbers, at the values ported over from the compare
+ *  field: 76% of the frame lit, 40% of it desaturated — one uniform white blob.
+ *  Landing at 40% lit / 14% desaturated took two things:
+ *
+ *    - `pointPx` down to 1.4. 50,257 additive sprites is an enormous amount of
+ *      energy; per-point size is the term that multiplies it.
+ *    - A bloom `threshold` of 1.2, well above the module default of 0.55. The
+ *      threshold reads the scene BEFORE tone mapping, where the core's summed
+ *      value is far past 1.0, so at the default the entire core bloomed and
+ *      smeared across half the stage. Only genuine spikes should bloom here.
+ *
+ *  Exposure was the wrong knob and is left at 1: it darkens the isolated
+ *  periphery stars just as much as the core, and those stars are data. */
+const LOOK: Field2DLook = {
+  pointPx: 1.4,
+  emissiveMin: 0.12,
+  emissiveMax: 1.45,
+  glowGamma: 2.5,
+  moteFloor: 0.1,
+  dimLevel: 0.28,
+  bloom: { strength: 0.45, radius: 0.32, threshold: 1.2 },
+};
+
+/** Global brightness while a star is focused — the field steps back so the
+ *  marker is findable, exactly what the old layer-opacity dip did. */
+const HOVER_DIM = 0.42;
+
 interface Star {
-  position: [number, number];
+  x: number;
+  y: number;
   z: number; // PC3 (hover only)
   norm: number;
   lead: number; // 1 = leading space
@@ -53,11 +91,10 @@ interface Star {
 
 export class EmbeddingConstellationDriver implements InterpDriver {
   readonly animated = false;
-  private deck: Deck<OrthographicView[]> | null = null;
-  private layersMod!: LayersModule;
-  private makeView!: () => OrthographicView;
+  private field = new EmissiveField2D(LOOK);
   private canvas!: HTMLCanvasElement;
   private tooltip!: InterpTooltip;
+  private marker!: FieldMarker;
   private labelRoot!: HTMLElement;
 
   private bundle: EmbedBundle | null = null;
@@ -73,26 +110,14 @@ export class EmbeddingConstellationDriver implements InterpDriver {
 
   private cssW = 1;
   private cssH = 1;
-  private dpr = 1;
   private disposers: Array<() => void> = [];
 
-  async init(canvas: HTMLCanvasElement, _tier: GpuTier, overlay: HTMLElement): Promise<void> {
+  async init(canvas: HTMLCanvasElement, tier: GpuTier, overlay: HTMLElement): Promise<void> {
     this.canvas = canvas;
-    const [core, layers] = await Promise.all([import("@deck.gl/core"), import("@deck.gl/layers")]);
-    this.layersMod = layers;
-    this.makeView = () => new core.OrthographicView({ id: "ortho", flipY: false });
-    this.deck = new core.Deck({
-      canvas,
-      views: [this.makeView()],
-      viewState: this.viewState(),
-      controller: false,
-      useDevicePixels: Math.min(this.dpr, 2),
-      layers: [],
-      width: this.cssW,
-      height: this.cssH,
-    }) as unknown as Deck<OrthographicView[]>;
+    await this.field.init(canvas, tier);
 
     this.tooltip = new InterpTooltip(overlay);
+    this.marker = new FieldMarker(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-embed-labels";
     overlay.appendChild(this.labelRoot);
@@ -123,7 +148,7 @@ export class EmbeddingConstellationDriver implements InterpDriver {
       const x = c[i * 2] ?? 0;
       const y = c[i * 2 + 1] ?? 0;
       const nm = b.norm[i] ?? 0;
-      stars[i] = { position: [x, y], z: b.z[i] ?? 0, norm: nm, lead: b.lead_space[i] ?? 0, str: b.strs[i] ?? "", id: i };
+      stars[i] = { x, y, z: b.z[i] ?? 0, norm: nm, lead: b.lead_space[i] ?? 0, str: b.strs[i] ?? "", id: i };
       if (x < minX) minX = x;
       if (x > maxX) maxX = x;
       if (y < minY) minY = y;
@@ -139,6 +164,8 @@ export class EmbeddingConstellationDriver implements InterpDriver {
     this.normMin = nmin;
     this.normMax = nmax;
     this.hover = null;
+    this.marker.hide();
+    this.field.setDim(1);
 
     // orient the eye with a handful of REAL extremes (no cherry-picking of the
     // interior): the tokens at the PC1/PC2 range ends and the largest-norm star.
@@ -150,10 +177,10 @@ export class EmbeddingConstellationDriver implements InterpDriver {
         return best;
       };
       for (const s of [
-        extreme((s) => s.position[0], +1),
-        extreme((s) => s.position[0], -1),
-        extreme((s) => s.position[1], +1),
-        extreme((s) => s.position[1], -1),
+        extreme((s) => s.x, +1),
+        extreme((s) => s.x, -1),
+        extreme((s) => s.y, +1),
+        extreme((s) => s.y, -1),
         extreme((s) => s.norm, +1),
       ]) {
         set.set(s.id, s);
@@ -161,145 +188,49 @@ export class EmbeddingConstellationDriver implements InterpDriver {
     }
     this.anchors = [...set.values()];
 
-    this.deck?.setProps({ viewState: this.viewState() });
-    this.pushLayers();
+    this.pushField();
+    this.field.fitInset(minX, minY, maxX, maxY, this.inset(), FIT);
+    this.field.render();
     this.positionLabels();
   }
 
   private radiusOf(norm: number): number {
     const t = (norm - this.normMin) / Math.max(1e-6, this.normMax - this.normMin);
-    return 1.2 + t * 2.4; // 1.2 .. 3.6 px, ∝ real embedding norm
+    return 1.2 + t * 2.4; // 1.2 .. 3.6 × base, ∝ real embedding norm
   }
 
-  private pushLayers(): void {
-    if (!this.deck || !this.stars.length) return;
-    const { ScatterplotLayer, LineLayer, SolidPolygonLayer } = this.layersMod;
-    const colorOf = (s: Star): [number, number, number] => (s.lead ? SPACE : NOSPACE);
+  private inset() {
+    return { left: GL, right: GR, top: GT, bottom: GB };
+  }
 
-    // markers/crosshair live in world (PC) space, so pixel-authored sizes are
-    // scaled by world-units-per-pixel (mirrors the WeightSpectrum template).
-    const wpp = 1 / this.zoomPx();
-    const bounds = { x0: this.minX, y0: this.minY, x1: this.maxX, y1: this.maxY };
-    // crosshair guides snap onto the hovered star (req 4)
-    const cross: ThemeSeg[] = this.hover
-      ? crosshair(this.hover.position[0], this.hover.position[1], bounds, 3 * wpp, 4 * wpp)
-      : [];
-    // hover LED diamond (translucent glow under a full-alpha core) replaces the
-    // old white outline ring (req 4)
-    interface Marker {
-      poly: Vec2[];
-      color: [number, number, number, number];
+  /** Upload the field once per dataset. Unlike the deck.gl version there is no
+   *  per-hover layer rebuild: hover only moves DOM chrome and nudges one
+   *  brightness uniform, so 50k attributes are built exactly once. */
+  private pushField(): void {
+    const n = this.stars.length;
+    if (!n) return;
+    const pos = new Float32Array(n * 2);
+    const color = new Float32Array(n * 3);
+    const radius = new Float32Array(n);
+    const norms = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const s = this.stars[i] as Star;
+      pos[i * 2] = s.x;
+      pos[i * 2 + 1] = s.y;
+      const [r, g, b] = s.lead ? SPACE : NOSPACE;
+      color[i * 3] = r / 255;
+      color[i * 3 + 1] = g / 255;
+      color[i * 3 + 2] = b / 255;
+      radius[i] = this.radiusOf(s.norm);
+      norms[i] = s.norm;
     }
-    const mr = this.hover ? (this.radiusOf(this.hover.norm) + 2) * wpp : 0;
-    const marks: Marker[] = this.hover
-      ? [
-          {
-            poly: markerPoly(this.hover.position[0], this.hover.position[1], mr * 2.1),
-            color: withAlpha(MARKER_HOT, 0.22),
-          },
-          {
-            poly: markerPoly(this.hover.position[0], this.hover.position[1], mr),
-            color: withAlpha(MARKER_HOT, 1),
-          },
-        ]
-      : [];
-
-    this.deck.setProps({
-      layers: [
-        // soft glow: radius/alpha ∝ real norm — the "bright stars" are the
-        // highest-magnitude embeddings, not a decorative pick.
-        new ScatterplotLayer<Star>({
-          id: "embed-halo",
-          data: this.stars,
-          getPosition: (s) => [s.position[0], s.position[1], 0],
-          getFillColor: (s) => {
-            const [r, g, bl] = colorOf(s);
-            const t = (s.norm - this.normMin) / Math.max(1e-6, this.normMax - this.normMin);
-            return [r, g, bl, Math.round(10 + t * 30)];
-          },
-          getRadius: (s) => this.radiusOf(s.norm) * 2.3,
-          radiusUnits: "pixels",
-          pickable: false,
-        }),
-        new ScatterplotLayer<Star>({
-          id: "embed-stars",
-          data: this.stars,
-          // the field dims to defer to the focused marker on hover (req 3)
-          opacity: this.hover ? 0.38 : 1,
-          getPosition: (s) => [s.position[0], s.position[1], 0],
-          getFillColor: (s) => {
-            const [r, g, bl] = colorOf(s);
-            return [r, g, bl, 165];
-          },
-          getRadius: (s) => this.radiusOf(s.norm),
-          radiusUnits: "pixels",
-          pickable: true,
-        }),
-        new LineLayer<ThemeSeg>({
-          id: "embed-crosshair",
-          data: cross,
-          getSourcePosition: (e) => [e.source[0], e.source[1], 0],
-          getTargetPosition: (e) => [e.target[0], e.target[1], 0],
-          getColor: withAlpha(ACCENT, 0.5),
-          getWidth: 1,
-          widthUnits: "pixels",
-          pickable: false,
-        }),
-        new SolidPolygonLayer<Marker>({
-          id: "embed-marker",
-          data: marks,
-          getPolygon: (m) => m.poly,
-          getFillColor: (m) => m.color,
-          pickable: false,
-        }),
-      ],
-    });
+    this.field.setData({ count: n, pos, color, rank: rankNormalize(norms), radius });
   }
 
-  // ---- isometric layout: equal px per PC unit so distances stay faithful -----
-  private availW(): number {
-    return Math.max(1, this.cssW - GL - GR);
-  }
-  private availH(): number {
-    return Math.max(1, this.cssH - GT - GB);
-  }
-  private spanX(): number {
-    return Math.max(1e-3, this.maxX - this.minX);
-  }
-  private spanY(): number {
-    return Math.max(1e-3, this.maxY - this.minY);
-  }
-  private zoomPx(): number {
-    return Math.max(1, Math.min(this.availW() / this.spanX(), this.availH() / this.spanY()) * FIT);
-  }
-  private dataCX(): number {
-    return (this.minX + this.maxX) / 2;
-  }
-  private dataCY(): number {
-    return (this.minY + this.maxY) / 2;
-  }
-  private drawCX(): number {
-    return GL + this.availW() / 2;
-  }
-  private drawCY(): number {
-    return GT + this.availH() / 2;
-  }
-  private worldToScreen(wx: number, wy: number): [number, number] {
-    const z = this.zoomPx();
-    return [this.drawCX() + (wx - this.dataCX()) * z, this.drawCY() - (wy - this.dataCY()) * z];
-  }
-  private viewState() {
-    const z = this.zoomPx();
-    return {
-      ortho: {
-        target: [
-          this.dataCX() + (this.cssW / 2 - this.drawCX()) / z,
-          this.dataCY() + (this.drawCY() - this.cssH / 2) / z,
-          0,
-        ] as [number, number, number],
-        zoom: Math.log2(z),
-      },
-    };
+  private dataBoxPx(): { x0: number; y0: number; x1: number; y1: number } {
+    const [x0, y1] = this.field.worldToScreen(this.minX, this.minY);
+    const [x1, y0] = this.field.worldToScreen(this.maxX, this.maxY);
+    return { x0, y0, x1, y1 };
   }
 
   private positionLabels(): void {
@@ -317,14 +248,16 @@ export class EmbeddingConstellationDriver implements InterpDriver {
       this.labelRoot.appendChild(el);
     };
     // axis captions at the data extremes, on the isometric frame
-    const [rx, ry] = this.worldToScreen(this.maxX, this.dataCY());
+    const dataCY = (this.minY + this.maxY) / 2;
+    const dataCX = (this.minX + this.maxX) / 2;
+    const [rx, ry] = this.field.worldToScreen(this.maxX, dataCY);
     cap("interp-embed-axis", `PC1 → · ${pc1}% var`, rx - 96, ry - 22);
-    const [tx, ty] = this.worldToScreen(this.dataCX(), this.maxY);
+    const [tx, ty] = this.field.worldToScreen(dataCX, this.maxY);
     cap("interp-embed-axis is-v", `PC2 ↑ · ${pc2}% var`, tx + 8, ty + 2);
 
     // anchor labels: the real extreme tokens, so the cloud has landmarks
     for (const s of this.anchors) {
-      const [sx, sy] = this.worldToScreen(s.position[0], s.position[1]);
+      const [sx, sy] = this.field.worldToScreen(s.x, s.y);
       cap(
         `interp-embed-anchor${s.lead ? " is-space" : ""}`,
         escapeHtml(fmtTok(s.str)),
@@ -335,18 +268,21 @@ export class EmbeddingConstellationDriver implements InterpDriver {
   }
 
   private onPointerMove(e: PointerEvent): void {
-    if (!this.deck) return;
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const info = this.deck.pickObject({ x, y, radius: 5, layerIds: ["embed-stars"] }) as
-      | PickingInfo
-      | null;
-    const s = (info?.object as Star | undefined) ?? null;
-    const changed = (s?.id ?? -1) !== (this.hover?.id ?? -1);
-    if (changed) {
+    const hit = this.field.pickAt(x, y, 6);
+    const s = hit >= 0 ? ((this.stars[hit] as Star) ?? null) : null;
+    if ((s?.id ?? -1) !== (this.hover?.id ?? -1)) {
       this.hover = s;
-      this.pushLayers();
+      this.field.setDim(s ? HOVER_DIM : 1);
+      if (s) {
+        const [sx, sy] = this.field.worldToScreen(s.x, s.y);
+        this.marker.show(sx, sy, this.radiusOf(s.norm) + 2, this.dataBoxPx());
+      } else {
+        this.marker.hide();
+      }
+      this.field.render();
     }
     if (!s) {
       this.tooltip.hide();
@@ -357,7 +293,7 @@ export class EmbeddingConstellationDriver implements InterpDriver {
     const rows: TipRow[] = [
       { kind: "label", text: `token “${fmtTok(s.str)}”`, swatch: [cr, cg, cb] },
       {
-        text: `PC1 ${s.position[0].toFixed(2)} · PC2 ${s.position[1].toFixed(2)} · PC3 ${s.z.toFixed(2)}`,
+        text: `PC1 ${s.x.toFixed(2)} · PC2 ${s.y.toFixed(2)} · PC3 ${s.z.toFixed(2)}`,
       },
       {
         text: `‖W_E‖ = ${s.norm.toFixed(2)} · ${s.lead ? "leading space" : "no leading space"}`,
@@ -371,7 +307,9 @@ export class EmbeddingConstellationDriver implements InterpDriver {
   private onLeave(): void {
     if (this.hover) {
       this.hover = null;
-      this.pushLayers();
+      this.marker.hide();
+      this.field.setDim(1);
+      this.field.render();
     }
     this.tooltip.hide();
     this.canvas.style.cursor = "";
@@ -384,13 +322,14 @@ export class EmbeddingConstellationDriver implements InterpDriver {
   resize(width: number, height: number, dpr: number): void {
     this.cssW = width;
     this.cssH = height;
-    this.dpr = dpr;
-    this.deck?.setProps({
-      width,
-      height,
-      useDevicePixels: Math.min(dpr, 2),
-      viewState: this.viewState(),
-    });
+    this.field.resize(width, height, dpr); // re-applies the stored fit itself
+    // the marker and tooltip are anchored in screen px, so a resize invalidates
+    // both — drop the hover rather than leave chrome pointing at nothing
+    this.hover = null;
+    this.marker.hide();
+    this.tooltip.hide();
+    this.field.setDim(1);
+    this.field.render();
     this.positionLabels();
   }
 
@@ -398,9 +337,9 @@ export class EmbeddingConstellationDriver implements InterpDriver {
     for (const d of this.disposers) d();
     this.disposers = [];
     this.tooltip?.dispose();
+    this.marker?.dispose();
     this.labelRoot?.remove();
-    this.deck?.finalize();
-    this.deck = null;
+    this.field.dispose();
   }
 }
 

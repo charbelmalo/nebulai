@@ -10,6 +10,10 @@ import type { Dataset } from "../data/loader";
 import type { DatasetEntry } from "../data/schema";
 import { searchLabels, type SearchResults } from "../data/search";
 import type { SessionAnalysis } from "../chrome/sessionlog";
+import {
+  DEFAULT_SESSIONS_APPEARANCE,
+  type SessionsAppearance,
+} from "../scene/sessions/appearance";
 
 export type ViewMode = "atlas" | "chord" | "hierarchy" | "compare";
 
@@ -175,6 +179,10 @@ export interface Appearance {
     strokeOnHover: boolean;
     dimOthers: boolean; // when a model is highlighted, dim the rest
   };
+  /** Sessions emissive-particle field. Full knob set + default palette live in
+   *  scene/sessions/appearance.ts (kept out of this file so the driver, which
+   *  imports the store, and the store don't form an import cycle). */
+  sessions: SessionsAppearance;
 }
 
 /** Map-builder parameters — mirrors the build server's /build/start params
@@ -295,6 +303,9 @@ export interface AppState {
     key: K,
     value: Appearance[G][K],
   ): void;
+  /** Restore every Sessions appearance knob to its shipped default in one shot
+   *  (the tab's Reset button — setAppearance is per-key). */
+  resetSessionsAppearance(): void;
   setProbing<K extends keyof Probing>(key: K, value: Probing[K]): void;
   setBuildParam<K extends keyof BuildParams>(key: K, value: BuildParams[K]): void;
   setProgress(patch: Partial<Progress>): void;
@@ -441,6 +452,7 @@ export const appStore = createStore<AppState>()((set, get) => ({
       strokeOnHover: true,
       dimOthers: true,
     },
+    sessions: { ...DEFAULT_SESSIONS_APPEARANCE },
   },
   probing: {
     endpoint: "",
@@ -557,6 +569,16 @@ export const appStore = createStore<AppState>()((set, get) => ({
       appearance: {
         ...s.appearance,
         [graph]: { ...s.appearance[graph], [key]: value },
+      },
+    })),
+  resetSessionsAppearance: () =>
+    set((s) => ({
+      appearance: {
+        ...s.appearance,
+        sessions: {
+          ...DEFAULT_SESSIONS_APPEARANCE,
+          categoryColors: { ...DEFAULT_SESSIONS_APPEARANCE.categoryColors },
+        },
       },
     })),
   setProbing: (key, value) =>

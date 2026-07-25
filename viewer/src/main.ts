@@ -10,6 +10,7 @@ import { registerActions } from "./app/actions";
 import { probeCapabilities } from "./app/capabilities";
 import { appStore, type ViewMode } from "./app/store";
 import { mountChrome } from "./chrome/mount";
+import { $compareTour } from "./chrome/state";
 import { applyUrlState, readUrlState, startUrlSync } from "./chrome/urlState";
 import { loadCompare } from "./data/compare";
 import { evictDataset, loadDataset, loadIndex } from "./data/loader";
@@ -139,12 +140,12 @@ async function boot() {
   say(`${metaLine()} · gpu: ${caps.tier}`);
 
   // compare.json is optional (run `nebulai compare`); discovery is
-  // non-blocking so the atlas never waits on it
-  if (caps.tier === "webgpu") {
-    loadCompare()
-      .then((cd) => appStore.getState().setCompareData(cd))
-      .catch(() => void 0);
-  }
+  // non-blocking so the atlas never waits on it. The old `tier === "webgpu"`
+  // gate went away with the driver's raw-WGSL rewrite — it is TSL now, so it
+  // renders on the forceWebGL rung too (minus bloom, like the atlas).
+  loadCompare()
+    .then((cd) => appStore.getState().setCompareData(cd))
+    .catch(() => void 0);
 
   // ── view manager: atlas ↔ compare ↔ chord crossfade ────────────────────
   // One driver per canvas: AtlasDriver keeps #scene-canvas; CompareDriver and
@@ -166,6 +167,8 @@ async function boot() {
     if (!cd) throw new Error("no comparison export — run `uv run nebulai compare <models…>`");
     compareCanvas = makeAuxCanvas("compare-canvas");
     const d = new CompareDriver();
+    d.onTour = (s) => ($compareTour.value = s);
+    d.setReducedMotion(caps.reducedMotion);
     await d.init(compareCanvas);
     d.setData(cd);
     d.resize(stage.clientWidth, stage.clientHeight, window.devicePixelRatio || 1);
@@ -287,11 +290,39 @@ async function boot() {
     flyToPoint(id) {
       if (appStore.getState().viewMode === "atlas") driver.flyToPoint(id);
     },
+    compareTour(cmd) {
+      const d = compareDriver;
+      if (!d) return; // the panel only renders once the driver exists
+      switch (cmd.kind) {
+        case "toggle":
+          d.togglePlay();
+          break;
+        case "play":
+          d.play();
+          break;
+        case "pause":
+          d.pause();
+          break;
+        case "restart":
+          d.restart();
+          break;
+        case "seek":
+          d.pause();
+          d.seek(cmd.u);
+          break;
+        case "speed":
+          d.setSpeed(cmd.mult);
+          break;
+        case "pick":
+          d.pickState(cmd.state);
+          break;
+      }
+    },
   });
 
   // deep links for e2e + `nebulai compare` handoff
   const deepView = new URLSearchParams(location.search).get("view");
-  if (deepView === "compare" && caps.tier === "webgpu") {
+  if (deepView === "compare") {
     loadCompare()
       .then((cd) => {
         if (cd) {
