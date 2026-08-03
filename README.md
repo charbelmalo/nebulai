@@ -10,8 +10,15 @@ same back-end (reduce → cluster → name → export → render):
 | Variant | A point is… | Status |
 |---|---|---|
 | **C — tokens** | one vocabulary token (its `W_E` embedding row) | ✅ working |
-| **A — SAE features** | one sparse-autoencoder feature (sae-lens) | planned |
-| **B — MLP neurons** | one raw MLP neuron (TransformerLens) | planned |
+| **A — SAE features** | one sparse-autoencoder decoder direction | ✅ working |
+| **B — MLP neurons** | one raw MLP write direction (`c_proj` row) | ✅ working |
+| **P — probe concepts** | one LLM-proposed concept near a seed topic (no model weights) | ✅ working |
+
+A/B/C are built and exported — see `out/` for artifacts from each. Both A and B
+read weights directly through the shared safetensors loader, so neither needs
+sae-lens or TransformerLens at runtime. P is the odd one out: it decomposes no
+model at all, and exists to answer the human-language question the others
+can't — see [Semantic probe](#semantic-probe--a-cloud-with-no-model-in-it).
 
 ## Quickstart
 
@@ -70,15 +77,119 @@ switch:
 Colors encode the source model; a "shared concepts only" filter isolates the
 overlap; hover a point for its concept title, source model, and token count.
 
+## Semantic probe — a cloud with no model in it
+
+The three front-ends above all decompose a model. `nebulai probe` does not: you
+give it a word, an LLM proposes related concepts breadth-first, a text embedder
+places them, and a cosine gate against the seed decides what stays.
+
+```sh
+uv run nebulai probe "grief" --depth 2 --breadth 12 --sensitivity 0.35
+uv run nebulai probe "photosynthesis" --sensitivity 0.6   # near-synonyms only
+```
+
+- `--depth` how many hops from the seed; `--breadth` concepts requested per term.
+- `--sensitivity` is a cosine floor **against the seed**, not against each term's
+  parent — chaining parent similarity lets a depth-3 term drift arbitrarily far
+  while every hop looks reasonable. 0 keeps everything proposed, ~0.35 keeps a
+  recognisable topic, ~0.6 keeps near-synonyms.
+- `--generator` picks the proposing LLM (`auto` → ollama → OpenRouter →
+  Anthropic); `--embed-model` / `--embed-host` pick the embedder.
+
+Unlike the three weight-reading front-ends, this one cannot run offline — it
+needs a reachable generator *and* a reachable embedder. With neither configured
+it exits naming each backend it tried and why.
+
+**What a probe cloud is evidence of.** Two models' joint opinion — the generator
+that proposed the terms and the embedder that positioned them. Not a fact about
+language, and not the geometry of any model under study. A term that is absent
+means the generator did not propose it; a term far from the seed means the
+embedder put it there. Both are stamped into `meta` (`generator`, `embed_model`,
+`n_proposed`, `kept`, `n_dropped`, `seed_similarity_min/mean`) and the map is
+labelled with the same "NOT model-internal" geometry string the `api-` maps use.
+The drop rate is the single most useful diagnostic: a high one means the
+generator wandered and your map is narrower than what was actually proposed.
+
+## Validating a map
+
+`nebulai metrics` reports silhouette, which is computed in `u_cluster` — the
+same UMAP space HDBSCAN clustered in. That grades the projection using the
+projection's own geometry, so it cannot tell you whether the clusters exist in
+the model's original space. `nebulai validate` adds the three checks that can:
+
+```sh
+uv run nebulai validate gpt2 gpt2__neurons__h.8.mlp.c_proj
+uv run nebulai metrics gpt2 gpt2__neurons__h.8.mlp.c_proj   # picks up the results
+```
+
+- **trustworthiness** — neighbourhood preservation from the ORIGINAL vector
+  space (1.0 faithful, ~0.5 chance). Independent of HDBSCAN entirely.
+- **seed stability** — mean pairwise ARI across UMAP seeds. Answers "would I
+  have drawn the same map on a different day?"
+- **null baseline** — the identical pipeline on column-shuffled vectors, which
+  keep every per-dimension marginal but lose the correlations between
+  dimensions. Whatever it scores is the floor `silhouette` has to clear.
+
+These re-run UMAP, so they are a separate command rather than part of a build.
+Results land in `validation.json` next to `nebulai.json`.
+
+**What this currently shows**, across all nine maps:
+
+| map | points | silhouette | null floor | margin | trust | seed ARI |
+|---|---|---|---|---|---|---|
+| gpt2 · tokens | 49857 | 0.4999 | 0.3772 | +0.123 | 0.72 | 0.54 |
+| gpt2-medium · tokens | 49857 | 0.4700 | 0.4079 | +0.062 | 0.70 | 0.48 |
+| distilgpt2 · tokens | 49857 | 0.5165 | 0.3645 | +0.152 | 0.74 | 0.48 |
+| pythia-70m · tokens | 49385 | 0.5245 | 0.3726 | +0.152 | 0.89 | 0.51 |
+| SmolLM2-135M · tokens | 48636 | 0.4929 | 0.3926 | +0.100 | 0.72 | 0.46 |
+| gpt2 · MLP neurons | 3072 | 0.4814 | 0.4250 | +0.056 | 0.65 | 0.62 |
+| SmolLM2-135M · MLP neurons | 1536 | 0.4827 | 0.3834 | +0.099 | 0.64 | 0.57 |
+| gpt2-small · SAE features | 4096 | 0.5246 | 0.5737 | −0.049 ⚠ | 0.89 | 0.58 |
+| SmolLM2-135M · SAE features | 36864 | 0.4770 | 0.4097 | +0.067 ⚠ | 0.71 | 0.57 |
+
+⚠ = the null resolved a cluster count far from the map's own (16 vs 69; 277 vs
+130). Silhouette rises as a partition coarsens, so those two rows compare
+different questions and the margin is not evidence either way. `nebulai
+metrics` prints `null.k` next to the margin and flags this case with `?`.
+
+Three things to take from the seven rows that *are* comparable:
+
+- **Every one clears its floor, and none clears it by much** — +0.06 to +0.15
+  on a scale where silhouette itself sits near 0.5. There is real structure
+  here, and it is a modest fraction of what the layout looks like it has.
+- **Unit type does not sort the maps.** SmolLM2's raw-neuron map (+0.099) beats
+  gpt2-medium's token map (+0.062). "Tokens carry structure, raw neurons don't"
+  is not what the numbers say. The weakest comparable row is gpt2's neuron map
+  (+0.056), and that isn't a settings problem: sweeping leaf/eom × `mcs` ×
+  `min_samples` tops out at 0.4858 silhouette, barely past its 0.4250 floor.
+- **Seed ARI is 0.46–0.62 everywhere.** Roughly half of each partition is
+  seed-dependent. Individual cluster boundaries are not stable findings; the
+  gross layout is.
+
+One methodological note, because it changed these numbers substantially.
+HDBSCAN's `min_cluster_size` is an absolute point count, so a 4000-point null
+carrying a 49k-point map's value clusters at a completely different
+granularity. `validate` rescales it by `n_sample / n_full`; before that fix
+gpt2's null read 0.2147 (51 clusters) instead of 0.3772 (236), and the margins
+looked 2–3× larger than they are. Any subsampled comparison has to do this.
+
+Explore clustering settings without re-running UMAP:
+
+```sh
+scripts/sweep_hdbscan.py out/gpt2/reduced.npz     # leaf/eom x mcs x min_samples
+scripts/inspect_map.py out/gpt2/nebulai.json      # meta, top clusters, size dist
+```
+
 ## Honesty notes
 
 - **Plan C's geometry is the model's own** (embedding rows). For Plans A/B, laying points out by *label* embeddings shows the label-embedder's semantics, not the model's — the viewer will expose both projections (decoder-direction vs label space) as a toggle.
 - Raw token-embedding structure is partly frequency/orthography; mean-centering + cosine mitigate but don't remove that.
+- Cluster selection defaults to `leaf`, which deliberately over-fragments: `eom` collapses token maps into one mega-cluster. That choice raises the noise fraction *and* lowers seed stability, so read both numbers against the method (`nebulai validate` prints it).
 - This is a visualization + clustering tool over public micro models. No causal claims.
 
 ## Roadmap
 
-- Plan A: sae-lens features (GPT-2 res-jb / Gemma Scope), stratified sampling across firing rates, labels bootstrapped from Neuronpedia + hybrid local/API labeler scored by detection (Delphi).
-- Plan B: raw MLP neurons; quantitative neurons-vs-SAE comparison (noise fraction, silhouette, snippet coherence).
+- Held-out auto-interp scores and activation-based coherence — the two validation layers `nebulai validate` does not yet cover (it measures geometry and stability, not whether a cluster predicts behaviour).
+- Intervention-based validation: does ablating a cluster's units change the behaviour its title claims?
 - Phase 2: WebGPU point cloud reading `nebulai.json` — 3D flythrough, hover, cluster hulls, filters, 2D↔3D toggle. (The `compare` viewer is the first cut of this renderer.)
 - Cross-model: Route B (orthogonal Procrustes alignment on shared tokens) as a geometry-space companion to the current concept-space `compare`, for same-family models.

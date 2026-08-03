@@ -593,6 +593,197 @@ def _run_metrics(args: argparse.Namespace) -> None:
     print(f"\n  {metrics_path}")
 
 
+def _run_probe(args: argparse.Namespace) -> None:
+    """Semantic cloud grown from a seed topic — the one front-end that needs no
+    model weights. Mirrors _run_tokens's 5-stage structure and its exact
+    `[k/5] ...` prints (build_server parses them)."""
+    import os
+    import re as _re
+
+    from .backend.cluster import cluster_units, resolve_cluster_params
+    from .backend.export import export_json
+    from .backend.name import name_clusters
+    from .backend.reduce import reduce_vectors
+    from .backend.viz import render
+    from .frontends.probe import load_probe_units
+
+    slug = _re.sub(r"[^a-z0-9]+", "-", args.seed.lower()).strip("-")[:48] or "probe"
+    dataset_id = f"probe__{slug}"
+    out_dir = Path(args.out) / dataset_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    t = _timer()
+    # unlike the weight-reading front-ends, this one cannot run offline: it needs
+    # a generator AND an embedder. Both failure modes are ordinary setup problems
+    # (no ollama, no key, threshold too high), so report them as such rather than
+    # dumping a traceback — load_probe_units already names every backend it tried.
+    try:
+        units = load_probe_units(
+            args.seed,
+            depth=args.depth,
+            breadth=args.breadth,
+            sensitivity=args.sensitivity,
+            generator=args.generator,
+            ollama_host=args.ollama_host,
+            ollama_model=args.ollama_model,
+            openrouter_model=args.openrouter_model,
+            anthropic_model=args.anthropic_model,
+            env_file=args.env_file,
+            embed_host=args.embed_host,
+            embed_model=args.embed_model,
+            embed_api=args.embed_api,
+            embed_api_key=os.environ.get("EMBED_API_KEY")
+            or os.environ.get("OPENAI_API_KEY"),
+        )
+    except RuntimeError as exc:
+        raise SystemExit(f"probe: {exc}") from exc
+    m = units.meta
+    print(
+        f"[1/5] grew {len(units)} concepts from {args.seed!r} via {m['generator']} "
+        f"-> {m['embed_model']} — third-party embedding space, NOT model-internal "
+        f"(proposed {m['n_proposed']}, kept {m['kept']}) [{t()}]"
+    )
+
+    # the expansion is nondeterministic, so there is no param-keyed reduction
+    # cache here: reusing one across runs would silently pair a new cloud's
+    # labels with an old cloud's layout
+    t = _timer()
+    n_neighbors = args.n_neighbors or max(5, min(30, len(units) // 10))
+    u_cluster, u3, u2 = reduce_vectors(
+        units.vectors,
+        cluster_dim=args.cluster_dim,
+        n_neighbors=n_neighbors,
+        seed=args.seed_rng,
+    )
+    np.savez_compressed(
+        out_dir / "reduced.npz", u_cluster=u_cluster, u3=u3, u2=u2
+    )
+    print(f"[2/5] UMAP -> {args.cluster_dim}d/3d/2d (n_neighbors={n_neighbors}) [{t()}]")
+
+    t = _timer()
+    cluster_ids, probs = cluster_units(
+        u_cluster,
+        min_cluster_size=args.min_cluster_size,
+        min_samples=args.min_samples,
+        method=args.cluster_method,
+    )
+    units.meta["hdbscan"] = resolve_cluster_params(
+        len(u_cluster), args.min_cluster_size, args.min_samples, args.cluster_method
+    )
+    n_clusters = len({int(c) for c in cluster_ids if c >= 0})
+    noise = float((cluster_ids < 0).mean())
+    print(f"[3/5] HDBSCAN: {n_clusters} clusters, {noise:.0%} noise [{t()}]")
+
+    t = _timer()
+    titles, namer_used = name_clusters(
+        units,
+        cluster_ids,
+        namer=args.namer,
+        openrouter_model=args.openrouter_model,
+        ollama_model=args.ollama_model,
+        ollama_host=args.ollama_host,
+        anthropic_model=args.anthropic_model,
+        env_file=args.env_file,
+    )
+    print(f"[4/5] named {len(titles)} clusters via '{namer_used}' [{t()}]")
+
+    t = _timer()
+    json_path = out_dir / "nebulai.json"
+    meta = export_json(
+        json_path,
+        units,
+        u2,
+        u3,
+        cluster_ids,
+        probs,
+        titles,
+        namer_used,
+        u_cluster=u_cluster,
+        edges_mode=args.edges,
+    )
+    png = out_dir / "map_static.png"
+    html = out_dir / "map_interactive.html"
+    render(
+        u2,
+        cluster_ids,
+        titles,
+        units.labels,
+        png,
+        html,
+        title=f"Nebul.AI — semantic probe: {args.seed}",
+        sub_title=(
+            f"{meta['n_points']} concepts · {meta['n_clusters']} clusters · "
+            f"{m['generator']} -> {m['embed_model']} (sensitivity "
+            f"{args.sensitivity}) -> UMAP -> HDBSCAN"
+        ),
+    )
+    _update_index(Path(args.out))
+    print(f"[5/5] exported [{t()}]")
+    for p in (json_path, png, html):
+        print(f"  {p}")
+
+
+def _run_validate(args: argparse.Namespace) -> None:
+    """Independent validation for already-built maps — the checks that are NOT
+    the construction procedure (see backend/validate.py).
+
+    Writes `validation.json` next to each map's `nebulai.json`; `nebulai
+    metrics` picks it up from there and adds the trust / seed.ARI / null.sil
+    columns. Kept a separate command because it re-runs UMAP: this is minutes
+    per map, not part of a build."""
+    from .backend.validate import validate_map
+
+    out_root = Path(args.out)
+    for m in args.datasets:
+        dd = out_root / m.replace("/", "__")
+        if not (dd / "nebulai.json").exists():
+            raise SystemExit(
+                f"missing {dd / 'nebulai.json'} — build it first "
+                f"(nebulai tokens/sae/neurons)"
+            )
+        t = _timer()
+        print(f"validating {dd.name} — reloading front-end vectors ...")
+        try:
+            report = validate_map(
+                dd,
+                trust_neighbors=args.trust_neighbors,
+                stability_seeds=tuple(args.seeds),
+                trust_sample_cap=args.trust_sample,
+                stability_sample_cap=args.stability_sample,
+                skip_stability=args.skip_stability,
+                skip_null=args.skip_null,
+            )
+        except (ValueError, FileNotFoundError, KeyError) as e:
+            # an honest skip beats a number that describes a different point set
+            print(f"  skipped: {e}")
+            continue
+
+        path = dd / "validation.json"
+        path.write_text(json.dumps(report, ensure_ascii=False, indent=2))
+
+        tw = report["trustworthiness"]
+        print(
+            f"  trustworthiness {tw['trustworthiness']} "
+            f"(k={tw['n_neighbors']}, n={tw['n_scored']}"
+            f"{', subsampled' if tw['subsampled'] else ''})"
+        )
+        if "stability" in report:
+            s = report["stability"]
+            print(
+                f"  seed stability  mean ARI {s['mean_ari']} / min {s['min_ari']} "
+                f"over seeds {s['seeds']} (n={s['n_scored']}, "
+                f"method={report['cluster_method']})"
+            )
+        if "null_baseline" in report:
+            n = report["null_baseline"]
+            print(
+                f"  null baseline   silhouette {n['silhouette']} "
+                f"({n['n_clusters']} clusters, {n['noise_fraction']:.0%} noise, "
+                f"n={n['n_scored']})"
+            )
+        print(f"  {path} [{t()}]")
+
+
 def _run_compare(args: argparse.Namespace) -> None:
     from .backend.compare import build_comparison, export_comparison
     from .backend.viewer import write_viewer
@@ -723,7 +914,7 @@ def main() -> None:
         default="http://localhost:11434",
         help="ollama base URL (default: local ollama server)",
     )
-    t.add_argument("--anthropic-model", default="claude-opus-4-8")
+    t.add_argument("--anthropic-model", default="claude-opus-5")
     t.add_argument(
         "--env-file",
         default=None,
@@ -817,7 +1008,7 @@ def main() -> None:
         default="http://localhost:11434",
         help="ollama base URL (default: local ollama server)",
     )
-    s.add_argument("--anthropic-model", default="claude-opus-4-8")
+    s.add_argument("--anthropic-model", default="claude-opus-5")
     s.add_argument(
         "--env-file",
         default=None,
@@ -916,7 +1107,7 @@ def main() -> None:
         default="http://localhost:11434",
         help="ollama base URL (default: local ollama server)",
     )
-    n.add_argument("--anthropic-model", default="claude-opus-4-8")
+    n.add_argument("--anthropic-model", default="claude-opus-5")
     n.add_argument(
         "--env-file",
         default=None,
@@ -979,6 +1170,114 @@ def main() -> None:
     )
     mt.add_argument("--out", default="out", help="output directory root")
     mt.set_defaults(fn=_run_metrics)
+
+    pr = sub.add_parser(
+        "probe",
+        help="semantic cloud grown from a seed topic — no model weights needed "
+        "(LLM proposes concepts, an embedder places them)",
+    )
+    pr.add_argument("seed", help="seed topic or keyword, e.g. 'grief' or 'photosynthesis'")
+    pr.add_argument("--out", default="out", help="output directory root")
+    pr.add_argument(
+        "--depth", type=int, default=2, help="expansion hops from the seed (default 2)"
+    )
+    pr.add_argument(
+        "--breadth",
+        type=int,
+        default=12,
+        help="concepts requested per term per hop (default 12)",
+    )
+    pr.add_argument(
+        "--sensitivity",
+        type=float,
+        default=0.35,
+        help="cosine floor against the seed: 0 keeps everything, ~0.35 keeps a "
+        "recognisable topic, ~0.6 keeps near-synonyms (default 0.35)",
+    )
+    pr.add_argument(
+        "--generator",
+        default="auto",
+        choices=["auto", "ollama", "openrouter", "anthropic"],
+        help="which LLM proposes concepts (default: auto)",
+    )
+    pr.add_argument(
+        "--namer",
+        choices=["auto", "openrouter", "ollama", "anthropic", "none"],
+        default="auto",
+        help="cluster-naming backend (auto: ollama -> openrouter -> centroid)",
+    )
+    pr.add_argument("--ollama-host", default="http://localhost:11434")
+    pr.add_argument("--ollama-model", default="liquidai/lfm2.5-1.2b-instruct")
+    pr.add_argument("--openrouter-model", default="openai/gpt-oss-120b:free")
+    pr.add_argument("--anthropic-model", default="claude-opus-5")
+    pr.add_argument("--env-file", default=None)
+    pr.add_argument("--embed-host", default="http://localhost:11434")
+    pr.add_argument("--embed-model", default="mxbai-embed-large")
+    pr.add_argument("--embed-api", default="ollama", choices=["ollama", "openai"])
+    pr.add_argument("--cluster-dim", type=int, default=10)
+    pr.add_argument(
+        "--n-neighbors",
+        type=int,
+        default=None,
+        help="UMAP n_neighbors (default: scaled to cloud size)",
+    )
+    pr.add_argument("--seed-rng", type=int, default=42, help="UMAP seed (default 42)")
+    pr.add_argument("--min-cluster-size", type=int, default=None)
+    pr.add_argument("--min-samples", type=int, default=None)
+    pr.add_argument("--cluster-method", default="leaf", choices=["leaf", "eom"])
+    pr.add_argument(
+        "--edges", choices=["knn", "cluster", "none"], default="knn"
+    )
+    pr.set_defaults(fn=_run_probe)
+
+    v = sub.add_parser(
+        "validate",
+        help="independent validation (trustworthiness / seed stability / null "
+        "baseline) — the checks that are NOT the construction procedure",
+    )
+    v.add_argument(
+        "datasets",
+        nargs="+",
+        help="dataset dir ids already built (e.g. gpt2 gpt2__neurons__h.8.mlp.c_proj)",
+    )
+    v.add_argument("--out", default="out", help="output directory root")
+    v.add_argument(
+        "--seeds",
+        type=int,
+        nargs="+",
+        default=[42, 1, 2, 3],
+        help="UMAP seeds to score against each other (default: 42 1 2 3)",
+    )
+    v.add_argument(
+        "--trust-neighbors",
+        type=int,
+        default=15,
+        help="k for trustworthiness (default: 15)",
+    )
+    v.add_argument(
+        "--trust-sample",
+        type=int,
+        default=5000,
+        help="max points scored for trustworthiness — it is O(n^2) (default: 5000)",
+    )
+    v.add_argument(
+        "--stability-sample",
+        type=int,
+        default=4000,
+        help="max points for the seed sweep and null baseline; each re-runs "
+        "UMAP once per seed (default: 4000)",
+    )
+    v.add_argument(
+        "--skip-stability",
+        action="store_true",
+        help="trustworthiness (and null) only — skips the per-seed UMAP re-runs",
+    )
+    v.add_argument(
+        "--skip-null",
+        action="store_true",
+        help="skip the column-shuffled null baseline",
+    )
+    v.set_defaults(fn=_run_validate)
 
     c = sub.add_parser(
         "compare",
