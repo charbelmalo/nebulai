@@ -53,6 +53,8 @@ def _source_label(meta: dict) -> str:
         kind = "MLP neurons"
     elif unit.startswith("api_text_embedding"):
         kind = "API embeddings"
+    elif unit.startswith("probe_concept"):
+        kind = "probe concepts"
     elif unit.startswith("token_embedding") or unit == "token_embedding":
         kind = "tokens"
     else:
