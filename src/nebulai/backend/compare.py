@@ -26,7 +26,11 @@ from .cluster import cluster_units
 from .embed import embed_texts
 from .reduce import reduce_vectors
 
-# stable, high-contrast per-model colors (RGB 0..1)
+# Stable, high-contrast per-model colors (RGB 0..1). Indexing is `% len`, so
+# this list is a correctness constraint, not decoration: comparing more maps
+# than there are colors silently paints two clouds identically in the one view
+# whose entire job is telling them apart. Keep it at least as long as the
+# number of maps in out/ (11 and growing).
 _PALETTE = [
     [0.20, 0.70, 1.00],  # blue
     [1.00, 0.45, 0.30],  # orange
@@ -34,6 +38,16 @@ _PALETTE = [
     [0.85, 0.45, 1.00],  # purple
     [1.00, 0.82, 0.25],  # gold
     [0.30, 0.95, 0.85],  # teal
+    [1.00, 0.55, 0.75],  # pink
+    [0.60, 0.80, 0.30],  # lime
+    [0.55, 0.60, 1.00],  # periwinkle
+    [1.00, 0.70, 0.40],  # apricot
+    [0.40, 0.85, 0.65],  # jade
+    [0.90, 0.40, 0.55],  # rose
+    [0.70, 0.65, 0.95],  # lilac
+    [0.95, 0.90, 0.55],  # sand
+    [0.35, 0.75, 0.80],  # steel
+    [0.80, 0.55, 0.35],  # bronze
 ]
 
 
@@ -121,6 +135,8 @@ def build_comparison(
     embed_host: str,
     embed_model: str = "mxbai-embed-large",
     seed: int = 42,
+    embed_api: str = "ollama",
+    embed_api_key: str | None = None,
 ) -> dict:
     models = [_load_model(p) for p in json_paths]
     # identify each cloud by its front-end/unit label, NOT meta.model — three
@@ -144,7 +160,13 @@ def build_comparison(
     # Meta-points are already-aggregated concepts, so we want FINE granularity:
     # min_samples=1 (not cluster.py's default 5, which would force every
     # meta-cluster to span several models and erase all "unique" concepts).
-    E = embed_texts(texts, host=embed_host, model=embed_model)
+    E = embed_texts(
+        texts,
+        host=embed_host,
+        model=embed_model,
+        api=embed_api,
+        api_key=embed_api_key,
+    )
     u_cluster, u3, _u2 = reduce_vectors(E, cluster_dim=10, n_neighbors=15, seed=seed)
     meta_ids, _probs = cluster_units(
         u_cluster, min_cluster_size=3, min_samples=1, method="leaf"

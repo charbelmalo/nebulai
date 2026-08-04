@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from nebulai.backend import embed as embed_mod
+from nebulai.backend import name as name_mod
 from nebulai.frontends import probe as probe_mod
 from nebulai.frontends.probe import _clean, _norm, load_probe_units
 
@@ -156,3 +157,61 @@ def test_probe_maps_get_a_readable_label_in_the_metrics_table():
         {"model": "grief", "unit": "probe_concept(mxbai-embed-large)"}
     )
     assert label == "grief · probe concepts"
+
+
+# --- generator availability check ------------------------------------------
+# _make_expander sends one throwaway expansion to prove a backend works. A
+# reasoning model that rambles past the token ceiling on that call has proved
+# exactly the opposite of "unavailable" — it generated too much, not nothing.
+
+
+def test_a_rambling_generator_is_kept_not_retired(monkeypatch, capsys):
+    from nebulai.backend.name import ChatTruncated
+
+    calls: list[str] = []
+
+    def fake_expand(term, n, host, model, key):
+        calls.append(term)
+        if len(calls) == 1:
+            raise ChatTruncated("m truncated its reply at 16384 tokens")
+        return ["a", "b"]
+
+    # _make_expander imports the picker inside the function, so patch the source
+    monkeypatch.setattr(name_mod, "_openai_pick_model", lambda *a, **k: "m")
+    monkeypatch.setattr(probe_mod, "_expand_openai", fake_expand)
+    expand, label = probe_mod._make_expander(
+        "openai", "http://o", "", "orm", "am", None, llm_host="http://h"
+    )
+    assert label == "openai:m"
+    assert "rambles" in capsys.readouterr().out
+    assert expand("grief", 2) == ["a", "b"]  # the real calls still work
+
+
+def test_a_generator_that_cannot_generate_is_still_retired(monkeypatch):
+    # _make_expander imports the picker inside the function, so patch the source
+    monkeypatch.setattr(name_mod, "_openai_pick_model", lambda *a, **k: "m")
+    monkeypatch.setattr(
+        probe_mod,
+        "_expand_openai",
+        lambda *a, **k: (_ for _ in ()).throw(ConnectionError("refused")),
+    )
+    with pytest.raises(RuntimeError, match="no expansion backend available"):
+        probe_mod._make_expander(
+            "openai", "http://o", "", "orm", "am", None, llm_host="http://h"
+        )
+
+
+def test_the_availability_probe_uses_a_concrete_term(monkeypatch):
+    # "test" gives a reasoning model nothing to expand and it spirals
+    seen: list[str] = []
+    # _make_expander imports the picker inside the function, so patch the source
+    monkeypatch.setattr(name_mod, "_openai_pick_model", lambda *a, **k: "m")
+    monkeypatch.setattr(
+        probe_mod,
+        "_expand_openai",
+        lambda term, *a, **k: (seen.append(term), ["a", "b"])[1],
+    )
+    probe_mod._make_expander(
+        "openai", "http://o", "", "orm", "am", None, llm_host="http://h"
+    )
+    assert seen == [probe_mod._PROBE_TERM] and probe_mod._PROBE_TERM != "test"

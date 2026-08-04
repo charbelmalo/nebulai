@@ -14,6 +14,23 @@ def reduce_vectors(
     import umap
     from sklearn.decomposition import PCA
 
+    n = len(vectors)
+    # A cloud smaller than the embedding dimension makes UMAP's spectral init
+    # ask scipy for more eigenvectors than the graph has, and the failure
+    # surfaces as `Cannot use scipy.linalg.eigh for sparse A with k >= N` from
+    # deep inside a dependency — no hint that the fix is upstream in how many
+    # points were produced. Small probe clouds hit this routinely, so say it.
+    if n <= cluster_dim + 1:
+        raise ValueError(
+            f"only {n} points to reduce — UMAP needs more than cluster_dim "
+            f"({cluster_dim}) + 1. For a probe, raise --breadth or --depth, or "
+            f"lower --sensitivity so fewer concepts are gated out."
+        )
+    if n_neighbors >= n:
+        # UMAP silently misbehaves rather than erroring here; clamping keeps a
+        # small-but-valid cloud renderable instead of failing it outright
+        n_neighbors = max(2, n - 1)
+
     common: dict = {"n_neighbors": n_neighbors, "metric": "cosine"}
     if seed >= 0:
         # deterministic, but forces single-threaded layout; pass -1 for speed

@@ -669,12 +669,16 @@ function ProbingTab() {
   const selected = models.find((m) => m.id === p.buildModel);
   const building = pg.stage !== "idle" && pg.stage !== "done" && pg.stage !== "error";
   const canRecluster = !building && cacheMatches(selected);
+  // a probe has no model and no vocab, so the model picker and the token/UMAP
+  // cache knobs are meaningless for it
+  const isProbe = p.buildSource === "probe";
+  const target = isProbe ? bp.probeSeed : p.buildModel;
 
   return (
     <>
       <SettingsSection
         title="Map builder"
-        hint="Runs the real `nebulai tokens` pipeline on the local build server — pick a model, choose the geometry source, and rebuild the semantic map. Start it with: python -m nebulai.backend.build_server"
+        hint="Runs the real pipeline on the local build server — `nebulai tokens` for a model's geometry, or `nebulai probe` to grow a cloud from a seed word with no model at all. Start it with: python -m nebulai.backend.build_server"
       >
         <TextRow
           label="Build server"
@@ -684,33 +688,6 @@ function ProbingTab() {
           onChange={(v) => appStore.getState().setProbing("buildUrl", v)}
           hint={health === "ok" ? "● connected" : health === "down" ? "○ unreachable" : "…"}
         />
-        <SelectRow
-          label="Model"
-          value={isCurated ? p.buildModel : "__custom"}
-          options={[
-            ...models.map((m) => ({
-              value: m.id,
-              label:
-                m.label +
-                (m.built ? " · built" : "") +
-                (m.interp ? " · internals" : ""),
-            })),
-            { value: "__custom", label: "Custom HF model id…" },
-          ]}
-          onChange={(v) =>
-            appStore.getState().setProbing("buildModel", v === "__custom" ? "" : v)
-          }
-          disabled={models.length === 0}
-        />
-        {(!isCurated || models.length === 0) && (
-          <TextRow
-            label="HF model id"
-            value={p.buildModel}
-            placeholder="EleutherAI/pythia-410m"
-            onChange={(v) => appStore.getState().setProbing("buildModel", v)}
-            hint="any safetensors model with a standard embedding key"
-          />
-        )}
         <RadioRow
           name="Geometry source"
           value={p.buildSource}
@@ -720,10 +697,98 @@ function ProbingTab() {
               value: "api",
               label: "API text embeddings — external embedder, labeled as such on the map",
             },
+            {
+              value: "probe",
+              label: "Seed concept — no model: an LLM grows the cloud, an embedder places it",
+            },
           ]}
-          onChange={(v) => appStore.getState().setProbing("buildSource", v as "hf" | "api")}
+          onChange={(v) =>
+            appStore.getState().setProbing("buildSource", v as "hf" | "api" | "probe")
+          }
         />
-        {p.buildSource === "api" && (
+        {isProbe ? (
+          <>
+            <TextRow
+              label="Seed concept"
+              value={bp.probeSeed}
+              placeholder="grief"
+              onChange={(v) => set("probeSeed", v)}
+              hint="a word or short phrase — the cloud grows outward from here"
+            />
+            <SelectRow
+              label="Concept generator"
+              value={bp.generator}
+              options={[
+                { value: "auto", label: "auto (ollama → OpenAI-compatible → OpenRouter)" },
+                { value: "ollama", label: "ollama (local)" },
+                { value: "openai", label: "OpenAI-compatible server" },
+                { value: "openrouter", label: "OpenRouter" },
+                { value: "anthropic", label: "Anthropic" },
+              ]}
+              onChange={(v) => set("generator", v as typeof bp.generator)}
+            />
+            <SliderRow
+              label="Depth"
+              value={bp.depth}
+              min={1}
+              max={4}
+              step={1}
+              format={(v) => `${v} hop${v === 1 ? "" : "s"}`}
+              onChange={(v) => set("depth", v)}
+            />
+            <SliderRow
+              label="Breadth"
+              value={bp.breadth}
+              min={4}
+              max={32}
+              step={1}
+              format={(v) => `${v} per term`}
+              onChange={(v) => set("breadth", v)}
+            />
+            <SliderRow
+              label="Sensitivity"
+              value={bp.sensitivity}
+              min={0}
+              max={0.8}
+              step={0.05}
+              format={(v) =>
+                v === 0 ? "keep everything" : v >= 0.6 ? `${v.toFixed(2)} — near-synonyms` : v.toFixed(2)
+              }
+              onChange={(v) => set("sensitivity", v)}
+            />
+          </>
+        ) : (
+          <>
+            <SelectRow
+              label="Model"
+              value={isCurated ? p.buildModel : "__custom"}
+              options={[
+                ...models.map((m) => ({
+                  value: m.id,
+                  label:
+                    m.label +
+                    (m.built ? " · built" : "") +
+                    (m.interp ? " · internals" : ""),
+                })),
+                { value: "__custom", label: "Custom HF model id…" },
+              ]}
+              onChange={(v) =>
+                appStore.getState().setProbing("buildModel", v === "__custom" ? "" : v)
+              }
+              disabled={models.length === 0}
+            />
+            {(!isCurated || models.length === 0) && (
+              <TextRow
+                label="HF model id"
+                value={p.buildModel}
+                placeholder="EleutherAI/pythia-410m"
+                onChange={(v) => appStore.getState().setProbing("buildModel", v)}
+                hint="any safetensors model with a standard embedding key"
+              />
+            )}
+          </>
+        )}
+        {(p.buildSource === "api" || isProbe) && (
           <>
             <TextRow
               label="Embed host"
@@ -754,23 +819,45 @@ function ProbingTab() {
           label="Cluster namer"
           value={bp.namer}
           options={[
-            { value: "auto", label: "auto (ollama → OpenRouter → centroid)" },
+            { value: "auto", label: "auto (ollama → OpenAI-compatible → OpenRouter → centroid)" },
             { value: "ollama", label: "ollama (local)" },
+            { value: "openai", label: "OpenAI-compatible server" },
             { value: "openrouter", label: "OpenRouter" },
             { value: "anthropic", label: "Anthropic — naming only (no embeddings API)" },
             { value: "none", label: "none (centroid tokens)" },
           ]}
           onChange={(v) => set("namer", v as typeof bp.namer)}
         />
-        <SliderRow
-          label="Max tokens"
-          value={bp.maxTokens}
-          min={0}
-          max={50000}
-          step={1000}
-          format={(v) => (v === 0 ? "full vocab" : v.toLocaleString("en-US"))}
-          onChange={(v) => set("maxTokens", v)}
-        />
+        {(bp.namer === "openai" || bp.namer === "auto" || bp.generator === "openai" || (isProbe && bp.generator === "auto")) && (
+          <>
+            <TextRow
+              label="Chat server"
+              type="url"
+              value={bp.llmHost}
+              placeholder="http://localhost:8050"
+              onChange={(v) => set("llmHost", v)}
+              hint="any OpenAI-compatible /v1/chat/completions — LM Studio, vLLM, llama.cpp, an MLX box on the LAN"
+            />
+            <TextRow
+              label="Chat model"
+              value={bp.llmModel}
+              placeholder="(first chat model the server lists)"
+              onChange={(v) => set("llmModel", v)}
+              hint="exact id, or a fragment to match — embedders and rerankers are never auto-picked"
+            />
+          </>
+        )}
+        {!isProbe && (
+          <SliderRow
+            label="Max tokens"
+            value={bp.maxTokens}
+            min={0}
+            max={50000}
+            step={1000}
+            format={(v) => (v === 0 ? "full vocab" : v.toLocaleString("en-US"))}
+            onChange={(v) => set("maxTokens", v)}
+          />
+        )}
         <SliderRow
           label="UMAP neighbors"
           value={bp.nNeighbors}
@@ -808,21 +895,27 @@ function ProbingTab() {
           ]}
           onChange={(v) => set("edges", v as typeof bp.edges)}
         />
-        <ToggleRow
-          label="Force recompute UMAP"
-          checked={bp.force}
-          onChange={(v) => set("force", v)}
-          hint="ignores the reduction cache — full vocab takes 15–30 min"
-        />
+        {!isProbe && (
+          <ToggleRow
+            label="Force recompute UMAP"
+            checked={bp.force}
+            onChange={(v) => set("force", v)}
+            hint="ignores the reduction cache — full vocab takes 15–30 min"
+          />
+        )}
         <div class="settings-actions">
           <button
             type="button"
             class="btn-primary"
             onClick={() => void startBuild()}
-            disabled={building || health !== "ok" || !p.buildModel.trim()}
-            title="Full build — UMAP on the full vocab takes ~15–30 min; small max-tokens builds finish in about a minute"
+            disabled={building || health !== "ok" || !target.trim()}
+            title={
+              isProbe
+                ? "Grows a cloud from the seed — one LLM call per term, so depth 2 × breadth 12 is a couple of minutes"
+                : "Full build — UMAP on the full vocab takes ~15–30 min; small max-tokens builds finish in about a minute"
+            }
           >
-            Build map
+            {isProbe ? "Grow cloud" : "Build map"}
           </button>
           <button
             type="button"

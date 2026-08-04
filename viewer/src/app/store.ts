@@ -195,12 +195,22 @@ export interface BuildParams {
   minClusterSize: number; // 0 = auto (HDBSCAN default heuristic)
   minSamples: number; // 0 = auto
   clusterMethod: "leaf" | "eom";
-  namer: "auto" | "ollama" | "openrouter" | "anthropic" | "none";
+  namer: "auto" | "ollama" | "openai" | "openrouter" | "anthropic" | "none";
   edges: "knn" | "cluster" | "none";
   force: boolean; // recompute cached UMAP reductions
-  embedHost: string; // [source=api] embeddings endpoint base URL
-  embedModel: string; // [source=api] embedding model name
-  embedApi: "ollama" | "openai"; // [source=api] transport
+  embedHost: string; // [source=api|probe] embeddings endpoint base URL
+  embedModel: string; // [source=api|probe] embedding model name
+  embedApi: "ollama" | "openai"; // [source=api|probe] transport
+  // an OpenAI-compatible chat server: names clusters for every source, and
+  // GENERATES the concepts for a probe
+  llmHost: string;
+  llmModel: string; // "" = first chat model the server lists
+  // [source=probe] only — there is no model, so these define the whole cloud
+  probeSeed: string; // the word the cloud grows from
+  depth: number; // BFS expansion depth
+  breadth: number; // concepts proposed per term
+  sensitivity: number; // cosine floor against the seed (0..1)
+  generator: "auto" | "ollama" | "openai" | "openrouter" | "anthropic";
 }
 
 /** Model probing config — live probing tests a model endpoint before it's
@@ -217,7 +227,8 @@ export interface Probing {
   liveUrl: string; // Internals #25 live probe server (nebulai live_server)
   buildUrl: string; // map build server (nebulai build_server)
   buildModel: string; // HF model id to build (curated pick or custom)
-  buildSource: "hf" | "api"; // W_E rows vs third-party text embeddings
+  // W_E rows · third-party text embeddings · no model at all (LLM-grown probe)
+  buildSource: "hf" | "api" | "probe";
   buildParams: BuildParams;
 }
 
@@ -488,6 +499,13 @@ export const appStore = createStore<AppState>()((set, get) => ({
       embedHost: import.meta.env.VITE_EMBED_HOST ?? "http://localhost:11434",
       embedModel: "mxbai-embed-large",
       embedApi: "ollama",
+      llmHost: import.meta.env.VITE_LLM_HOST ?? "http://localhost:8050",
+      llmModel: "",
+      probeSeed: "",
+      depth: 2,
+      breadth: 12,
+      sensitivity: 0.35,
+      generator: "auto",
     },
   },
   progress: {

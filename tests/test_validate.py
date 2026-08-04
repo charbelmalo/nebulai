@@ -12,6 +12,7 @@ import pytest
 
 from nebulai.backend.validate import (
     null_baseline,
+    reload_units,
     scale_cluster_kwargs,
     seed_stability,
     trustworthiness_score,
@@ -191,3 +192,49 @@ def test_null_baseline_preserves_column_marginals():
     for c in range(X.shape[1]):
         shuffled[:, c] = rng.permutation(X[:, c])
     assert np.allclose(np.sort(shuffled, axis=0), np.sort(X, axis=0))
+
+
+# --- the reload guard -----------------------------------------------------
+#
+# Trustworthiness needs the ORIGINAL vectors, which `reduced.npz` does not
+# cache, so `reload_units` replays the front-end from meta. For front-ends that
+# CANNOT be replayed exactly, refusing is the whole feature: a reload that
+# silently returned a different point set would validate something other than
+# the map on screen, and `validate_map`'s length guard only catches that when
+# the counts happen to differ.
+
+
+def test_probe_maps_refuse_to_reload_and_say_why():
+    """Probe is non-replayable twice over — a stochastic generator AND a live
+    embedding host — so it must never grow a reload path."""
+    meta = {
+        "unit": "probe_concept(sentence-transformers/all-MiniLM-L6-v2)",
+        "generator": "openai:some-model",
+        "embed_model": "sentence-transformers/all-MiniLM-L6-v2",
+        "embed_host": "http://embed.test:8040",
+        "kept": 53,
+        "n_proposed": 118,
+    }
+    with pytest.raises(ValueError) as e:
+        reload_units(meta)
+    msg = str(e.value)
+    # the reason has to name BOTH sources of drift, not just the host —
+    # "re-run against a reachable host" would be wrong advice for probe
+    assert "generator" in msg and "live service" in msg
+    assert "DIFFERENT point set" in msg
+    assert "53" in msg and "118" in msg
+
+
+def test_api_text_embedding_maps_refuse_to_reload():
+    meta = {
+        "unit": "api_text_embedding(mxbai-embed-large)",
+        "embed_model": "mxbai-embed-large",
+        "embed_host": "http://embed.test:11434",
+    }
+    with pytest.raises(ValueError, match="cannot be revalidated offline"):
+        reload_units(meta)
+
+
+def test_unknown_unit_types_refuse_rather_than_guess():
+    with pytest.raises(ValueError, match="no reload path"):
+        reload_units({"unit": "something_new"})

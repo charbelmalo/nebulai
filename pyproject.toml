@@ -1,6 +1,6 @@
 [project]
 name = "nebulai"
-version = "0.1.0"
+version = "0.2.0"
 description = "Nebul.AI — a semantic cloud of a micro model's concept space"
 readme = "README.md"
 requires-python = ">=3.11"

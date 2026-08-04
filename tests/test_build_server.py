@@ -10,6 +10,7 @@ from nebulai.backend.build_server import (
     build_cmd,
     dataset_id_for,
     parse_stage_line,
+    parse_substage_line,
 )
 
 # The exact prints from cli._run_tokens (plus realistic noise lines).
@@ -113,8 +114,128 @@ def test_build_cmd_rejects_bad_input():
         build_cmd("gpt2", "hf", {"edges": "all"})
 
 
+# --- within-stage progress ------------------------------------------------
+# Stage 1 of a probe runs for minutes before `[1/5]` prints. These indented
+# lines are the only thing moving during it.
+
+SUBSTAGE_CASES = [
+    ("  depth 1: +12 terms (total 13)", "depth 1: +12 terms (total 13)"),
+    ("  depth 2: expanding 3/12 'bereavement'…", "depth 2: expanding 3/12 'bereavement'…"),
+    ("  depth 2: +105 terms (total 118)", "depth 2: +105 terms (total 118)"),
+    ("  sensitivity 0.35: kept 53/118 (dropped 65, 55%)", "sensitivity 0.35: kept 53/118 (dropped 65, 55%)"),
+    # a failed expansion is progress the user must see live, not only in the log
+    ("  expansion failed for 'counseling' (RuntimeError: truncated)", "expansion failed for 'counseling' (RuntimeError: truncated)"),
+    # top-level lines belong to parse_stage_line, not here
+    ("[1/5] grew 53 concepts from 'grief'", None),
+    ("Downloading model.safetensors: 100%", None),
+    # library noise merged in from stderr
+    ("  warn(", None),
+    ("  /Users/x/.venv/lib/python3.12/site-packages/umap/umap_.py:19: UserWarning: n_jobs", None),
+    # the artifact paths printed after [5/5] must not clobber the done message
+    ("  /Users/charbelmalo/Developer/nebulai/out/probe__grief/nebulai.json", None),
+    ("", None),
+    ("   ", None),
+]
+
+
+@pytest.mark.parametrize("line,expected", SUBSTAGE_CASES)
+def test_parse_substage_line(line, expected):
+    assert parse_substage_line(line) == expected
+
+
+def test_substage_and_stage_parsers_never_both_fire():
+    for line, _ in STAGE_CASES + SUBSTAGE_CASES:
+        assert not (parse_stage_line(line) and parse_substage_line(line))
+
+
+def test_parse_substage_line_truncates_a_runaway_line():
+    out = parse_substage_line("  " + "x" * 500)
+    assert out is not None and len(out) == 160
+
+
 def test_dataset_id_for():
     assert dataset_id_for("gpt2", "hf") == "gpt2"
     assert dataset_id_for("EleutherAI/pythia-70m", "hf") == "EleutherAI__pythia-70m"
     assert dataset_id_for("gpt2", "api", "mxbai-embed-large") == "gpt2__api-mxbai-embed-large"
     assert dataset_id_for("gpt2", "api", None) == "gpt2__api-embed"
+
+
+# --- probe source ---------------------------------------------------------
+# The probe front-end has no model: `model` carries the seed PHRASE, the
+# subcommand is `probe` not `tokens`, and its RNG knob is --seed-rng because
+# the positional arg is already the seed word.
+
+
+def test_build_cmd_probe_uses_the_probe_subcommand_with_the_seed_positional():
+    cmd = build_cmd("grief", "probe", {})
+    assert cmd == [sys.executable, "-u", "-m", "nebulai", "probe", "grief"]
+
+
+def test_build_cmd_probe_full_params():
+    cmd = build_cmd(
+        "medieval siege warfare",
+        "probe",
+        {
+            "depth": 3,
+            "breadth": 16,
+            "sensitivity": 0.42,
+            "generator": "openai",
+            "namer": "openai",
+            "seed": 7,
+            "n_neighbors": 15,
+            "llm_host": "http://llm.test:8050",
+            "llm_model": "Qwen3.6-35B",
+            "embed_host": "http://embed.test:8040",
+            "embed_api": "openai",
+            "embed_model": "all-MiniLM-L6-v2",
+        },
+    )
+    assert cmd[5] == "medieval siege warfare"
+    for flag, val in [
+        ("--depth", "3"),
+        ("--breadth", "16"),
+        ("--sensitivity", "0.42"),
+        ("--generator", "openai"),
+        ("--namer", "openai"),
+        ("--seed-rng", "7"),
+        ("--n-neighbors", "15"),
+        ("--llm-host", "http://llm.test:8050"),
+        ("--llm-model", "Qwen3.6-35B"),
+        ("--embed-host", "http://embed.test:8040"),
+        ("--embed-api", "openai"),
+        ("--embed-model", "all-MiniLM-L6-v2"),
+    ]:
+        assert cmd[cmd.index(flag) + 1] == val
+    # `--seed` would be parsed as a SECOND positional seed phrase
+    assert "--seed" not in cmd
+    # probe grows a fresh cloud every time; there is no reduction cache to skip
+    assert "--source" not in cmd
+
+
+def test_build_cmd_probe_never_sends_force():
+    cmd = build_cmd("grief", "probe", {"force": True})
+    assert "--force" not in cmd
+
+
+def test_build_cmd_probe_rejects_a_shell_ish_seed():
+    for bad in ["grief; rm -rf /", "a`whoami`", 'x"y', "a|b", "a$(id)", "a\nb", ""]:
+        with pytest.raises(ValueError):
+            build_cmd(bad, "probe", {})
+
+
+def test_build_cmd_probe_allows_ordinary_phrases():
+    for good in ["grief", "medieval siege warfare", "co-operative game theory", "K2"]:
+        assert build_cmd(good, "probe", {})[5] == good
+
+
+def test_build_cmd_probe_rejects_a_bad_generator():
+    with pytest.raises(ValueError):
+        build_cmd("grief", "probe", {"generator": "telepathy"})
+
+
+def test_dataset_id_for_probe_matches_the_cli_slug():
+    from nebulai.frontends.probe import probe_dataset_id
+
+    for seed in ["grief", "Medieval Siege Warfare", "  ...  "]:
+        assert dataset_id_for(seed, "probe") == probe_dataset_id(seed)
+    assert dataset_id_for("Medieval Siege Warfare", "probe") == "probe__medieval-siege-warfare"

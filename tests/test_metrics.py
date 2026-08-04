@@ -119,3 +119,28 @@ def test_margin_reports_a_negative_result_rather_than_swallowing_it(tmp_path):
     _write_validation(d, null_sil=0.999, null_k=2)
     table = format_table([compute_map_metrics(d)])
     assert "-0." in table  # a map under its own floor says so
+    # ...and does so in its own terms: `!` is not the same claim as `?`
+    assert "-0.0004!" in table
+    assert "BELOW NULL FLOOR — 1 of 1 maps" in table
+
+
+def test_below_floor_and_not_comparable_are_separate_claims(tmp_path):
+    """gpt2-small's SAE map is the real case and it trips BOTH: the null
+    out-scored it (0.5737 vs 0.5246) AND the null clustered at 16 vs its 69.
+    Those are different objections, so they must not collapse into one marker —
+    `?` alone would read as "inconclusive" when the result is inverted."""
+    d = tmp_path / "sae"
+    rng = np.random.RandomState(0)
+    u = np.vstack([rng.randn(20, 3) * 0.01, rng.randn(20, 3) * 0.01 + 10])
+    _write_map(d, [0] * 20 + [1] * 20, u_cluster=u)
+
+    _write_validation(d, null_sil=0.999, null_k=16)  # below floor AND 8x k
+    table = format_table([compute_map_metrics(d)])
+    assert "-0.0004!?" in table
+    assert "not even like-for-like" in table
+
+    # a healthy map claims neither marker, and gets no callout
+    _write_validation(d, null_sil=0.2, null_k=3)
+    table = format_table([compute_map_metrics(d)])
+    assert "!" not in table.split("margin")[0].splitlines()[-1]
+    assert "BELOW NULL FLOOR" not in table

@@ -69,7 +69,7 @@ changing a reduction flag transparently recomputes. `--force` busts the cache.
   datamapplot — takes a few minutes to build the first time).
 - GPT-2 assets come from the HF cache (`model.safetensors` + `tokenizer.json`);
   no torch is needed for Plan C.
-- ollama namer expects the M4 worker reachable at `192.168.0.200:11434` (see the
+- ollama namer expects the M4 worker reachable at `<m4-host>:11434` (see the
   `m4worker-bridge` skill to start it); otherwise the chain falls to OpenRouter,
   then to the centroid fallback.
 - OpenRouter key: `OPENROUTER_API_KEY` env var or `~/.hermes/.env`.

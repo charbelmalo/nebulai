@@ -58,6 +58,7 @@ export interface BuildModelsPayload {
   models: BuildModelInfo[];
   namers: string[];
   sources: { id: string; label: string }[];
+  generators?: string[]; // absent on a build server older than the probe source
 }
 
 /** null until the first successful /build/models fetch. */
@@ -95,12 +96,31 @@ function serverParams(): Record<string, unknown> {
   if (bp.minClusterSize > 0) p.min_cluster_size = bp.minClusterSize;
   if (bp.minSamples > 0) p.min_samples = bp.minSamples;
   if (bp.force) p.force = true;
-  if (buildSource === "api") {
+  if (bp.llmHost.trim()) p.llm_host = bp.llmHost.trim();
+  if (bp.llmModel.trim()) p.llm_model = bp.llmModel.trim();
+  // a probe places its concepts with the same external embedder an api build
+  // uses, so both send the embed triple
+  if (buildSource === "api" || buildSource === "probe") {
     p.embed_host = bp.embedHost;
     p.embed_model = bp.embedModel;
     p.embed_api = bp.embedApi;
   }
+  if (buildSource === "probe") {
+    p.depth = bp.depth;
+    p.breadth = bp.breadth;
+    p.sensitivity = bp.sensitivity;
+    p.generator = bp.generator;
+    // max_tokens is a vocab knob; a probe has no vocab
+    delete p.max_tokens;
+  }
   return p;
+}
+
+/** What /build/start's `model` field carries: an HF id, or — for a probe,
+ *  which has no model — the seed phrase the cloud grows from. */
+export function buildTarget(): string {
+  const { buildModel, buildSource, buildParams } = appStore.getState().probing;
+  return buildSource === "probe" ? buildParams.probeSeed : buildModel;
 }
 
 /** Do the current params hit the model's UMAP cache? (= the seconds-fast
@@ -181,9 +201,13 @@ export async function pollBuildStatus(): Promise<void> {
  *  false so a matching UMAP cache is reused). */
 export async function startBuild(opts: { force?: boolean } = {}): Promise<void> {
   const st = appStore.getState();
-  const { buildModel, buildSource } = st.probing;
-  if (!buildModel.trim()) {
-    st.setProgress({ stage: "error", error: "no model selected" });
+  const { buildSource } = st.probing;
+  const target = buildTarget().trim();
+  if (!target) {
+    st.setProgress({
+      stage: "error",
+      error: buildSource === "probe" ? "no seed concept entered" : "no model selected",
+    });
     return;
   }
   const params = serverParams();
@@ -192,13 +216,13 @@ export async function startBuild(opts: { force?: boolean } = {}): Promise<void> 
     else delete params.force;
   }
   st.resetProgress();
-  st.pushProgressEvent("probing", `POST /build/start ${buildModel} (${buildSource})`);
-  st.setProgress({ stage: "probing", pct: 0.02, message: `starting ${buildModel}…` });
+  st.pushProgressEvent("probing", `POST /build/start ${target} (${buildSource})`);
+  st.setProgress({ stage: "probing", pct: 0.02, message: `starting ${target}…` });
   try {
     const res = await fetch(`${buildBase()}/build/start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: buildModel, source: buildSource, params }),
+      body: JSON.stringify({ model: target, source: buildSource, params }),
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);

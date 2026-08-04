@@ -152,7 +152,12 @@ def _run_tokens(args: argparse.Namespace) -> None:
         ollama_model=args.ollama_model,
         ollama_host=args.ollama_host,
         anthropic_model=args.anthropic_model,
+        claude_cli_model=args.claude_cli_model,
+        codex_cli_model=args.codex_cli_model,
         env_file=args.env_file,
+        llm_host=args.llm_host,
+        llm_model=args.llm_model,
+        llm_api_key=args.llm_api_key,
     )
     print(f"[4/5] named {len(titles)} clusters via '{namer_used}' [{t()}]")
 
@@ -298,7 +303,12 @@ def _run_sae(args: argparse.Namespace) -> None:
             ollama_model=args.ollama_model,
             ollama_host=args.ollama_host,
             anthropic_model=args.anthropic_model,
+            claude_cli_model=args.claude_cli_model,
+            codex_cli_model=args.codex_cli_model,
             env_file=args.env_file,
+            llm_host=args.llm_host,
+            llm_model=args.llm_model,
+            llm_api_key=args.llm_api_key,
         )
     print(f"[4/5] named {len(titles)} clusters via '{namer_used}' [{t()}]")
 
@@ -446,7 +456,12 @@ def _run_neurons(args: argparse.Namespace) -> None:
             ollama_model=args.ollama_model,
             ollama_host=args.ollama_host,
             anthropic_model=args.anthropic_model,
+            claude_cli_model=args.claude_cli_model,
+            codex_cli_model=args.codex_cli_model,
             env_file=args.env_file,
+            llm_host=args.llm_host,
+            llm_model=args.llm_model,
+            llm_api_key=args.llm_api_key,
         )
     print(f"[4/5] named {len(titles)} clusters via '{namer_used}' [{t()}]")
 
@@ -598,19 +613,46 @@ def _run_probe(args: argparse.Namespace) -> None:
     model weights. Mirrors _run_tokens's 5-stage structure and its exact
     `[k/5] ...` prints (build_server parses them)."""
     import os
-    import re as _re
 
     from .backend.cluster import cluster_units, resolve_cluster_params
     from .backend.export import export_json
     from .backend.name import name_clusters
     from .backend.reduce import reduce_vectors
     from .backend.viz import render
-    from .frontends.probe import load_probe_units
+    from .frontends.probe import load_probe_units, probe_dataset_id
 
-    slug = _re.sub(r"[^a-z0-9]+", "-", args.seed.lower()).strip("-")[:48] or "probe"
-    dataset_id = f"probe__{slug}"
+    dataset_id = probe_dataset_id(args.seed)
     out_dir = Path(args.out) / dataset_id
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # --reuse-terms re-embeds an EXISTING map's concepts instead of generating
+    # new ones. That holds the point set fixed so a change of embedder is the
+    # only variable, and it drops the generator from the run entirely — which is
+    # what makes a rebuild possible when the generator and the embedding host
+    # cannot fit in RAM at the same time.
+    reuse_terms = reused_from = None
+    if args.reuse_terms:
+        src = Path(args.out) / args.reuse_terms
+        src_json = src / "nebulai.json"
+        if not src_json.exists():
+            raise SystemExit(f"probe: --reuse-terms {args.reuse_terms} has no {src_json}")
+        src_doc = json.loads(src_json.read_text())
+        src_meta = src_doc["meta"]
+        if not str(src_meta.get("unit", "")).startswith("probe_concept"):
+            raise SystemExit(
+                f"probe: --reuse-terms {args.reuse_terms} is a "
+                f"{src_meta.get('unit')!r} map, not a probe map — its labels are "
+                "not concept strings"
+            )
+        if str(src_meta.get("probe_seed")) != str(args.seed):
+            raise SystemExit(
+                f"probe: --reuse-terms {args.reuse_terms} was grown from "
+                f"{src_meta.get('probe_seed')!r} but --seed is {args.seed!r}; "
+                "similarities are measured against the seed, so reusing another "
+                "cloud's terms would re-centre the map"
+            )
+        reuse_terms = [str(p["label"]) for p in src_doc["points"]]
+        reused_from = args.reuse_terms
 
     t = _timer()
     # unlike the weight-reading front-ends, this one cannot run offline: it needs
@@ -628,12 +670,19 @@ def _run_probe(args: argparse.Namespace) -> None:
             ollama_model=args.ollama_model,
             openrouter_model=args.openrouter_model,
             anthropic_model=args.anthropic_model,
+            # NB: no claude_cli/codex_cli here — those are NAMER backends. The
+            # probe generator has its own backend set (_make_expander).
             env_file=args.env_file,
             embed_host=args.embed_host,
             embed_model=args.embed_model,
             embed_api=args.embed_api,
             embed_api_key=os.environ.get("EMBED_API_KEY")
             or os.environ.get("OPENAI_API_KEY"),
+            llm_host=args.llm_host,
+            llm_model=args.llm_model,
+            llm_api_key=args.llm_api_key,
+            reuse_terms=reuse_terms,
+            reused_from=reused_from,
         )
     except RuntimeError as exc:
         raise SystemExit(f"probe: {exc}") from exc
@@ -683,7 +732,12 @@ def _run_probe(args: argparse.Namespace) -> None:
         ollama_model=args.ollama_model,
         ollama_host=args.ollama_host,
         anthropic_model=args.anthropic_model,
+        claude_cli_model=args.claude_cli_model,
+        codex_cli_model=args.codex_cli_model,
         env_file=args.env_file,
+        llm_host=args.llm_host,
+        llm_model=args.llm_model,
+        llm_api_key=args.llm_api_key,
     )
     print(f"[4/5] named {len(titles)} clusters via '{namer_used}' [{t()}]")
 
@@ -784,26 +838,106 @@ def _run_validate(args: argparse.Namespace) -> None:
         print(f"  {path} [{t()}]")
 
 
+def _run_rename(args: argparse.Namespace) -> None:
+    """Re-title already-built maps without rebuilding them (see backend/rename.py).
+
+    A separate command because titles and geometry have separate lifetimes: the
+    points here were built once and are correct, while the namer that titled
+    them has been replaced twice. Rebuilding to fix only the titles would
+    re-run UMAP over 50k vectors to land back on the same coordinates."""
+    from .backend.rename import rename_map, sync_index
+
+    out_root = Path(args.out)
+    if len(args.datasets) == 1 and args.datasets[0] == "all":
+        args.datasets = sorted(
+            d.name for d in out_root.iterdir() if (d / "nebulai.json").is_file()
+        )
+        if not args.datasets:
+            raise SystemExit(f"no built maps under {out_root}/")
+
+    done, skipped = [], []
+    for m in args.datasets:
+        dd = out_root / m.replace("/", "__")
+        t = _timer()
+        print(f"renaming {dd.name} ...")
+        try:
+            r = rename_map(
+                dd,
+                namer=args.namer,
+                openrouter_model=args.openrouter_model,
+                ollama_model=args.ollama_model,
+                ollama_host=args.ollama_host,
+                anthropic_model=args.anthropic_model,
+                llm_host=args.llm_host,
+                llm_model=args.llm_model,
+                llm_api_key=args.llm_api_key,
+                claude_cli_model=args.claude_cli_model,
+                codex_cli_model=args.codex_cli_model,
+                env_file=args.env_file,
+            )
+        except (ValueError, FileNotFoundError, KeyError) as e:
+            # a map left with its old titles is a better outcome than a map
+            # given invented ones, so this is a skip, not a failure
+            print(f"  skipped: {e}")
+            skipped.append(dd.name)
+            continue
+        done.append(r)
+        print(
+            f"  {r['renamed']}/{r['n_clusters']} titles from {r['namer']} "
+            f"(was {r['was']}) [{t()}]"
+        )
+
+    sync_index(out_root)
+    print(f"\n{len(done)} renamed, {len(skipped)} skipped")
+    for r in done:
+        print(f"  {r['id']:<52} {r['was']} -> {r['namer']}")
+
+
 def _run_compare(args: argparse.Namespace) -> None:
+    import os
+
     from .backend.compare import build_comparison, export_comparison
     from .backend.viewer import write_viewer
 
     out_root = Path(args.out)
+
+    # `all` is not a convenience — hand-listing eleven dataset ids is how a
+    # comparison silently ends up missing the front-ends it exists to contrast
+    if len(args.models) == 1 and args.models[0] == "all":
+        names = sorted(
+            d.name for d in out_root.iterdir() if (d / "nebulai.json").is_file()
+        )
+        if not names:
+            raise SystemExit(f"no built maps under {out_root}/")
+        print(f"  comparing all {len(names)} maps under {out_root}/")
+        args.models = names
+
     json_paths = []
     for m in args.models:
+        # a model id ("EleutherAI/pythia-70m") and a dataset id
+        # ("gpt2__sae__blocks.8...") both land here — the SAE/neuron/api
+        # front-ends only ever produce the latter
         jp = out_root / m.replace("/", "__") / "nebulai.json"
         if not jp.exists():
+            avail = sorted(
+                d.name for d in out_root.iterdir() if (d / "nebulai.json").is_file()
+            )
             raise SystemExit(
-                f"missing {jp} — run `nebulai tokens --model {m}` first"
+                f"missing {jp}\n  build it first (`nebulai tokens --model {m}`), "
+                f"or pass one of the {len(avail)} maps already in {out_root}/:\n    "
+                + "\n    ".join(avail)
             )
         json_paths.append(jp)
 
     t = _timer()
     comp = build_comparison(
         json_paths,
-        embed_host=args.ollama_host,
+        embed_host=args.embed_host or args.ollama_host,
         embed_model=args.embed_model,
         seed=args.seed,
+        embed_api=args.embed_api,
+        embed_api_key=os.environ.get("EMBED_API_KEY")
+        or os.environ.get("OPENAI_API_KEY"),
     )
     print(
         f"[1/2] built comparison: {comp['meta']['n_points']} clusters, "
@@ -829,6 +963,28 @@ def _run_compare(args: argparse.Namespace) -> None:
     print("\n  concept overlap (Jaccard):")
     for k, v in comp["stats"]["jaccard"].items():
         print(f"    {k}: {v}")
+
+
+def _add_llm_args(sp: argparse.ArgumentParser) -> None:
+    """Flags for an OpenAI-compatible chat server (LM Studio, vLLM, llama.cpp,
+    an MLX box on the LAN). Shared by every subcommand that names clusters, so
+    the four namer front-ends cannot drift apart."""
+    sp.add_argument(
+        "--llm-host",
+        default="http://localhost:8050",
+        help="OpenAI-compatible chat base URL, e.g. http://<lan-host>:8050",
+    )
+    sp.add_argument(
+        "--llm-model",
+        default="",
+        help="chat model id, or a fragment to match (default: first model on "
+        "the server that is not an embedder/reranker/audio model)",
+    )
+    sp.add_argument(
+        "--llm-api-key",
+        default=None,
+        help="bearer token for --llm-host (omit for a keyless local server)",
+    )
 
 
 def main() -> None:
@@ -893,9 +1049,10 @@ def main() -> None:
     )
     t.add_argument(
         "--namer",
-        choices=["auto", "openrouter", "ollama", "anthropic", "none"],
+        choices=["auto", "openrouter", "ollama", "openai", "anthropic", "claude-cli", "codex-cli", "none"],
         default="auto",
-        help="cluster-naming backend (auto: ollama -> openrouter -> centroid)",
+        help="cluster-naming backend "
+        "(auto: ollama -> openai -> openrouter -> centroid)",
     )
     t.add_argument(
         "--openrouter-model",
@@ -915,6 +1072,17 @@ def main() -> None:
         help="ollama base URL (default: local ollama server)",
     )
     t.add_argument("--anthropic-model", default="claude-opus-5")
+    t.add_argument(
+        "--claude-cli-model",
+        default="",
+        help="model for --namer claude-cli (e.g. sonnet, opus); empty = the CLI default",
+    )
+    t.add_argument(
+        "--codex-cli-model",
+        default="",
+        help="model for --namer codex-cli (e.g. gpt-5.6-sol); empty = the CLI default",
+    )
+    _add_llm_args(t)
     t.add_argument(
         "--env-file",
         default=None,
@@ -989,9 +1157,10 @@ def main() -> None:
     )
     s.add_argument(
         "--namer",
-        choices=["auto", "openrouter", "ollama", "anthropic", "none"],
+        choices=["auto", "openrouter", "ollama", "openai", "anthropic", "claude-cli", "codex-cli", "none"],
         default="auto",
-        help="cluster-naming backend (auto: ollama -> openrouter -> centroid)",
+        help="cluster-naming backend "
+        "(auto: ollama -> openai -> openrouter -> centroid)",
     )
     s.add_argument(
         "--openrouter-model",
@@ -1009,6 +1178,17 @@ def main() -> None:
         help="ollama base URL (default: local ollama server)",
     )
     s.add_argument("--anthropic-model", default="claude-opus-5")
+    s.add_argument(
+        "--claude-cli-model",
+        default="",
+        help="model for --namer claude-cli (e.g. sonnet, opus); empty = the CLI default",
+    )
+    s.add_argument(
+        "--codex-cli-model",
+        default="",
+        help="model for --namer codex-cli (e.g. gpt-5.6-sol); empty = the CLI default",
+    )
+    _add_llm_args(s)
     s.add_argument(
         "--env-file",
         default=None,
@@ -1088,9 +1268,10 @@ def main() -> None:
     )
     n.add_argument(
         "--namer",
-        choices=["auto", "openrouter", "ollama", "anthropic", "none"],
+        choices=["auto", "openrouter", "ollama", "openai", "anthropic", "claude-cli", "codex-cli", "none"],
         default="auto",
-        help="cluster-naming backend (auto: ollama -> openrouter -> centroid)",
+        help="cluster-naming backend "
+        "(auto: ollama -> openai -> openrouter -> centroid)",
     )
     n.add_argument(
         "--openrouter-model",
@@ -1108,6 +1289,17 @@ def main() -> None:
         help="ollama base URL (default: local ollama server)",
     )
     n.add_argument("--anthropic-model", default="claude-opus-5")
+    n.add_argument(
+        "--claude-cli-model",
+        default="",
+        help="model for --namer claude-cli (e.g. sonnet, opus); empty = the CLI default",
+    )
+    n.add_argument(
+        "--codex-cli-model",
+        default="",
+        help="model for --namer codex-cli (e.g. gpt-5.6-sol); empty = the CLI default",
+    )
+    _add_llm_args(n)
     n.add_argument(
         "--env-file",
         default=None,
@@ -1197,23 +1389,44 @@ def main() -> None:
     pr.add_argument(
         "--generator",
         default="auto",
-        choices=["auto", "ollama", "openrouter", "anthropic"],
-        help="which LLM proposes concepts (default: auto)",
+        choices=["auto", "ollama", "openai", "openrouter", "anthropic"],
+        help="which LLM proposes concepts "
+        "(auto: ollama -> openai -> openrouter -> anthropic)",
     )
     pr.add_argument(
         "--namer",
-        choices=["auto", "openrouter", "ollama", "anthropic", "none"],
+        choices=["auto", "openrouter", "ollama", "openai", "anthropic", "claude-cli", "codex-cli", "none"],
         default="auto",
-        help="cluster-naming backend (auto: ollama -> openrouter -> centroid)",
+        help="cluster-naming backend "
+        "(auto: ollama -> openai -> openrouter -> centroid)",
     )
     pr.add_argument("--ollama-host", default="http://localhost:11434")
     pr.add_argument("--ollama-model", default="liquidai/lfm2.5-1.2b-instruct")
+    _add_llm_args(pr)
     pr.add_argument("--openrouter-model", default="openai/gpt-oss-120b:free")
     pr.add_argument("--anthropic-model", default="claude-opus-5")
+    pr.add_argument(
+        "--claude-cli-model",
+        default="",
+        help="model for --namer claude-cli (e.g. sonnet, opus); empty = the CLI default",
+    )
+    pr.add_argument(
+        "--codex-cli-model",
+        default="",
+        help="model for --namer codex-cli (e.g. gpt-5.6-sol); empty = the CLI default",
+    )
     pr.add_argument("--env-file", default=None)
     pr.add_argument("--embed-host", default="http://localhost:11434")
     pr.add_argument("--embed-model", default="mxbai-embed-large")
     pr.add_argument("--embed-api", default="ollama", choices=["ollama", "openai"])
+    pr.add_argument(
+        "--reuse-terms",
+        default=None,
+        metavar="DATASET_ID",
+        help="re-embed an existing probe map's concepts instead of generating "
+        "new ones (holds the point set fixed across a change of embedder; "
+        "needs no generator)",
+    )
     pr.add_argument("--cluster-dim", type=int, default=10)
     pr.add_argument(
         "--n-neighbors",
@@ -1279,6 +1492,43 @@ def main() -> None:
     )
     v.set_defaults(fn=_run_validate)
 
+    r = sub.add_parser(
+        "rename",
+        help="re-title built maps with a better namer — no rebuild, geometry "
+        "untouched",
+    )
+    r.add_argument(
+        "datasets",
+        nargs="+",
+        help="dataset dir ids already built. Pass `all` for every built map; "
+        "maps whose labels are all placeholders are skipped, not invented.",
+    )
+    r.add_argument("--out", default="out", help="output directory root")
+    r.add_argument(
+        "--namer",
+        choices=["auto", "openrouter", "ollama", "openai", "anthropic", "claude-cli", "codex-cli", "none"],
+        default="claude-cli",
+        help="naming backend (default: claude-cli — it runs on an existing "
+        "subscription, so re-titling a whole corpus costs no API spend)",
+    )
+    r.add_argument("--openrouter-model", default="openai/gpt-oss-120b:free")
+    r.add_argument("--ollama-model", default="liquidai/lfm2.5-1.2b-instruct")
+    r.add_argument("--ollama-host", default="http://localhost:11434")
+    r.add_argument("--anthropic-model", default="claude-opus-5")
+    r.add_argument(
+        "--claude-cli-model",
+        default="",
+        help="model for --namer claude-cli (e.g. sonnet, opus); empty = the CLI default",
+    )
+    r.add_argument(
+        "--codex-cli-model",
+        default="",
+        help="model for --namer codex-cli (e.g. gpt-5.6-sol); empty = the CLI default",
+    )
+    _add_llm_args(r)
+    r.add_argument("--env-file", default=None)
+    r.set_defaults(fn=_run_rename)
+
     c = sub.add_parser(
         "compare",
         help="combine several models' clouds into one categorized WebGPU map",
@@ -1286,13 +1536,27 @@ def main() -> None:
     c.add_argument(
         "models",
         nargs="+",
-        help="model ids already built with `tokens` (e.g. gpt2 distilgpt2 EleutherAI/pythia-70m)",
+        help="dataset ids under --out to compare (model ids work for token maps: "
+        "gpt2 distilgpt2 EleutherAI/pythia-70m; SAE/neuron/api maps use their "
+        "directory name). Pass `all` for every built map.",
     )
     c.add_argument("--out", default="out", help="output directory root")
     c.add_argument(
         "--ollama-host",
         default="http://localhost:11434",
         help="ollama base URL hosting the embed model (default: local ollama server)",
+    )
+    c.add_argument(
+        "--embed-host",
+        default=None,
+        help="embeddings base URL, overrides --ollama-host "
+        "(e.g. http://<lan-host>:8040 with --embed-api openai)",
+    )
+    c.add_argument(
+        "--embed-api",
+        choices=["ollama", "openai"],
+        default="ollama",
+        help="ollama /api/embed, or any OpenAI-compatible /v1/embeddings",
     )
     c.add_argument("--embed-model", default="mxbai-embed-large")
     c.add_argument("--seed", type=int, default=42)

@@ -75,7 +75,7 @@ matches the number of vectors. Nothing else is required of it.
   - `ollama` → ollama → centroid
   - `anthropic` → anthropic → centroid
   - `none` → centroid
-- ollama: M4 worker at `http://192.168.0.200:11434`, default
+- ollama: M4 worker at `http://<m4-host>:11434`, default
   `liquidai/lfm2.5-1.2b-instruct` (never picks an `embed` model). OpenRouter:
   default `openai/gpt-oss-120b:free`, key from `OPENROUTER_API_KEY` or the last
   uncommented line in `~/.hermes/.env`. Anthropic: `claude-opus-4-8`, structured

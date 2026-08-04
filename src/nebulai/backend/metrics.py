@@ -125,21 +125,39 @@ def format_table(rows: list[dict]) -> str:
     def sil(r: dict) -> str:
         return num(r["silhouette"])
 
-    def margin(r: dict) -> str:
-        """silhouette − null floor, flagged when the two aren't comparable.
+    def _margin_flags(r: dict) -> tuple[float | None, bool, bool]:
+        """(margin, not-comparable, below-floor) for one row.
 
-        Silhouette rises as a partition gets coarser, so a null that resolved a
-        very different number of clusters than the real map is being scored on a
-        different question. `nebulai validate` rescales min_cluster_size for
-        subsampling, but HDBSCAN still picks its own cluster count — when that
-        lands outside 0.5-2x the real map's, the margin is marked `?`.
+        Two INDEPENDENT problems, deliberately not collapsed into one marker:
+
+        `?` not-comparable — silhouette rises as a partition gets coarser, so a
+            null that resolved a very different number of clusters than the real
+            map is being scored on a different question. `nebulai validate`
+            rescales min_cluster_size for subsampling, but HDBSCAN still picks
+            its own cluster count; outside 0.5-2x the real map's, the margin is
+            not evidence either way.
+
+        `!` below-floor — the null scored HIGHER than the real map. This is not
+            a weak result, it is an inverted one: the construction procedure
+            found more separation in column-shuffled vectors than in the real
+            ones. It has to be legible at a glance, so it gets its own marker
+            and a callout under the table rather than sharing `?`.
         """
         s, n = r.get("silhouette"), r.get("null_silhouette")
         if s is None or n is None:
-            return "n/a"
+            return None, False, False
         nk, rk = r.get("null_clusters"), r.get("n_clusters")
-        suspect = bool(rk and nk) and not (0.5 <= nk / rk <= 2.0)
-        return f"{s - n:+.4f}" + ("?" if suspect else "")
+        return (
+            s - n,
+            bool(rk and nk) and not (0.5 <= nk / rk <= 2.0),
+            s < n,
+        )
+
+    def margin(r: dict) -> str:
+        m, suspect, below = _margin_flags(r)
+        if m is None:
+            return "n/a"
+        return f"{m:+.4f}" + ("!" if below else "") + ("?" if suspect else "")
 
     # the independent-validation columns only appear once at least one map has
     # actually been validated — an all-"n/a" block would read as a failed
@@ -200,6 +218,37 @@ def format_table(rows: list[dict]) -> str:
             "(--labels none → 0 labeled units); structural separation only."
         )
 
+    # a null that OUT-SCORES the real map is the one result that cannot be left
+    # to a suffix character in a wide table — it says the separation on screen
+    # is the procedure rather than the model, for that map.
+    below = [r for r in rows if _margin_flags(r)[2]]
+    if below:
+        lines.append("")
+        lines.append(
+            f"  ! BELOW NULL FLOOR — {len(below)} of {len(rows)} maps score no "
+            "higher than column-shuffled vectors:"
+        )
+        for r in below:
+            m, suspect, _ = _margin_flags(r)
+            lines.append(
+                f"      {_source_label(r)}: silhouette {num(r['silhouette'])} vs "
+                f"null {num(r.get('null_silhouette'))} ({m:+.4f})"
+                + (
+                    f" — and null.k={r.get('null_clusters')} vs k="
+                    f"{r.get('n_clusters')}, so the two are not even like-for-like"
+                    if suspect
+                    else ""
+                )
+            )
+        lines.append(
+            "    For those maps UMAP+HDBSCAN found at least as much separation "
+            "in structure-free data\n"
+            "    as in the real vectors. Read their silhouette as a property of "
+            "the construction, not\n"
+            "    of the model. Trustworthiness is the column to trust here — it "
+            "never touches HDBSCAN."
+        )
+
     if validated:
         lines.append("")
         lines.append(
@@ -213,10 +262,14 @@ def format_table(rows: list[dict]) -> str:
             "partition coarsens, so this has to\n"
             "           sit near the map's own cluster count for the margin to "
             "be a like-for-like comparison.\n"
-            "  margin   silhouette − null.sil. `?` marks a null that clustered "
-            "outside 0.5-2x the map's k —\n"
-            "           there the two numbers answer different questions and the "
-            "margin is not evidence.\n"
+            "  margin   silhouette − null.sil. `!` marks a NEGATIVE margin — the "
+            "null out-scored the real\n"
+            "           map, so that map's separation is the procedure, not the "
+            "model (see above).\n"
+            "           `?` marks a null that clustered outside 0.5-2x the map's "
+            "k — there the two\n"
+            "           numbers answer different questions and the margin is not "
+            "evidence either way.\n"
             "           Small samples also inflate the null (UMAP invents "
             "separable islands from noise),\n"
             "           so a margin scored on a subsample is a conservative "

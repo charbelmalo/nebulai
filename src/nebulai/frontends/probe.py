@@ -38,6 +38,11 @@ _SYSTEM = (
     "abstractions, and never repeat the term you were given."
 )
 
+# Term used to check a generator is alive. Must be concrete and unambiguous:
+# asking a reasoning model to expand the word "test" gives it nothing to work
+# with, and it burns thousands of scratchpad tokens deciding what was meant.
+_PROBE_TERM = "ocean"
+
 _SCHEMA = {
     "type": "object",
     "properties": {
@@ -46,6 +51,18 @@ _SCHEMA = {
     "required": ["concepts"],
     "additionalProperties": False,
 }
+
+
+def probe_dataset_id(seed: str) -> str:
+    """out/ directory name for a probe cloud.
+
+    Shared by the CLI (which writes it) and build_server (which must predict it
+    to report the artifact path before the run finishes) — two copies of this
+    slug rule would drift and the server would poll for a directory the
+    pipeline never created.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", seed.lower()).strip("-")[:48] or "probe"
+    return f"probe__{slug}"
 
 
 def _norm(term: str) -> str:
@@ -126,6 +143,25 @@ def _expand_openrouter(term: str, n: int, model: str, env_file: str | None) -> l
     return json.loads(payload["choices"][0]["message"]["content"]).get("concepts", [])
 
 
+def _expand_openai(
+    term: str, n: int, host: str, model: str, api_key: str | None
+) -> list:
+    from ..backend.name import _chat_openai
+
+    got = _chat_openai(
+        host,
+        model,
+        _SYSTEM,
+        f"Term: {term!r}\n\n"
+        f'Reply as JSON: {{"concepts": [{n} short concept names]}}',
+        _SCHEMA,
+        "concepts",
+        api_key=api_key,
+        max_tokens=120 * n + 400,
+    )
+    return got.get("concepts", [])
+
+
 def _expand_anthropic(term: str, n: int, model: str) -> list:
     import anthropic
 
@@ -148,15 +184,19 @@ def _make_expander(
     openrouter_model: str,
     anthropic_model: str,
     env_file: str | None,
+    llm_host: str = "http://localhost:8050",
+    llm_model: str = "",
+    llm_api_key: str | None = None,
 ):
     """Resolve the generator once, up front — a cloud whose first half came
     from one model and second half from another after a mid-run fallback would
     be uninterpretable, so this fails loudly instead of degrading."""
-    from ..backend.name import _ollama_pick_model
+    from ..backend.name import _ollama_pick_model, _openai_pick_model
 
     chain = {
-        "auto": ["ollama", "openrouter", "anthropic"],
+        "auto": ["ollama", "openai", "openrouter", "anthropic"],
         "ollama": ["ollama"],
+        "openai": ["openai"],
         "openrouter": ["openrouter"],
         "anthropic": ["anthropic"],
     }[generator]
@@ -168,18 +208,37 @@ def _make_expander(
                 picked = _ollama_pick_model(ollama_host, ollama_model)
                 if picked is None:
                     raise RuntimeError(f"ollama at {ollama_host} unreachable")
-                _expand_ollama("test", 2, ollama_host, picked)
+                _expand_ollama(_PROBE_TERM, 2, ollama_host, picked)
                 return (
                     lambda t, n: _expand_ollama(t, n, ollama_host, picked),
                     f"ollama:{picked}",
                 )
+            if backend == "openai":
+                picked = _openai_pick_model(llm_host, llm_model, llm_api_key)
+                if picked is None:
+                    raise RuntimeError(
+                        f"no chat model on {llm_host} (unreachable, or it "
+                        "serves only embedding/rerank/audio models)"
+                    )
+                # a truncation here is not a failed backend: the model answered,
+                # at length. Only a hard error means it can't generate.
+                from ..backend.name import ChatTruncated
+
+                try:
+                    _expand_openai(_PROBE_TERM, 2, llm_host, picked, llm_api_key)
+                except ChatTruncated as trunc:
+                    print(f"  generator openai:{picked} rambles ({trunc}) — using it anyway")
+                return (
+                    lambda t, n: _expand_openai(t, n, llm_host, picked, llm_api_key),
+                    f"openai:{picked}",
+                )
             if backend == "openrouter":
-                _expand_openrouter("test", 2, openrouter_model, env_file)
+                _expand_openrouter(_PROBE_TERM, 2, openrouter_model, env_file)
                 return (
                     lambda t, n: _expand_openrouter(t, n, openrouter_model, env_file),
                     f"openrouter:{openrouter_model}",
                 )
-            _expand_anthropic("test", 2, anthropic_model)
+            _expand_anthropic(_PROBE_TERM, 2, anthropic_model)
             return (
                 lambda t, n: _expand_anthropic(t, n, anthropic_model),
                 f"anthropic:{anthropic_model}",
@@ -214,7 +273,12 @@ def load_probe_units(
     embed_model: str = "mxbai-embed-large",
     embed_api: str = "ollama",
     embed_api_key: str | None = None,
+    llm_host: str = "http://localhost:8050",
+    llm_model: str = "",
+    llm_api_key: str | None = None,
     max_terms: int = 4000,
+    reuse_terms: list[str] | None = None,
+    reused_from: str | None = None,
 ) -> Units:
     """Grow a semantic cloud from `seed` and return it as Units.
 
@@ -227,36 +291,73 @@ def load_probe_units(
     """
     from ..backend.embed import embed_texts
 
-    expand, generator_used = _make_expander(
-        generator, ollama_host, ollama_model, openrouter_model, anthropic_model, env_file
-    )
+    # Re-embedding a FIXED concept set is the only way to change this map's
+    # embedding space without also changing its points. The generator is
+    # stochastic, so a plain rebuild against a new embedder moves both variables
+    # at once and the two maps are not comparable. It is also the only way to
+    # rebuild at all when the generator and the embedder cannot be resident
+    # simultaneously — the real constraint on a 48GB box serving a 21.8GB
+    # generator and a 23.5GB embedding host.
+    if reuse_terms is not None:
+        terms = list(reuse_terms)
+        if len(terms) < 3:
+            raise RuntimeError(
+                f"reuse_terms had {len(terms)} terms; need at least 3"
+            )
+        if _norm(terms[0]) != _norm(seed):
+            raise RuntimeError(
+                f"reuse_terms[0] is {terms[0]!r} but the seed is {seed!r} — the "
+                "seed anchors the map and every similarity is measured against "
+                "it, so a mismatch would silently re-centre the cloud"
+            )
+        generator_used = f"reused:{reused_from}" if reused_from else "reused"
+        # depth/parent structure is not recoverable from an exported label list,
+        # and inventing one would put a false tree in meta
+        depths = [0] * len(terms)
+        print(f"  reusing {len(terms)} concepts from {reused_from or 'caller'} — no generator call")
+    else:
+        expand, generator_used = _make_expander(
+            generator,
+            ollama_host,
+            ollama_model,
+            openrouter_model,
+            anthropic_model,
+            env_file,
+            llm_host,
+            llm_model,
+            llm_api_key,
+        )
 
-    seen: set[str] = {_norm(seed)}
-    terms: list[str] = [seed]
-    depths: list[int] = [0]
-    parents: list[int] = [-1]
+        seen: set[str] = {_norm(seed)}
+        terms = [seed]
+        depths = [0]
+        parents: list[int] = [-1]
 
-    frontier = [(seed, 0)]
-    for d in range(1, depth + 1):
-        next_frontier: list[tuple[str, int]] = []
-        for term, parent_idx in frontier:
-            if len(terms) >= max_terms:
+        frontier = [(seed, 0)]
+        for d in range(1, depth + 1):
+            next_frontier: list[tuple[str, int]] = []
+            for i, (term, parent_idx) in enumerate(frontier, 1):
+                if len(terms) >= max_terms:
+                    break
+                # one sequential LLM call per term, so a wide depth is minutes
+                # long with nothing else to show for it — the build server turns
+                # this into the live progress message
+                print(f"  depth {d}: expanding {i}/{len(frontier)} {term!r}…", flush=True)
+                try:
+                    raw = expand(term, breadth)
+                except Exception as e:
+                    print(f"  expansion failed for {term!r} ({type(e).__name__}: {e})")
+                    continue
+                fresh = _clean(raw, seen, breadth)
+                for f in fresh:
+                    terms.append(f)
+                    depths.append(d)
+                    parents.append(parent_idx)
+                    next_frontier.append((f, len(terms) - 1))
+            print(f"  depth {d}: +{len(next_frontier)} terms (total {len(terms)})")
+            frontier = next_frontier
+            if not frontier:
                 break
-            try:
-                raw = expand(term, breadth)
-            except Exception as e:
-                print(f"  expansion failed for {term!r} ({type(e).__name__}: {e})")
-                continue
-            fresh = _clean(raw, seen, breadth)
-            for f in fresh:
-                terms.append(f)
-                depths.append(d)
-                parents.append(parent_idx)
-                next_frontier.append((f, len(terms) - 1))
-        print(f"  depth {d}: +{len(next_frontier)} terms (total {len(terms)})")
-        frontier = next_frontier
-        if not frontier:
-            break
 
     if len(terms) < 3:
         raise RuntimeError(
@@ -311,7 +412,14 @@ def load_probe_units(
             "n_proposed": len(terms),
             "kept": len(keep),
             "n_dropped": n_dropped,
-            "max_depth_reached": int(max(depths[i] for i in keep)),
+            # a reused set was already sensitivity-filtered once, in a DIFFERENT
+            # embedding space — so `n_proposed` here counts the terms this run
+            # was handed, not terms any generator proposed. Say which it is.
+            "terms_reused": reuse_terms is not None,
+            "reused_from": reused_from,
+            "max_depth_reached": (
+                None if reuse_terms is not None else int(max(depths[i] for i in keep))
+            ),
             "centered": False,
             "seed_similarity_min": round(float(sims[keep].min()), 4),
             "seed_similarity_mean": round(float(sims[keep].mean()), 4),

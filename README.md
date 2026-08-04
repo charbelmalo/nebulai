@@ -110,6 +110,33 @@ labelled with the same "NOT model-internal" geometry string the `api-` maps use.
 The drop rate is the single most useful diagnostic: a high one means the
 generator wandered and your map is narrower than what was actually proposed.
 
+## Re-titling a map
+
+Titles and geometry have separate lifetimes. The clusters are fixed by the time
+the namer runs, so a better namer can be applied to a finished map without
+moving a point — which matters, because rebuilding a 50k-point map to fix only
+its titles means re-running UMAP to land back on the same coordinates.
+
+```sh
+uv run nebulai rename gpt2 distilgpt2 --claude-cli-model opus
+uv run nebulai rename all          # every built map; placeholder maps are skipped
+```
+
+`--namer claude-cli` (the default) and `--namer codex-cli` shell out to the
+`claude` / `codex` binaries, so naming a whole corpus runs on an existing
+subscription instead of per-token API billing. Two things the command records
+in `meta` rather than hiding:
+
+- `renamed_from` — the namer it replaced.
+- `reps_space: u_cluster` — exports do not carry the source vectors, so cluster
+  representatives are ranked by centrality in the 10-D UMAP space HDBSCAN
+  clustered in, not in the original embedding space. That is a different
+  selection than the build path makes.
+
+Maps whose labels are *all* placeholders (`neuron 3 (unlabeled)`) are refused,
+not renamed — the same rule the build path enforces with `placeholder_titles`.
+A namer handed only placeholders invents semantics from zero information.
+
 ## Validating a map
 
 `nebulai metrics` reports silhouette, which is computed in `u_cluster` — the

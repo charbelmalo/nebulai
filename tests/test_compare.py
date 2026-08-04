@@ -3,7 +3,9 @@ SAE / neurons) must stay distinct clouds. They share `meta.model`, so keying
 on it collapses them; identity comes from the front-end/unit label instead.
 Pure + offline (the helpers don't touch the network or embedder)."""
 
-from nebulai.backend.compare import _source_label, _unique_labels
+from pathlib import Path
+
+from nebulai.backend.compare import _PALETTE, _source_label, _unique_labels
 
 
 SOURCE_LABEL_CASES = [
@@ -62,3 +64,31 @@ def test_unique_labels_noop_when_distinct():
         "SmolLM2-135M · MLP neurons",
     ]
     assert _unique_labels(trio) == trio
+
+
+# --- palette --------------------------------------------------------------
+# Colors are assigned `_PALETTE[i % len(_PALETTE)]`, so a palette shorter than
+# the roster paints two clouds identically in the ONE view whose purpose is
+# telling them apart — and it does so silently. This caught exactly that when
+# the comparison grew from 4 maps to 8 against a 6-color palette.
+
+
+def test_palette_colors_are_distinct():
+    assert len({tuple(c) for c in _PALETTE}) == len(_PALETTE)
+
+
+def test_palette_covers_every_built_map():
+    out = Path(__file__).resolve().parents[1] / "out"
+    if not out.is_dir():  # a fresh clone has no artifacts; nothing to guard
+        return
+    n_maps = sum(1 for d in out.iterdir() if (d / "nebulai.json").is_file())
+    assert len(_PALETTE) >= n_maps, (
+        f"{n_maps} maps in out/ but only {len(_PALETTE)} colors — "
+        "comparing them all would reuse a color"
+    )
+
+
+def test_palette_channels_are_unit_range_floats():
+    for c in _PALETTE:
+        assert len(c) == 3
+        assert all(isinstance(v, float) and 0.0 <= v <= 1.0 for v in c)

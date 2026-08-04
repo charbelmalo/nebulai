@@ -312,6 +312,32 @@ def reload_units(meta: dict):
             "Re-run the build against a reachable host to validate this map."
         )
 
+    if unit.startswith("probe_concept"):
+        # Probe is non-replayable TWICE OVER, and the second reason is the one
+        # that rules out ever adding a reload path here. The embeddings came
+        # from a live service (same problem as api_text_embedding), but the
+        # concept set itself was *sampled from an LLM* — re-running the
+        # generator at temperature returns a different set of concepts, of a
+        # different size, so a "reload" would hand trustworthiness a point set
+        # that is not the one on screen. The length guard in `validate_map`
+        # would usually catch that, but not always: it only compares counts,
+        # and two different concept sets can be the same size.
+        #
+        # The null baseline is separately meaningless at this scale — probe
+        # maps run to tens of points, and the module docstring's first caveat
+        # (UMAP manufactures separable islands out of shuffled noise below a
+        # few hundred points) applies with full force.
+        raise ValueError(
+            "probe_concept maps cannot be revalidated: the concepts were "
+            f"sampled from a generator ({meta.get('generator')}) and embedded "
+            f"by a live service ({meta.get('embed_model')} @ "
+            f"{meta.get('embed_host')}), so replaying meta yields a DIFFERENT "
+            f"point set, not this one ({kept} concepts kept of "
+            f"{meta.get('n_proposed')} proposed). Probe maps are exploratory "
+            "sketches of a text-embedding space, not measured artifacts — "
+            "there is no offline number to compute here."
+        )
+
     raise ValueError(f"no reload path for unit type {unit!r}")
 
 
