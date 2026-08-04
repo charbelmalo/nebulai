@@ -96,8 +96,17 @@ def rename_map(map_dir: Path, namer: str = "claude-cli", **namer_kwargs) -> dict
             renamed += 1
 
     was = doc["meta"].get("namer")
+    # `renamed_from` alone is lossy: rename the same map twice and the namer it
+    # was BUILT with is gone, replaced by the intermediate one. (Observed —
+    # a duplicate run erased `ollama:...`/`centroid` from ten maps at once.)
+    # `namer_history` is the append-only chain; the consecutive-duplicate guard
+    # makes a repeat run a no-op instead of a shredder.
+    history = list(doc["meta"].get("namer_history") or [])
+    if was and was != namer_used:  # a re-run with the same namer is not a step
+        history.append(was)
     doc["meta"]["namer"] = namer_used
-    doc["meta"]["renamed_from"] = was
+    doc["meta"]["renamed_from"] = was  # the namer immediately before this run
+    doc["meta"]["namer_history"] = history
     doc["meta"]["reps_space"] = "u_cluster"
     doc_path.write_text(json.dumps(doc))
     return {

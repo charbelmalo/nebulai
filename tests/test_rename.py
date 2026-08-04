@@ -98,7 +98,34 @@ def test_rename_rewrites_titles_and_records_what_it_replaced(tmp_path):
     # provenance: what named it now, what named it before, what space it read
     assert after["meta"]["namer"] == "centroid"
     assert after["meta"]["renamed_from"] == "ollama:tiny"
+    assert after["meta"]["namer_history"] == ["ollama:tiny"]
     assert after["meta"]["reps_space"] == "u_cluster"
+
+
+def test_a_repeat_rename_does_not_shred_the_build_namer(tmp_path):
+    """`renamed_from` alone is lossy — run rename twice and the namer the map
+    was BUILT with is replaced by the intermediate one. A duplicate run erased
+    it from ten maps at once, so the chain is what carries provenance."""
+    doc = _doc(["cat", "dog", "red"], [0, 0, 1], namer="ollama:tiny")
+    d = _write(tmp_path, doc, np.array([[1, 0], [0.9, 0.1], [0, 1]]))
+    rename_map(d, namer="none")
+    rename_map(d, namer="none")  # the accident
+    meta = json.loads((d / "nebulai.json").read_text())["meta"]
+    assert meta["namer_history"] == ["ollama:tiny"]  # not ["ollama:tiny", "centroid"]
+
+
+def test_a_genuine_second_upgrade_is_recorded(tmp_path, monkeypatch):
+    """Consecutive-duplicate suppression must not swallow a real chain."""
+    import nebulai.backend.rename as R
+
+    doc = _doc(["cat", "dog", "red"], [0, 0, 1], namer="ollama:tiny")
+    d = _write(tmp_path, doc, np.array([[1, 0], [0.9, 0.1], [0, 1]]))
+    rename_map(d, namer="none")  # -> centroid
+    monkeypatch.setattr(R, "name_clusters", lambda *a, **k: ({0: "x", 1: "y"}, "next:m"))
+    rename_map(d)
+    meta = json.loads((d / "nebulai.json").read_text())["meta"]
+    assert meta["namer_history"] == ["ollama:tiny", "centroid"]
+    assert meta["namer"] == "next:m"
 
 
 def test_geometry_is_untouched(tmp_path):
