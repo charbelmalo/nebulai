@@ -1562,6 +1562,12 @@ def main() -> None:
     c.add_argument("--seed", type=int, default=42)
     c.set_defaults(fn=_run_compare)
 
+    # SessionSeer lives in its own module — it has its own sub-subcommands and
+    # shares nothing with the map pipeline above except the `nebulai` prefix.
+    from .seer.cli import add_parser as _seer_parser
+
+    _seer_parser(sub)
+
     args = p.parse_args()
     args.fn(args)
 

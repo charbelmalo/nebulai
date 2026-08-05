@@ -9,6 +9,7 @@ import { GuidePage } from "./GuidePage";
 import { InterpPage } from "./InterpPage";
 import { LegendCard } from "./LegendCard";
 import { SearchPanel } from "./SearchPanel";
+import { SeerPage } from "./SeerPage";
 import { SessionsPage } from "./SessionsPage";
 import { SettingsPage } from "./SettingsPage";
 import { SnapshotMap } from "./SnapshotMap";
@@ -23,6 +24,7 @@ effect(() => {
   document.body.classList.toggle("page-interp", page === "interp");
   document.body.classList.toggle("page-guide", page === "guide");
   document.body.classList.toggle("page-sessions", page === "sessions");
+  document.body.classList.toggle("page-seer", page === "seer");
 });
 
 function Chrome() {
@@ -39,6 +41,7 @@ function Chrome() {
       {page === "interp" && <InterpPage />}
       {page === "guide" && <GuidePage />}
       {page === "sessions" && <SessionsPage />}
+      {page === "seer" && <SeerPage />}
       <SettingsPage />
     </>
   );

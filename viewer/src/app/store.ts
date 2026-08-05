@@ -21,8 +21,10 @@ export type ViewMode = "atlas" | "chord" | "hierarchy" | "compare";
  *  driver-backed views); `snapshot` is the per-topic conversation-log map;
  *  `interp` is the Internals gallery (mechanistic-interpretability drivers, each
  *  rendering one real computed quantity from an interp bundle); `guide`
- *  documents the exact math + source data behind every live feature. */
-export type Page = "map" | "snapshot" | "interp" | "guide" | "sessions";
+ *  documents the exact math + source data behind every live feature;
+ *  `seer` is SessionSeer — live capture and comparison of Codex / Claude /
+ *  Hermes agent runs, served by `nebulai seer serve`. */
+export type Page = "map" | "snapshot" | "interp" | "guide" | "sessions" | "seer";
 
 /** Internals-page UI state. `featureId` selects which InterpDriver owns the
  *  interp canvas (must match a registered feature id in scene/interp/registry).
@@ -226,6 +228,7 @@ export interface Probing {
   useBridgeEndpoint: boolean; // route naming/embedding through a custom bridge endpoint
   liveUrl: string; // Internals #25 live probe server (nebulai live_server)
   buildUrl: string; // map build server (nebulai build_server)
+  seerUrl: string; // SessionSeer capture server (nebulai seer serve)
   buildModel: string; // HF model id to build (curated pick or custom)
   // W_E rows · third-party text embeddings · no model at all (LLM-grown probe)
   buildSource: "hf" | "api" | "probe";
@@ -484,6 +487,7 @@ export const appStore = createStore<AppState>()((set, get) => ({
     //     and nothing is contacted until they do.
     liveUrl: import.meta.env.VITE_LIVE_URL ?? "http://127.0.0.1:8123",
     buildUrl: import.meta.env.VITE_BUILD_URL ?? "http://127.0.0.1:8124",
+    seerUrl: import.meta.env.VITE_SEER_URL ?? "http://127.0.0.1:8125",
     buildModel: "gpt2",
     buildSource: "hf",
     buildParams: {

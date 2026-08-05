@@ -207,6 +207,27 @@ scripts/sweep_hdbscan.py out/gpt2/reduced.npz     # leaf/eom x mcs x min_samples
 scripts/inspect_map.py out/gpt2/nebulai.json      # meta, top clusters, size dist
 ```
 
+## SessionSeer — the agent's trajectory, not the model's concept space
+
+The four front-ends above map what a *model* knows. `nebulai seer` maps what an
+*agent* did: it captures Codex, Claude Code and Hermes sessions into one event
+vocabulary and reports on them live. It shares the viewer shell and the
+provenance rules, and shares none of the reduce → cluster → name back-end — a
+trajectory is already low-dimensional and ordered.
+
+```sh
+uv run nebulai seer run codex "fix the failing test"     # drive one agent and capture it
+uv run nebulai seer run codex "…" --compare-with claude hermes   # same prompt, three agents
+uv run nebulai seer install claude --apply    # hooks, to capture what you run yourself
+uv run nebulai seer serve --watch             # HTTP + SSE for the viewer's Seer page
+```
+
+Every value it reports is labelled `native | deterministic | estimated |
+heuristic | missing | dropped_by_policy`, and `missing` is never rendered as
+`0`. Design and rationale: [`docs/SESSIONSEER.md`](docs/SESSIONSEER.md); what
+the build actually does, including where it departs from the design:
+[`docs/SESSIONSEER-HANDOVER.md`](docs/SESSIONSEER-HANDOVER.md).
+
 ## Honesty notes
 
 - **Plan C's geometry is the model's own** (embedding rows). For Plans A/B, laying points out by *label* embeddings shows the label-embedder's semantics, not the model's — the viewer will expose both projections (decoder-direction vs label space) as a toggle.

@@ -1,0 +1,423 @@
+{
+  "adapter_version": "0.1.0",
+  "agents": {
+    "claude": "2.1.222",
+    "codex": "0.144.6",
+    "hermes": "0.16.0"
+  },
+  "note": "Recorded by `python tests/test_seer_vocabulary.py --write`. Fail closed on removal, open on addition: a native kind that disappears or changes meaning is a regression in our adapters; a new one is the agent moving. Regenerate when an agent adds vocabulary, never to make a red test green.",
+  "vocabulary": {
+    "claude_hooks": {
+      "hook.CwdChanged": {
+        "actions": [],
+        "events": [
+          "session.state_changed"
+        ]
+      },
+      "hook.FileChanged": {
+        "actions": [
+          "edit"
+        ],
+        "events": [
+          "file.changed"
+        ]
+      },
+      "hook.Notification": {
+        "actions": [
+          "interact"
+        ],
+        "events": [
+          "clarification.requested"
+        ]
+      },
+      "hook.PermissionDenied": {
+        "actions": [
+          "interact"
+        ],
+        "events": [
+          "approval.resolved"
+        ]
+      },
+      "hook.PermissionRequest": {
+        "actions": [
+          "interact"
+        ],
+        "events": [
+          "approval.requested"
+        ]
+      },
+      "hook.PostCompact": {
+        "actions": [],
+        "events": [
+          "context.compaction_completed"
+        ]
+      },
+      "hook.PostToolUse": {
+        "actions": [
+          "verify"
+        ],
+        "events": [
+          "tool.completed"
+        ]
+      },
+      "hook.PostToolUseFailure": {
+        "actions": [],
+        "events": [
+          "tool.failed"
+        ]
+      },
+      "hook.PreCompact": {
+        "actions": [],
+        "events": [
+          "context.compaction_started"
+        ]
+      },
+      "hook.PreToolUse": {
+        "actions": [
+          "verify"
+        ],
+        "events": [
+          "tool.started"
+        ]
+      },
+      "hook.SessionEnd": {
+        "actions": [],
+        "events": [
+          "session.completed"
+        ]
+      },
+      "hook.SessionStart": {
+        "actions": [],
+        "events": [
+          "session.started"
+        ]
+      },
+      "hook.Stop": {
+        "actions": [],
+        "events": [
+          "turn.completed"
+        ]
+      },
+      "hook.SubagentStart": {
+        "actions": [
+          "delegate"
+        ],
+        "events": [
+          "subagent.started"
+        ]
+      },
+      "hook.SubagentStop": {
+        "actions": [
+          "delegate"
+        ],
+        "events": [
+          "subagent.completed"
+        ]
+      },
+      "hook.TaskCompleted": {
+        "actions": [],
+        "events": [
+          "plan.updated"
+        ]
+      },
+      "hook.TaskCreated": {
+        "actions": [],
+        "events": [
+          "plan.updated"
+        ]
+      },
+      "hook.UserPromptSubmit": {
+        "actions": [
+          "interact"
+        ],
+        "events": [
+          "message.user",
+          "turn.started"
+        ]
+      }
+    },
+    "claude_stream_json": {
+      "Bash": {
+        "actions": [
+          "execute"
+        ],
+        "events": [
+          "tool.started"
+        ]
+      },
+      "Write": {
+        "actions": [
+          "edit"
+        ],
+        "events": [
+          "tool.started"
+        ]
+      },
+      "assistant.text": {
+        "actions": [
+          "report"
+        ],
+        "events": [
+          "message.assistant_completed"
+        ]
+      },
+      "assistant.thinking": {
+        "actions": [],
+        "events": [
+          "model.request_completed"
+        ]
+      },
+      "assistant.usage": {
+        "actions": [],
+        "events": [
+          "model.usage_updated"
+        ]
+      },
+      "rate_limit_event": {
+        "actions": [],
+        "events": [
+          "quota.updated"
+        ]
+      },
+      "result": {
+        "actions": [],
+        "events": [
+          "session.completed"
+        ]
+      },
+      "result.usage": {
+        "actions": [],
+        "events": [
+          "model.usage_updated"
+        ]
+      },
+      "system.init": {
+        "actions": [],
+        "events": [
+          "session.started"
+        ]
+      },
+      "system.post_turn_summary": {
+        "actions": [],
+        "events": [
+          "turn.completed"
+        ]
+      },
+      "system.thinking_tokens": {
+        "actions": [],
+        "events": [
+          "model.usage_updated"
+        ]
+      },
+      "user.tool_result": {
+        "actions": [
+          "edit",
+          "execute"
+        ],
+        "events": [
+          "file.changed",
+          "tool.completed"
+        ]
+      }
+    },
+    "codex_exec_json": {
+      "item.agent_message": {
+        "actions": [
+          "report"
+        ],
+        "events": [
+          "message.assistant_completed"
+        ]
+      },
+      "item.command_execution": {
+        "actions": [
+          "execute"
+        ],
+        "events": [
+          "tool.completed",
+          "tool.started"
+        ]
+      },
+      "item.error": {
+        "actions": [],
+        "events": [
+          "agent.error"
+        ]
+      },
+      "item.file_change": {
+        "actions": [
+          "edit"
+        ],
+        "events": [
+          "file.changed",
+          "tool.completed",
+          "tool.started"
+        ]
+      },
+      "item.reasoning": {
+        "actions": [],
+        "events": [
+          "model.request_completed"
+        ]
+      },
+      "process.exit": {
+        "actions": [],
+        "events": [
+          "session.completed"
+        ]
+      },
+      "thread.started": {
+        "actions": [],
+        "events": [
+          "session.started"
+        ]
+      },
+      "turn.completed": {
+        "actions": [],
+        "events": [
+          "turn.completed"
+        ]
+      },
+      "turn.completed.usage": {
+        "actions": [],
+        "events": [
+          "model.usage_updated"
+        ]
+      },
+      "turn.started": {
+        "actions": [],
+        "events": [
+          "turn.started"
+        ]
+      }
+    },
+    "codex_hooks": {
+      "hook.approval/requested": {
+        "actions": [
+          "interact"
+        ],
+        "events": [
+          "approval.requested"
+        ]
+      },
+      "hook.approval/resolved": {
+        "actions": [
+          "interact"
+        ],
+        "events": [
+          "approval.resolved"
+        ]
+      },
+      "hook.session/ended": {
+        "actions": [],
+        "events": [
+          "session.completed"
+        ]
+      },
+      "hook.session/started": {
+        "actions": [],
+        "events": [
+          "session.started"
+        ]
+      },
+      "hook.tool/post": {
+        "actions": [
+          "execute"
+        ],
+        "events": [
+          "tool.completed"
+        ]
+      },
+      "hook.tool/pre": {
+        "actions": [
+          "execute"
+        ],
+        "events": [
+          "tool.started"
+        ]
+      },
+      "hook.user/message": {
+        "actions": [
+          "interact"
+        ],
+        "events": [
+          "message.user",
+          "turn.started"
+        ]
+      }
+    },
+    "hermes_hooks": {
+      "hook.on_session_end": {
+        "actions": [],
+        "events": [
+          "session.completed"
+        ]
+      },
+      "hook.on_session_reset": {
+        "actions": [],
+        "events": [
+          "session.branched"
+        ]
+      },
+      "hook.on_session_start": {
+        "actions": [],
+        "events": [
+          "session.started"
+        ]
+      },
+      "hook.post_approval_response": {
+        "actions": [
+          "interact"
+        ],
+        "events": [
+          "approval.resolved"
+        ]
+      },
+      "hook.post_llm_call": {
+        "actions": [],
+        "events": [
+          "model.request_completed"
+        ]
+      },
+      "hook.post_tool_call": {
+        "actions": [
+          "execute"
+        ],
+        "events": [
+          "tool.completed"
+        ]
+      },
+      "hook.pre_approval_request": {
+        "actions": [
+          "interact"
+        ],
+        "events": [
+          "approval.requested"
+        ]
+      },
+      "hook.pre_llm_call": {
+        "actions": [],
+        "events": [
+          "model.request_started"
+        ]
+      },
+      "hook.pre_tool_call": {
+        "actions": [
+          "execute"
+        ],
+        "events": [
+          "tool.started",
+          "turn.started"
+        ]
+      },
+      "hook.subagent_stop": {
+        "actions": [
+          "delegate"
+        ],
+        "events": [
+          "subagent.completed"
+        ]
+      }
+    }
+  }
+}

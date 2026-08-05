@@ -14,7 +14,7 @@ import { requestViewMode } from "../app/actions";
 import { isLiveTrace } from "../data/interp";
 import { findFeature } from "../scene/interp/registry";
 
-const PAGES: readonly Page[] = ["map", "snapshot", "interp", "guide", "sessions"];
+const PAGES: readonly Page[] = ["map", "snapshot", "interp", "guide", "sessions", "seer"];
 const VIEWS: readonly ViewMode[] = ["atlas", "chord", "hierarchy", "compare"];
 
 export interface UrlState {

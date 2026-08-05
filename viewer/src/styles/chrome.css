@@ -1491,7 +1491,8 @@ body {
 body.page-snapshot #stage,
 body.page-interp #stage,
 body.page-guide #stage,
-body.page-sessions #stage {
+body.page-sessions #stage,
+body.page-seer #stage {
   visibility: hidden;
   pointer-events: none;
 }
@@ -4719,4 +4720,1154 @@ body.page-sessions #stage {
   padding-left: 18px;
   color: var(--text-faint);
   font: 400 10px/1.5 var(--font-ui);
+}
+
+/* ── SessionSeer page ─────────────────────────────────────────────────────
+   Editorial dark, same anatomy as the Sessions page: a fixed rail, a
+   scrolling stage of cards. The only colour that carries meaning here is the
+   9-action / session-state palette (data), plus --danger for a real failure.
+   Absent values are typographic, never a coloured zero.
+------------------------------------------------------------------------- */
+
+.seer-page {
+  position: fixed;
+  inset: 60px 0 0 0;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.seer-shell {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 328px 1fr;
+  gap: 20px;
+  padding: 24px 32px;
+  min-height: 0;
+}
+
+.seer-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.seer-stage {
+  overflow-y: auto;
+  padding-right: 4px;
+  min-height: 0;
+}
+
+/* link status ------------------------------------------------------------ */
+
+.seer-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border: 1px solid var(--hairline);
+  background: var(--bg-raise);
+  font: 400 11px/1.4 var(--font-ui);
+  color: var(--text-dim);
+}
+
+.seer-link-dot {
+  inline-size: 7px;
+  block-size: 7px;
+  border-radius: 999px;
+  background: var(--text-faint);
+  flex: 0 0 auto;
+}
+
+.seer-link.is-live .seer-link-dot {
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent);
+}
+
+.seer-link.is-connecting .seer-link-dot {
+  background: var(--warn);
+}
+
+.seer-link.is-down .seer-link-dot {
+  background: var(--danger);
+}
+
+.seer-link-label {
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.seer-link-meta {
+  color: var(--text-faint);
+}
+
+.seer-link-hint {
+  flex: 1 0 100%;
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+
+.seer-link-hint code,
+.seer-empty code,
+.seer-note code {
+  font: 400 10.5px/1.4 var(--font-mono);
+  color: var(--text-dim);
+  background: var(--bg-pill);
+  padding: 1px 5px;
+}
+
+/* observed-mode status --------------------------------------------------- */
+
+.seer-observing {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border: 1px solid var(--hairline);
+  border-left: 2px solid var(--success);
+  background: var(--bg-raise);
+  font: 400 10.5px/1.4 var(--font-ui);
+  color: var(--text-faint);
+}
+
+/* "nothing is watching" is a state to fix, not a failure: the left edge goes
+   quiet rather than red, which is reserved for things that broke. */
+.seer-observing.is-off {
+  border-left-color: var(--hairline);
+}
+
+.seer-observing-label {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.seer-observing .seer-warn {
+  color: var(--warn);
+}
+
+/* launcher --------------------------------------------------------------- */
+
+.seer-launch,
+.seer-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid var(--hairline);
+  background: var(--bg-raise);
+  box-shadow: var(--shadow-card);
+}
+
+.seer-launch h3,
+.seer-runs h3,
+.seer-card h3 {
+  margin: 0;
+  font: 650 10.5px/1.2 var(--font-ui);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.seer-card h4 {
+  margin: 0;
+  font: 600 11px/1.3 var(--font-ui);
+  color: var(--text-dim);
+}
+
+.seer-agents {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.seer-agent {
+  padding: 7px 4px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-form-pill);
+  background: transparent;
+  color: var(--text-dim);
+  font: 500 11px/1.2 var(--font-ui);
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+
+.seer-agent:hover {
+  color: var(--text);
+}
+
+.seer-agent.is-active {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text);
+}
+
+/* Capture-mode toggle. Sits between the agent pills and the prompt because it
+   changes what the prompt *means* — with app-server on, an empty prompt is a
+   request to watch rather than an incomplete form. */
+.seer-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-dim);
+  font: 500 11px/1.2 var(--font-ui);
+  cursor: pointer;
+}
+
+.seer-check input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+.seer-check:hover {
+  color: var(--text);
+}
+
+.seer-prompt,
+.seer-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-form-ctl);
+  background: var(--bg);
+  color: var(--text);
+  font: 400 11.5px/1.5 var(--font-ui);
+  resize: vertical;
+}
+
+.seer-prompt:focus,
+.seer-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.seer-launch-go {
+  width: 100%;
+}
+
+/* Import row: how many threads to consider, and how far back to look. Side by
+   side because they are two halves of one question — neither is a filter you
+   would set without glancing at the other. The count is narrow on purpose;
+   it holds three digits at most. */
+.seer-import-row {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr;
+  gap: 6px;
+}
+
+.seer-error {
+  margin: 0;
+  color: var(--danger);
+  font: 400 11px/1.5 var(--font-ui);
+}
+
+.seer-note {
+  margin: 0;
+  color: var(--text-faint);
+  font: 400 10.5px/1.6 var(--font-ui);
+}
+
+/* run list --------------------------------------------------------------- */
+
+.seer-runs-hint {
+  color: var(--accent);
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 500;
+}
+
+.seer-runs ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.seer-run {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--t-fast) var(--ease-out);
+}
+
+.seer-run:hover {
+  background: var(--bg-pill);
+  color: var(--text);
+}
+
+.seer-run.is-active {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--text);
+}
+
+.seer-run-dot {
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.seer-run-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.seer-run-agent {
+  font: 600 11px/1.3 var(--font-ui);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.seer-run-mode {
+  font: 500 9px/1 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  border: 1px solid var(--hairline);
+  padding: 2px 4px;
+}
+
+.seer-run-id {
+  font: 400 10px/1.3 var(--font-mono);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seer-run-meta {
+  font: 400 10px/1.3 var(--font-mono);
+  color: var(--text-faint);
+  flex: 0 0 auto;
+}
+
+.seer-run-warn {
+  color: var(--warn);
+  margin-left: 4px;
+  font-weight: 700;
+}
+
+/* stage ------------------------------------------------------------------ */
+
+.seer-empty {
+  max-width: 620px;
+  margin: 12vh auto 0;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.seer-empty h2 {
+  margin: 0;
+  font: 300 26px/1.2 var(--font-ui);
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.seer-empty p {
+  margin: 0;
+  color: var(--text-dim);
+  font: 400 13px/1.7 var(--font-ui);
+}
+
+.seer-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 40px;
+}
+
+.seer-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.seer-detail-head h2 {
+  margin: 0;
+  font: 300 24px/1.2 var(--font-ui);
+  color: var(--text);
+  text-transform: capitalize;
+}
+
+.seer-dim {
+  color: var(--text-faint);
+  font: 400 11px/1.3 var(--font-ui);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.seer-run-line {
+  margin: 6px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text-faint);
+  font: 400 11.5px/1.4 var(--font-ui);
+}
+
+.seer-state {
+  font-weight: 600;
+}
+
+.seer-state::first-letter,
+.seer-cmp-run::first-letter {
+  text-transform: uppercase;
+}
+
+.seer-overlay {
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent);
+  color: var(--warn);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.seer-outcome {
+  margin: 8px 0 0;
+  font: 500 12.5px/1.5 var(--font-ui);
+  color: var(--text-dim);
+}
+
+.seer-outcome::first-letter {
+  text-transform: uppercase;
+}
+
+.seer-outcome.is-verified_pass {
+  color: var(--success);
+}
+
+.seer-outcome.is-verified_fail,
+.seer-outcome.is-infrastructure_failure {
+  color: var(--danger);
+}
+
+/* an unknown outcome is the absence of a finding, and should not read with the
+   same weight as one */
+.seer-outcome.is-unknown {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+
+.seer-outcome-caveat {
+  color: var(--text-faint);
+  font-weight: 400;
+  text-transform: none;
+  margin-left: 4px;
+}
+
+.seer-repo {
+  margin: 0;
+  color: var(--text-faint);
+  font: 400 10.5px/1.4 var(--font-mono);
+}
+
+.seer-detail-tools {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.seer-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--hairline);
+  background: transparent;
+  color: var(--text-dim);
+  font: 500 11px/1.2 var(--font-ui);
+  cursor: pointer;
+  text-decoration: none;
+  transition: color var(--t-fast) var(--ease-out);
+}
+
+.seer-btn:hover {
+  color: var(--text);
+  border-color: var(--hairline-strong);
+}
+
+/* cards ------------------------------------------------------------------ */
+
+.seer-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid var(--hairline);
+  background: var(--bg-raise);
+  box-shadow: var(--shadow-card);
+}
+
+.seer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+/* trajectory ------------------------------------------------------------- */
+
+.seer-traj {
+  position: relative;
+}
+
+.seer-lanes {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.seer-lane {
+  display: grid;
+  grid-template-columns: 62px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.seer-lane-name {
+  font: 500 9px/1 var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.8;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* the track IS the run's wall clock — its full width is t0..t1, so an empty
+   stretch is real dead time, not a layout gap */
+.seer-lane-track {
+  position: relative;
+  height: 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.seer-lane-bar {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  border-radius: 1px;
+  opacity: 0.85;
+}
+
+.seer-lane-bar:hover {
+  opacity: 1;
+}
+
+/* an unfinished span has no right edge to draw — fade it out instead of
+   pretending it ended where the chart does */
+.seer-lane-bar.is-open {
+  opacity: 0.4;
+  -webkit-mask-image: linear-gradient(90deg, #000 55%, transparent 100%);
+  mask-image: linear-gradient(90deg, #000 55%, transparent 100%);
+}
+
+/* stacked state bar ------------------------------------------------------ */
+
+.seer-stack {
+  display: flex;
+  height: 8px;
+  overflow: hidden;
+  background: var(--bg-pill);
+}
+
+.seer-stack span {
+  height: 100%;
+}
+
+.seer-kv {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.seer-kv li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font: 400 11.5px/1.5 var(--font-ui);
+  color: var(--text-dim);
+}
+
+/* Sentence case, not Title Case: these labels are machine category names
+   ("cache write", "model running") and title-casing them reads as prose. */
+.seer-kv li > span:nth-child(1)::first-letter,
+.seer-kv li > span:nth-child(2)::first-letter {
+  text-transform: uppercase;
+}
+
+.seer-kv li b {
+  margin-left: auto;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.seer-kv li b.is-good {
+  color: var(--success);
+}
+
+.seer-kv li b.is-bad,
+.seer-kv li b .is-bad {
+  color: var(--danger);
+}
+
+.seer-kv li b .is-good {
+  color: var(--success);
+}
+
+.seer-kv-sep {
+  border-top: 1px solid var(--hairline);
+  padding-top: 6px;
+  margin-top: 2px;
+}
+
+.seer-swatch {
+  inline-size: 8px;
+  block-size: 8px;
+  flex: 0 0 auto;
+}
+
+/* action bars ------------------------------------------------------------ */
+
+.seer-bars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.seer-bars li {
+  display: grid;
+  grid-template-columns: 64px 1fr 34px;
+  align-items: center;
+  gap: 8px;
+}
+
+.seer-bars-label {
+  font: 500 10px/1.2 var(--font-ui);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.seer-bars-track {
+  height: 7px;
+  background: var(--bg-pill);
+  display: block;
+}
+
+.seer-bars-track span {
+  display: block;
+  height: 100%;
+}
+
+.seer-bars li b {
+  text-align: right;
+  color: var(--text);
+  font: 500 11px/1.2 var(--font-ui);
+}
+
+/* measured values -------------------------------------------------------- */
+
+.seer-absent {
+  color: var(--text-faint);
+  cursor: help;
+  border-bottom: 1px dotted var(--hairline-strong);
+}
+
+/* "we chose not to look" reads differently from "the agent never said" —
+   the first is a setting on our side, the second a gap in the agent. */
+.seer-absent.is-dropped_by_policy {
+  color: var(--text-faint);
+  border-bottom-style: dashed;
+  border-bottom-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.seer-fid {
+  color: var(--warn);
+  font-size: 9px;
+  margin-left: 1px;
+}
+
+/* data quality ----------------------------------------------------------- */
+
+.seer-quality-block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+
+.seer-quality-block ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.seer-quality-block li {
+  font: 400 11px/1.5 var(--font-ui);
+  color: var(--text-dim);
+}
+
+.seer-chips {
+  flex-direction: row !important;
+  flex-wrap: wrap;
+  gap: 4px !important;
+}
+
+.seer-chips li {
+  padding: 1px 7px;
+  border: 1px solid var(--hairline);
+  font: 400 10px/1.5 var(--font-mono);
+  color: var(--text-faint);
+}
+
+/* live tail -------------------------------------------------------------- */
+
+.seer-tail ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.seer-tail li {
+  display: grid;
+  grid-template-columns: 168px 62px 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  font: 400 10.5px/1.6 var(--font-mono);
+  color: var(--text-dim);
+}
+
+.seer-tail-type {
+  color: var(--text);
+}
+
+.seer-tail-action {
+  font-weight: 600;
+}
+
+.seer-tail-detail {
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seer-tail-fid {
+  color: var(--text-faint);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* comparison ------------------------------------------------------------- */
+
+.seer-cmp-run {
+  padding: 2px 9px;
+  border: 1px solid var(--hairline);
+  color: var(--text);
+  font: 500 11px/1.4 var(--font-ui);
+}
+
+/* A refusal is a result: it gets the accent edge and sits above the table,
+   never below it as a caveat. */
+.seer-refusals {
+  border-left: 2px solid var(--accent);
+}
+
+.seer-refusals ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.seer-refusals li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+
+.seer-refusals li b {
+  color: var(--text);
+  font: 500 11.5px/1.3 var(--font-mono);
+}
+
+.seer-refusals li span {
+  color: var(--text-dim);
+  font: 400 11.5px/1.6 var(--font-ui);
+}
+
+.seer-table-wrap {
+  overflow-x: auto;
+}
+
+.seer-table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 400 12px/1.5 var(--font-ui);
+}
+
+.seer-table th,
+.seer-table td {
+  padding: 7px 10px;
+  text-align: right;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--text);
+}
+
+.seer-table thead th {
+  color: var(--text-faint);
+  font: 600 10px/1.2 var(--font-ui);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.seer-table th:first-child,
+.seer-table tbody th {
+  text-align: left;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+@media (max-width: 1100px) {
+  .seer-shell {
+    grid-template-columns: 1fr;
+    padding: 16px;
+  }
+
+  .seer-rail {
+    overflow: visible;
+  }
+}
+
+.seer-native > summary {
+  cursor: pointer;
+  color: var(--text-faint);
+  font: 400 10.5px/1.6 var(--font-ui);
+  list-style: none;
+}
+
+.seer-native > summary::before {
+  content: "▸ ";
+}
+
+.seer-native[open] > summary::before {
+  content: "▾ ";
+}
+
+.seer-native > summary::-webkit-details-marker {
+  display: none;
+}
+
+.seer-native p {
+  padding-top: 4px;
+  font-family: var(--font-mono);
+  word-break: break-word;
+}
+
+/* analyses --------------------------------------------------------------- */
+
+.seer-btn.is-small {
+  padding: 3px 8px;
+  font-size: 10px;
+}
+
+.seer-card h3 .seer-btn {
+  margin-left: auto;
+}
+
+.seer-analyses h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.seer-analysis-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.seer-analysis {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--hairline);
+  background: var(--bg-sink, rgba(0, 0, 0, 0.15));
+}
+
+/* An analysis that refused is not a failed card: it is a result with a
+   sentence instead of a number, and it keeps its full weight on the page. */
+.seer-analysis.is-absent {
+  border-style: dashed;
+}
+
+.seer-analysis > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.seer-analysis h4 {
+  margin: 0;
+  font: 500 12px/1.3 var(--font-ui);
+  color: var(--text);
+}
+
+.seer-analysis-value {
+  font: 500 15px/1.1 var(--font-mono);
+  color: var(--text);
+}
+
+.seer-refusal {
+  margin: 0;
+  color: var(--text-dim);
+  font: 400 11px/1.55 var(--font-ui);
+}
+
+.seer-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.seer-rules li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  color: var(--text-dim);
+  font: 400 11px/1.5 var(--font-ui);
+}
+
+/* a rule that could not run reads as unlit, not as a zero */
+.seer-rules li.is-off {
+  opacity: 0.62;
+}
+
+.seer-rule-hit {
+  flex: 0 0 22px;
+  text-align: right;
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+.seer-rules li.is-off .seer-rule-hit {
+  color: var(--text-faint);
+}
+
+.seer-table-wrap {
+  overflow-x: auto;
+}
+
+.seer-table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 400 10.5px/1.5 var(--font-ui);
+}
+
+.seer-table th {
+  text-align: left;
+  padding: 3px 8px 3px 0;
+  color: var(--text-faint);
+  font-weight: 500;
+  border-bottom: 1px solid var(--hairline);
+  white-space: nowrap;
+}
+
+.seer-table td {
+  padding: 3px 8px 3px 0;
+  color: var(--text-dim);
+  vertical-align: top;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seer-derivation > summary {
+  cursor: pointer;
+  color: var(--text-faint);
+  font: 400 10.5px/1.6 var(--font-ui);
+  list-style: none;
+}
+
+.seer-derivation > summary::before {
+  content: "▸ ";
+}
+
+.seer-derivation[open] > summary::before {
+  content: "▾ ";
+}
+
+.seer-derivation > summary::-webkit-details-marker {
+  display: none;
+}
+
+.seer-formula {
+  margin: 6px 0 4px;
+  color: var(--text-dim);
+  font: 400 10.5px/1.6 var(--font-mono);
+}
+
+.seer-evidence {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-dim);
+  font: 400 10px/1.5 var(--font-ui);
+}
+
+.seer-evidence code {
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+}
+
+/* notes ------------------------------------------------------------------ */
+
+.seer-note-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.seer-note-list li {
+  padding-left: 10px;
+  border-left: 2px solid var(--accent, var(--hairline-strong));
+}
+
+.seer-note-list p {
+  margin: 0 0 2px;
+  color: var(--text);
+  font: 400 12px/1.55 var(--font-ui);
+}
+
+.seer-tag {
+  display: inline-block;
+  margin: 3px 4px 0 0;
+  padding: 1px 6px;
+  border: 1px solid var(--hairline);
+  color: var(--text-faint);
+  font: 400 9.5px/1.5 var(--font-ui);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.seer-note-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.seer-note-row .seer-input {
+  flex: 1;
+}
+
+.seer-export {
+  display: flex;
+  gap: 4px;
+}
+
+/* The redaction level sits with the export buttons because it is part of the
+   same sentence: *what* format, and *how much of the run*. Styled as a control
+   rather than a button so it does not read as a fifth format. */
+.seer-export-level {
+  padding: 3px 6px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-form-ctl);
+  background: var(--bg);
+  color: var(--text-dim);
+  font: 500 10px/1.2 var(--font-ui);
+  cursor: pointer;
+}
+
+.seer-export-level:hover,
+.seer-export-level:focus {
+  color: var(--text);
+  border-color: var(--hairline-strong);
+  outline: none;
+}
+
+/* Destructive, and it says so only in its border and text — a filled red
+   button in a dark editorial page reads as an alarm rather than a choice. */
+.seer-btn.is-danger {
+  color: color-mix(in srgb, var(--danger) 82%, var(--text-dim));
+  border-color: color-mix(in srgb, var(--danger) 32%, transparent);
+}
+
+.seer-btn.is-danger:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 62%, transparent);
+}
+
+.seer-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.seer-delete-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.seer-delete-confirm .seer-note {
+  max-width: 22ch;
+  text-align: right;
 }

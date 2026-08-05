@@ -976,6 +976,14 @@ function ProbingTab() {
           onChange={(v) => appStore.getState().setProbing("liveUrl", v)}
           hint="Internals #25 — python -m nebulai.backend.interp.live_server"
         />
+        <TextRow
+          label="SessionSeer server"
+          type="url"
+          value={p.seerUrl}
+          placeholder="http://127.0.0.1:8125"
+          onChange={(v) => appStore.getState().setProbing("seerUrl", v)}
+          hint="Sessions → Seer — nebulai seer serve"
+        />
       </SettingsSection>
 
       <SettingsSection title="Live probing">

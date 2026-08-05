@@ -60,6 +60,7 @@ export function TopBar() {
         <NavPill label="Guide" pageId="guide" active={page} />
         <NavPill label="Snapshot Map" pageId="snapshot" active={page} />
         <NavPill label="Sessions" pageId="sessions" active={page} />
+        <NavPill label="Seer" pageId="seer" active={page} />
       </nav>
       <div class="topbar-tools">
         <button
