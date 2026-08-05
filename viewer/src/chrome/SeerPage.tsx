@@ -27,6 +27,7 @@
 import { computed, signal, useSignal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { ACTIONS, isAbsent, type Action, type Measured, type SeerEvent } from "../seer/contract";
+import { ACTION_COLOR, stateInk } from "../seer/encoding";
 import {
   $health,
   $link,
@@ -90,34 +91,11 @@ const $selectedViews = computed(() =>
 
 const TAIL_MAX = 200;
 
-/** Colours for the 9-action taxonomy. Same family as the Sessions field so a
- *  green bar means "edit" on both pages. */
-const ACTION_COLOR: Record<Action, string> = {
-  inspect: "#5cc7ed",
-  search: "#62d9c0",
-  edit: "#7dde96",
-  execute: "#c782f0",
-  verify: "#f5bf5c",
-  vcs: "#b0a6f0",
-  delegate: "#f090c8",
-  interact: "#f07896",
-  report: "#969eb5",
-};
-
-const STATE_COLOR: Record<string, string> = {
-  starting: "#686c76",
-  idle: "#4a4e58",
-  model_running: "#5cc7ed",
-  tool_running: "#7dde96",
-  waiting_permission: "#f07896",
-  waiting_clarification: "#f5bf5c",
-  waiting_user: "#f5bf5c",
-  compacting: "#c782f0",
-  interrupted: "#f5b13d",
-  completed: "#3ecf8e",
-  failed: "#ff5c7a",
-  detached: "#686c76",
-};
+/** Colours come from `seer/encoding.ts`, which is the only place allowed to
+ *  decide what a hue means. This page and the live view draw the same run in
+ *  different geometries, and the moment they disagree about what green is, a
+ *  glance between them misleads. Same family as the Sessions field, so a green
+ *  bar means "edit" on all three. */
 
 // ── loading ──────────────────────────────────────────────────────────────────
 
@@ -618,7 +596,7 @@ function RunRow(props: { run: RunSummary; selected: boolean }) {
         aria-label={`${r.agent} run ${r.label || r.run_id}, ${state}${dur ? `, ${dur}` : ""}`}
         onClick={() => toggleSelected(r.run_id)}
       >
-        <span class="seer-run-dot" style={{ background: STATE_COLOR[state] ?? "#686c76" }} />
+        <span class="seer-run-dot" style={{ background: stateInk(state) }} />
         <span class="seer-run-main">
           <span class="seer-run-agent">
             {r.agent}
@@ -681,7 +659,7 @@ function RunDetail(props: { view: RunView }) {
             {v.agent} <span class="seer-dim">{v.agent_version}</span>
           </h2>
           <p class="seer-run-line tnum">
-            <span class="seer-state" style={{ color: STATE_COLOR[v.state] ?? "var(--text-dim)" }}>
+            <span class="seer-state" style={{ color: stateInk(v.state) }}>
               {v.state.replace(/_/g, " ")}
             </span>
             {v.overlays.map((o) => (
@@ -876,7 +854,7 @@ function StateBar(props: { view: RunView }) {
                   key={state}
                   style={{
                     width: `${(secs / total) * 100}%`,
-                    background: STATE_COLOR[state] ?? "#686c76",
+                    background: stateInk(state),
                   }}
                   title={`${stateLabel(state, observed)} — ${fmtSeconds(secs)}`}
                 />
@@ -889,7 +867,7 @@ function StateBar(props: { view: RunView }) {
                 <li key={state}>
                   <span
                     class="seer-swatch"
-                    style={{ background: STATE_COLOR[state] ?? "#686c76" }}
+                    style={{ background: stateInk(state) }}
                   />
                   <span>{stateLabel(state, observed)}</span>
                   <b>{fmtSeconds(secs)}</b>

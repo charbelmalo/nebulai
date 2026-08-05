@@ -45,8 +45,8 @@ trail parameter. It ships last and behind the live-embedding endpoint.
       │
       ▼
   LiveModel          viewer/src/seer/live.ts     — pure, no DOM, tested
-      │              open spans · closed spans · state timeline · token
-      │              series · context pressure · span tree · thought stream
+      │              the leading edge only: open spans · marks in the window ·
+      │              delta previews. Never a figure. See §2.1.
       ▼
   encoding.ts        the vocabulary, shared by every projection
       │
@@ -65,6 +65,36 @@ chart above it stays exactly as legible.
 `LiveModel` is the piece that makes "unified" true rather than aspirational.
 Every projection reads it; none of them parse SSE. It is also where the
 contract's rules are enforced once instead of five times.
+
+### 2.1 The leading edge is not a fold
+
+`SeerPage` already refuses to fold: *"The Python reducer owns every derived
+number… a second implementation of the fold in TS would drift from the first,
+and the drift would be invisible."* The live view does not get an exemption from
+that, and the first draft of this document quietly asked for one — it had
+`LiveModel` holding closed spans, a state timeline and token series, every one
+of which is a figure Python already owns.
+
+`reducer._state` makes the point sharper than the docstring does. The state
+machine is driven by a `_TRANSITIONS` table and deliberately will not read
+`payload["state"]`, because "an agent's words deciding our states is the one
+thing the contract forbids". A TS reimplementation would have to copy that
+table, and the copy would rot.
+
+So the division is:
+
+- **Python owns the record** — every total, every closed span, the current
+  state, time in state. It arrives through the 200ms coalesced refetch that
+  `markDirty` already performs.
+- **`LiveModel` owns the leading edge** — how far the open spans and the current
+  state have grown *since* that snapshot, the marks inside the visible time
+  window, and the delta preview text. Positions, not figures.
+
+A mark is a direct projection of one event (its `ts`, `action`, `effect`,
+`fidelity`), never an accumulation, which is why it stays on the safe side of
+the line. The model derives no number that anyone reads, so it has nothing to
+drift *from* — and `figures()` hands back the adopted `RunView` untouched, which
+a test asserts by replaying a thousand events at it and diffing.
 
 ## 3. The encoding vocabulary
 
@@ -123,7 +153,7 @@ look different on purpose:
 
 | | | depends on |
 |---|---|---|
-| L0 | `LiveModel` + `encoding.ts` + their tests. No pixels. | — |
+| L0 | `LiveModel` (§2.1) + `encoding.ts` + their tests. No pixels. | — |
 | L1 | Score layout, 2D canvas, follow / scrub transport | L0 |
 | L2 | Fleet y-mode + the morph between it and Score | L1 |
 | L3 | Structure (span-depth flame) as the third y-mode | L2 |
