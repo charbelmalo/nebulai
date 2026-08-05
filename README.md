@@ -228,6 +228,13 @@ heuristic | missing | dropped_by_policy`, and `missing` is never rendered as
 the build actually does, including where it departs from the design:
 [`docs/SESSIONSEER-HANDOVER.md`](docs/SESSIONSEER-HANDOVER.md).
 
+The Seer page also *watches* a run happen — one time axis, three meanings of
+`y`, a GPU field that carries no magnitude, and a thought rail with a state for
+every way reasoning can be absent. Set-up and how to read it:
+[`docs/SESSIONSEER-LIVE-SETUP.md`](docs/SESSIONSEER-LIVE-SETUP.md); the design,
+including the projection that was refused and why:
+[`docs/SESSIONSEER-LIVE.md`](docs/SESSIONSEER-LIVE.md).
+
 ## Honesty notes
 
 - **Plan C's geometry is the model's own** (embedding rows). For Plans A/B, laying points out by *label* embeddings shows the label-embedder's semantics, not the model's — the viewer will expose both projections (decoder-direction vs label space) as a toggle.

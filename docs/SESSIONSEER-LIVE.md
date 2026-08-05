@@ -3,7 +3,8 @@
 The Seer page can already tell you what a run *did*. It cannot yet let you
 watch one *happen*: `Trajectory` and `StateBar` are re-rendered summaries of a
 finished reduction, and the only genuinely live surface is a scrolling text
-tail. This document is the design for the part that watches.
+tail. This document is the design for the part that watches. To run it, see
+[`SESSIONSEER-LIVE-SETUP.md`](SESSIONSEER-LIVE-SETUP.md).
 
 Five directions were on the table — a streaming lane chart, a fleet strip, a
 GPU particle field, a span-tree flamegraph, and a semantic trail through the
@@ -36,7 +37,10 @@ system that has to be learned separately.
 
 The Atlas is the one genuinely foreign space: no time axis, semantic position.
 It gets a cross-fade rather than a morph, and the time cursor degrades to a
-trail parameter. It ships last and behind the live-embedding endpoint.
+trail parameter. It was to ship last, behind the live-embedding endpoint — and
+it did not ship at all. The atlas keeps its coordinates and discards the model
+that produced them, so there is no projection to place a live event with. See
+§7, which is the more useful half of this document's last chapter.
 
 ## 2. Layers
 
@@ -284,9 +288,89 @@ capture and not a thought that is still running.
 | L2 | Fleet y-mode + the morph between it and Score | L1 |
 | L3 | Structure (span-depth flame) as the third y-mode | L2 |
 | L4 | Field layer, WebGPU, reusing the SessionField patterns | L1 |
-| L5 | Thought rail, both states | L0 |
-| L6 | Atlas cross-fade | live embedder |
+| L5 | Thought rail, both states — and a third | L0 |
+| L6 | Atlas cross-fade | **refused — see §7** |
 
 L0 is the whole bet. If the model and the vocabulary are right, each later
 milestone is a layout function over state that already exists — and if they are
 wrong, five views will disagree with each other in five different ways.
+
+## 7. L6, and why the trail is not drawn
+
+Four of the five shipped. The Atlas trail did not, and the reason is worth
+writing down properly, because "we ran out of time" and "the artifact cannot
+express it" are different sentences and only the second one is true here.
+
+### 7.1 The projection does not exist and cannot be recovered
+
+`reduce_vectors` fits two UMAP models and returns their outputs:
+
+```python
+u_cluster = umap.UMAP(n_components=cluster_dim, min_dist=0.0, **common).fit_transform(vectors)
+u3 = umap.UMAP(n_components=3, min_dist=0.1, **common).fit_transform(vectors)
+```
+
+Both fitted objects are locals. They are garbage-collected when the function
+returns, and `reduced.npz` stores `u_cluster`, `u3` and `u2` — coordinates, not
+a transform. `validate.py` says the same thing from the other side: the cache
+"caches only the UMAP outputs … never the source vectors", which is why
+trustworthiness has to reload the whole front-end to grade a map.
+
+So there is no `reducer.transform(v)` to call. Not for a new map, not for an old
+one, not with any flag. Placing a live event where UMAP would have placed it
+requires the model that placed everything else, and that model was never saved.
+Persisting it from now on would not help either: it would not retroactively give
+the shipped maps one, and re-running UMAP over an existing map is the 15–30
+minute stage `build_server.py` warns about.
+
+### 7.2 What *is* possible, and why it still is not the trail
+
+Two maps ship their source vectors beside their coordinates —
+`gpt2__api-mxbai-embed-large` (86MB, `mxbai-embed-large`) and the
+claude-tokenizer map (3.6MB, `all-MiniLM-L6-v2`) — because the API front-end
+checkpoints its embed cache and the cache lands in the dataset directory. On
+exactly those two, an event's text could be embedded with the same model,
+cosined against the cache, and placed at a distance-weighted centroid of its
+nearest tokens' `u3`.
+
+That is a real operation. It is not, however, a projection, and calling the
+result a trail through the atlas would be the fourth version of the same mistake
+this document keeps catching:
+
+- **It is not where UMAP would put the point.** A centroid in the source space
+  and an out-of-sample UMAP embedding disagree, sometimes a lot — UMAP's whole
+  job is a non-linear rearrangement. The picture would be smooth, plausible and
+  unrelated to the geometry the reader has learned from the map they are looking
+  at.
+- **The map is of tokens.** Embedding `edit viewer/src/chrome/SeerThoughts.tsx`
+  and dropping it among single-token neighbours shows where the *words of an
+  action* land in token space. A reader will take it as where the agent is
+  working in concept space. Those are not the same claim, and the second one is
+  the one the visual makes.
+- **Only two of the seventeen shipped maps could do it at all**, so the mode
+  would be absent or wrong depending on which map is loaded — the mode switch
+  itself would become a claim about the data.
+
+Same shape as §4.1's flamegraph and §4.2's magnitude-free glow: a picture with
+real structure in it, and the structure is ours rather than the record's. The
+mode is therefore not built.
+
+### 7.3 What would unblock it
+
+In order, and all three are needed:
+
+1. **Persist the fitted 3-D reducer** beside `reduced.npz` at build time, and
+   rebuild the maps that should support live placement. `umap.UMAP` pickles with
+   its nearest-neighbour index, so budget for a large artifact and decide
+   deliberately whether it ships with the static deploy.
+2. **A reachable embedding endpoint running the same model the map was built
+   with.** The mxbai map's Ollama host is gone; the MiniLM map's OpenAI-compatible
+   host is the M4 worker in `docs/LIVE-BUILDER.md`, which the sanitized branch
+   does not name.
+3. **A map whose points are the right kind of thing.** A trail over a token
+   atlas answers a question nobody asked. The honest version of this feature is
+   an atlas built from *session* units — actions, files, thoughts — at which
+   point the trail is a projection of the same points the map is made of, and
+   every objection above dissolves.
+
+Item 3 is the interesting one, and it is a different project than a cross-fade.
