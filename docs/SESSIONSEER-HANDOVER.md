@@ -32,10 +32,11 @@ whose capture process died).
 ## 2. Running it
 
 ```bash
-PYTHONPATH=src /Users/charbelmalo/Developer/nebulai/.venv/bin/python -m nebulai seer serve --watch
+PYTHONPATH=src "$REPO"/.venv/bin/python -m nebulai seer serve --watch
 ```
 
-The venv is at the **repo root**, not in a worktree: `.venv/` beside `src/`.
+`$REPO` is the repo root. The venv lives there, not in a worktree: `.venv/`
+beside `src/`, so a worktree runs the root interpreter against its own `src`.
 `--root <dir>` sets the event-log root and must come **before** the subcommand
 (`nebulai seer --root X serve`, not `serve --root X`) — it is an argument of the
 `seer` parser, not of `serve`.
@@ -43,7 +44,7 @@ The venv is at the **repo root**, not in a worktree: `.venv/` beside `src/`.
 Tests:
 
 ```bash
-PYTHONPATH=src /Users/charbelmalo/Developer/nebulai/.venv/bin/python -m pytest tests/ -q
+PYTHONPATH=src "$REPO"/.venv/bin/python -m pytest tests/ -q
 ```
 
 ```bash
@@ -56,7 +57,7 @@ Regenerating the vocabulary golden — deliberately, never to make a red test
 green (see §3, M5):
 
 ```bash
-PYTHONPATH=src /Users/charbelmalo/Developer/nebulai/.venv/bin/python tests/test_seer_vocabulary.py --write
+PYTHONPATH=src "$REPO"/.venv/bin/python tests/test_seer_vocabulary.py --write
 ```
 
 CLI verbs: `run attach reconcile protocol list show compare export analyze serve
