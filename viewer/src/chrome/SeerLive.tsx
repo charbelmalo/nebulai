@@ -29,6 +29,7 @@ import {
   type LiveRun,
   type YMode,
 } from "../scene/seer/LiveDriver";
+import { LiveField } from "../scene/seer/LiveField";
 import { ACTION_COLOR, FIDELITY_TEXTURE, NEUTRAL_INK, stateInk } from "../seer/encoding";
 
 const MODE_TITLE: Record<YMode, string> = {
@@ -47,12 +48,21 @@ export function SeerLive(props: { views: RunView[]; live: LiveModel }) {
   const [windowS, setWindowS] = useState(90);
   const [mode, setMode] = useState<YMode>("score");
   const [dropped, setDropped] = useState(0);
+  const [field, setField] = useState(true);
+  const [fieldReady, setFieldReady] = useState(false);
+  const fieldCanvasRef = useRef<HTMLCanvasElement>(null);
+  const fieldRef = useRef<LiveField | null>(null);
 
   // The driver reads through this ref rather than closing over `views`, so a
   // refetched snapshot or a changed selection reaches the canvas without
   // tearing down the driver — and without interrupting a morph in flight.
   const latest = useRef({ views, live });
   latest.current = { views, live };
+
+  // Read by the frame callback, which is registered once. A state value closed
+  // over there would be the one from the mount.
+  const showField = useRef(field);
+  showField.current = field;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -86,10 +96,36 @@ export function SeerLive(props: { views: RunView[]; live: LiveModel }) {
     const ro = new ResizeObserver((entries) => {
       if (disposed) return;
       const r = entries[0]?.contentRect;
-      if (r) driver.resize(r.width, r.height, window.devicePixelRatio || 1);
+      if (!r) return;
+      const dpr = window.devicePixelRatio || 1;
+      driver.resize(r.width, r.height, dpr);
+      fieldRef.current?.resize(r.width, r.height, dpr);
     });
     ro.observe(host);
     driver.resize(host.clientWidth, host.clientHeight, window.devicePixelRatio || 1);
+
+    // The field hangs off the chart's frame rather than running a loop of its
+    // own: two rAF loops over one time window would let the layers show
+    // different moments, which is the one thing a registered overlay must not
+    // do. It is also entirely optional — if the device has no WebGPU, `init`
+    // rejects, nothing is mounted, and the chart above is unchanged.
+    const fieldCanvas = fieldCanvasRef.current;
+    if (fieldCanvas) {
+      const f = new LiveField();
+      fieldRef.current = f;
+      f.init(fieldCanvas)
+        .then(() => {
+          if (disposed) return;
+          f.resize(host.clientWidth, host.clientHeight, window.devicePixelRatio || 1);
+          setFieldReady(f.isRunning);
+        })
+        .catch(() => setFieldReady(false));
+      driver.onFrame = () => {
+        if (fieldRef.current?.isRunning && showField.current) {
+          fieldRef.current.render(driver.field());
+        }
+      };
+    }
 
     // How much the window is hiding, sampled rather than watched: it only
     // changes when the model trims, and nothing about it needs a frame's
@@ -104,13 +140,17 @@ export function SeerLive(props: { views: RunView[]; live: LiveModel }) {
     // Debug handle, same pattern as `__sessionDriver`: browser verification
     // needs to drive one frame and read state back without a mouse.
     (window as unknown as { __seerLive?: LiveDriver }).__seerLive = driver;
+    (window as unknown as { __seerField?: LiveField }).__seerField = fieldRef.current ?? undefined;
 
     return () => {
       disposed = true;
       window.clearInterval(poll);
       ro.disconnect();
+      driver.onFrame = undefined;
       driver.dispose();
       driverRef.current = null;
+      fieldRef.current?.dispose();
+      fieldRef.current = null;
     };
   }, []);
 
@@ -139,6 +179,20 @@ export function SeerLive(props: { views: RunView[]; live: LiveModel }) {
               </button>
             ))}
           </span>
+          <button
+            type="button"
+            class={`seer-btn${field && fieldReady ? " is-on" : ""}`}
+            aria-pressed={field && fieldReady}
+            disabled={!fieldReady}
+            onClick={() => setField(!field)}
+            title={
+              fieldReady
+                ? "the glow under the chart: where and when events landed, carrying no magnitude"
+                : "this device has no GPU path for the field; the chart is unaffected"
+            }
+          >
+            field
+          </button>
           <button type="button" class="seer-btn" onClick={() => driverRef.current?.fitAll()}>
             fit
           </button>
@@ -158,6 +212,16 @@ export function SeerLive(props: { views: RunView[]; live: LiveModel }) {
       </h3>
 
       <div class="seer-live-host" ref={hostRef}>
+        {/* two stacked canvases, not one: the measurement layer wants crisp 2D
+            text and hairlines, the field wants WebGPU and bloom. The field is
+            underneath and carries no figure, so it can be absent without
+            costing the reader anything. */}
+        <canvas
+          ref={fieldCanvasRef}
+          class="seer-live-field"
+          style={{ opacity: field && fieldReady ? 1 : 0 }}
+          aria-hidden="true"
+        />
         <canvas ref={canvasRef} class="seer-live-canvas" />
         {hover && <LiveReadout hover={hover} showRun={views.length > 1} />}
       </div>
@@ -173,6 +237,14 @@ export function SeerLive(props: { views: RunView[]; live: LiveModel }) {
         moves the same marks rather than redrawing them: these are one set of
         events grouped three ways.
         {mode === "structure" && <StructureNote views={views} />}
+        {field && fieldReady && (
+          <>
+            {" "}
+            The glow carries no magnitude: an event tells us that something
+            happened and when, never how big it was. Brightness is recency, and
+            anything brighter than that is events crowding together.
+          </>
+        )}
         {dropped > 0 && (
           <>
             {" "}

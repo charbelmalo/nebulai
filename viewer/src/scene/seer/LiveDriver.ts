@@ -101,6 +101,34 @@ export interface LiveHover {
   y: number;
 }
 
+/** Where the field layer should put its light, in this canvas's own pixel
+ *  space.
+ *
+ *  The field does **not** recompute the projection. It could — it has the same
+ *  marks and the same window — and that is exactly the mistake: two
+ *  implementations of one mapping drift, and a glow half a row off the bar it
+ *  belongs to is worse than no glow, because it reads as a second measurement.
+ *  So the chart, which owns the geometry, hands over finished positions and the
+ *  field is only ever a renderer. Same argument as the no-fold rule, one layer
+ *  down. */
+export interface FieldSample {
+  n: number;
+  /** 2 floats per mote: x, y in CSS pixels, same origin as the 2D canvas. */
+  xy: Float32Array;
+  /** 3 floats per mote: linear 0..1 rgb, from the shared encoding. */
+  rgb: Float32Array;
+  /** 1 float per mote: 0 at the live edge, 1 at the back of the window. */
+  age: Float32Array;
+  w: number;
+  h: number;
+}
+
+/** Ceiling on motes per frame. `LiveModel` already caps retained marks per run;
+ *  this is the second, cheaper cap, so a fleet of busy runs cannot make the
+ *  field the slowest thing on the page. Overflow is dropped from the *oldest*
+ *  end, which is the end the field is already fading out. */
+const FIELD_CAP = 6000;
+
 const EMPTY_INPUT: LiveInput = { runs: [] };
 
 const GUTTER = 82;
@@ -199,6 +227,13 @@ export class LiveDriver {
   private modeTo: YMode = "score";
   private morph = 1;
 
+  /** Reused across frames: a per-frame allocation of three typed arrays at
+   *  60fps is a garbage-collection pause you can see in the leading edge. */
+  private fieldXY = new Float32Array(FIELD_CAP * 2);
+  private fieldRGB = new Float32Array(FIELD_CAP * 3);
+  private fieldAge = new Float32Array(FIELD_CAP);
+  private fieldN = 0;
+
   /** Seconds visible across the canvas. */
   windowS = 90;
   /** Right edge of the window, in event-clock seconds. Only meaningful when
@@ -209,6 +244,10 @@ export class LiveDriver {
   onHover?: (h: LiveHover | null) => void;
   onFollowChange?: (following: boolean) => void;
   onWindowChange?: (windowS: number) => void;
+  /** Fired at the end of every frame, after `field()` is valid. The field layer
+   *  hangs off this rather than running a loop of its own — two rAF loops over
+   *  one window would let the layers show different moments. */
+  onFrame?: () => void;
 
   init(canvas: HTMLCanvasElement): void {
     this.canvas = canvas;
@@ -477,6 +516,111 @@ export class LiveDriver {
       for (const s of run.openSpans) this.drawOpenSpan(ctx, run, i, s, x, geo, edge);
     }
     this.drawRail(ctx, x, geo, t0, edge);
+    this.sampleField(x, geo, t0, edge);
+    this.onFrame?.();
+  }
+
+  /** Place one mote per observed instant, on the row that instant's work is
+   *  drawn on — so the field morphs with the chart instead of being a separate
+   *  picture that happens to share a time axis.
+   *
+   *  ## What lights up, and why it is that and not "one per mark"
+   *
+   *  The obvious rule — a mote per mark — is wrong, and wrong in a way that is
+   *  invisible until you look at an old run. `LiveModel` holds only what it
+   *  ingested over SSE, so a run that finished before the page loaded has no
+   *  marks at all and would sit in permanent darkness beside a live one. A
+   *  reader would take that for "this run did nothing".
+   *
+   *  So the rule is one mote per *instant the record contains*, from whichever
+   *  half of the split owns it:
+   *
+   *  · a closed span lights its start and its end — two events Python saw,
+   *    two timestamps it carries;
+   *  · an open span lights its start and the live edge, which is as far as it
+   *    has got;
+   *  · a mark lights its own moment **only when it has no span of its own** —
+   *    session and turn boundaries, approvals, warnings. A mark that belongs to
+   *    a span would otherwise light the same instant twice, and a live run
+   *    would glow twice as hard as the identical run reloaded from disk.
+   *
+   *  A span with a synthetic start lights once, at its end: its start was
+   *  stamped by us, not observed, and the field may only stand where something
+   *  actually happened.
+   *
+   *  ## What the light is allowed to mean
+   *
+   *  An event has no magnitude — the stream says *that* a thing happened, its
+   *  kind and its clock, never how big it was. So nothing here drives
+   *  brightness from a value. The field carries recency, and the crowding that
+   *  additive blending gives for free: a busy stretch is bright because many
+   *  instants are near each other, which is a fact about the stream rather than
+   *  a number invented for it. */
+  private sampleField(
+    x: (t: number) => number,
+    geo: Geometry,
+    t0: number,
+    edge: number,
+  ): void {
+    const width = Math.max(1e-6, edge - t0);
+    const half = this.laneH(geo) / 2;
+    let n = 0;
+
+    const put = (ts: number, lane: ScoreLane, runIdx: number, runId: string, key: string | null, ink: string): void => {
+      if (n >= FIELD_CAP || ts < t0 || ts > edge) return;
+      const px = x(ts);
+      if (px < GUTTER) return;
+      const [r, g, b] = rgb01(ink);
+      this.fieldXY[n * 2] = px;
+      this.fieldXY[n * 2 + 1] = this.laneY(geo, lane, runIdx, runId, key) + half;
+      this.fieldRGB[n * 3] = r;
+      this.fieldRGB[n * 3 + 1] = g;
+      this.fieldRGB[n * 3 + 2] = b;
+      this.fieldAge[n] = clamp((edge - ts) / width, 0, 1);
+      n++;
+    };
+
+    for (let i = 0; i < this.input.runs.length; i++) {
+      const run = this.input.runs[i]!;
+
+      for (const s of run.view?.spans ?? []) {
+        const action = (s.action as Action | null) ?? null;
+        const lane: ScoreLane = action ?? "unclassified";
+        const ink = s.failed ? "#ff5c7a" : markInk(action, s.duration_fidelity);
+        if (!s.synthetic_start) put(s.started_at, lane, i, run.runId, s.span_id, ink);
+        if (s.ended_at != null) put(s.ended_at, lane, i, run.runId, s.span_id, ink);
+      }
+
+      for (const s of run.openSpans) {
+        const lane: ScoreLane = s.reasoning ? "thinking" : (s.action ?? "unclassified");
+        const ink = s.reasoning ? "#b0a6f0" : s.action ? ACTION_COLOR[s.action] : NEUTRAL_INK;
+        put(s.startedAt, lane, i, run.runId, s.spanId, ink);
+        put(edge, lane, i, run.runId, s.spanId, ink);
+      }
+
+      for (const m of run.marks) {
+        // Anything with a span was already lit by the span. This is the rest:
+        // the boundaries and warnings the rail exists for.
+        if (m.spanId != null) continue;
+        const lane: ScoreLane = m.reasoning ? "thinking" : (m.action ?? "unclassified");
+        put(m.ts, lane, i, run.runId, null, markInk(m.action, m.fidelity));
+      }
+    }
+    this.fieldN = n;
+  }
+
+  /** The last frame's field positions. Valid immediately after `draw()`, which
+   *  is why `onFrame` fires from there: the field renders the frame the chart
+   *  just drew, never one behind it. */
+  field(): FieldSample {
+    return {
+      n: this.fieldN,
+      xy: this.fieldXY,
+      rgb: this.fieldRGB,
+      age: this.fieldAge,
+      w: this.w,
+      h: this.h,
+    };
   }
 
   private advanceMorph(dtS?: number): void {
@@ -1090,6 +1234,15 @@ export function niceStep(target: number): number {
   const steps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
   for (const s of steps) if (target <= s) return s;
   return 3600;
+}
+
+/** `#rrggbb` → three 0..1 floats, for the field layer's vertex data. Same
+ *  palette as the canvas reads; a second table of colours for the GPU is how
+ *  two layers end up disagreeing about what `edit` looks like. */
+export function rgb01(hex: string): [number, number, number] {
+  const h = hex.replace("#", "");
+  const n = parseInt(h, 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
 }
 
 /** `#rrggbb` + alpha → `rgba(...)`. The palette is hex because that is what a

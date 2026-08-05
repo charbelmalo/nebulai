@@ -14,9 +14,9 @@
  */
 
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { LiveDriver, capFor, hexA, niceStep } from "../../src/scene/seer/LiveDriver";
+import { LiveDriver, capFor, hexA, niceStep, rgb01 } from "../../src/scene/seer/LiveDriver";
 import type { LiveInput, LiveRun } from "../../src/scene/seer/LiveDriver";
-import { EFFECT_CAP } from "../../src/seer/encoding";
+import { ABSENT_INK, ACTION_COLOR, EFFECT_CAP } from "../../src/seer/encoding";
 import type { SpanRecord } from "../../src/seer/client";
 import type { Mark, OpenSpan } from "../../src/seer/live";
 
@@ -548,6 +548,152 @@ describe("structure mode does not invent a tree", () => {
     // …and the depth is still 1: nothing was reported as nested.
     const geo = (d as unknown as { geometry(): { struct: { maxDepth: number } } }).geometry();
     expect(geo.struct.maxDepth).toBe(1);
+  });
+});
+
+// ── the field layer's data ───────────────────────────────────────────────────
+
+function mark(over: Partial<Mark> = {}): Mark {
+  return {
+    runId: "r",
+    eventId: `e${Math.random()}`,
+    ts: 1000,
+    eventType: "tool.completed",
+    action: "edit",
+    effect: null,
+    fidelity: "deterministic",
+    spanId: null,
+    reasoning: false,
+    ...over,
+  };
+}
+
+/** A mote's colour, compared channel by channel — the buffer is Float32 and an
+ *  exact match against a double would fail on rounding alone. */
+function expectInk(d: LiveDriver, i: number, hex: string): void {
+  const f = d.field();
+  const want = rgb01(hex);
+  for (let c = 0; c < 3; c++) expect(f.rgb[i * 3 + c]).toBeCloseTo(want[c]!, 6);
+}
+
+/** Read one mote out of the sample, by index. */
+function mote(d: LiveDriver, i: number) {
+  const f = d.field();
+  return { x: f.xy[i * 2]!, y: f.xy[i * 2 + 1]!, age: f.age[i]! };
+}
+
+describe("the field is a renderer, not a second opinion", () => {
+  it("places motes on the rows the chart is currently drawing", () => {
+    // The field must not recompute the projection: a glow half a row off the
+    // bar it belongs to reads as a second measurement rather than as scenery.
+    // Two different actions, so score mode separates them and fleet does not.
+    const marks = [mark({ ts: 1000, action: "edit" }), mark({ ts: 1001, action: "verify" })];
+    const { d } = mount(inputWith([], [], marks));
+    d.setFollow(false);
+    (d as unknown as { edge: number }).edge = 1010;
+
+    d.draw(1);
+    expect(d.field().n).toBe(2);
+    const score = [mote(d, 0).y, mote(d, 1).y];
+    expect(score[0]).not.toBe(score[1]);
+
+    d.setMode("fleet");
+    d.draw(1);
+    const fleet = [mote(d, 0).y, mote(d, 1).y];
+    // One run, so the fleet axis puts both on its single row — the field
+    // follows the chart's meaning of `y`, it does not keep one of its own.
+    expect(fleet[0]).toBe(fleet[1]);
+  });
+
+  it("ages a mote by when it happened and by nothing else", () => {
+    // Recency is the only channel, because an event carries no magnitude. A
+    // mark at the live edge is new; one a full window back is old.
+    const marks = [mark({ ts: 1010 }), mark({ ts: 1000 })];
+    const { d } = mount(inputWith([], [], marks));
+    d.setFollow(false);
+    (d as unknown as { edge: number }).edge = 1010;
+    d.windowS = 10;
+    d.draw(1);
+    expect(mote(d, 0).age).toBeCloseTo(0, 6);
+    expect(mote(d, 1).age).toBeCloseTo(1, 6);
+  });
+
+  it("does not sample a mark that has scrolled out of the window", () => {
+    const marks = [mark({ ts: 900 }), mark({ ts: 1005 })];
+    const { d } = mount(inputWith([], [], marks));
+    d.setFollow(false);
+    (d as unknown as { edge: number }).edge = 1010;
+    d.windowS = 10;
+    d.draw(1);
+    expect(d.field().n).toBe(1);
+  });
+
+  it("lights a run that finished before the page loaded", () => {
+    // The rule that is easy to get wrong: `LiveModel` only holds events it
+    // ingested over SSE, so a mote-per-mark field leaves every historical run
+    // in total darkness — which a reader takes for "this run did nothing".
+    // A closed span carries both its instants in the record, and they are what
+    // light it.
+    const { d } = mount(inputWith([span({ started_at: 1000, ended_at: 1004 })], [], []));
+    d.setFollow(false);
+    (d as unknown as { edge: number }).edge = 1010;
+    d.draw(1);
+    expect(d.field().n).toBe(2);
+  });
+
+  it("lights a synthetic start only once, at the end it actually observed", () => {
+    // The start was stamped by us, not seen. The field may only stand where
+    // something happened.
+    const { d } = mount(
+      inputWith([
+        span({ started_at: 1000, ended_at: 1000, synthetic_start: true, duration_fidelity: "missing" }),
+      ]),
+    );
+    d.setFollow(false);
+    (d as unknown as { edge: number }).edge = 1010;
+    d.draw(1);
+    expect(d.field().n).toBe(1);
+  });
+
+  it("does not light the same instant twice for a run watched live", () => {
+    // A live run has both the span *and* the marks that opened and closed it.
+    // Counting both would make it glow twice as hard as the identical run
+    // reloaded from disk — a difference in capture reading as a difference in
+    // the agent.
+    const s = span({ span_id: "sp1", started_at: 1000, ended_at: 1004 });
+    const echoes = [
+      mark({ ts: 1000, eventType: "tool.started", spanId: "sp1" }),
+      mark({ ts: 1004, eventType: "tool.completed", spanId: "sp1" }),
+      mark({ ts: 1006, eventType: "turn.completed", spanId: null, action: null }),
+    ];
+    const { d } = mount(inputWith([s], [], echoes));
+    d.setFollow(false);
+    (d as unknown as { edge: number }).edge = 1010;
+    d.draw(1);
+    // Two from the span, one from the boundary mark that has no span.
+    expect(d.field().n).toBe(3);
+  });
+
+  it("takes its colours from the shared encoding, not from a table of its own", () => {
+    // Two tables of colours is how the field and the chart end up disagreeing
+    // about what `edit` looks like.
+    const { d } = mount(inputWith([], [], [mark({ action: "edit", ts: 1005 })]));
+    d.setFollow(false);
+    (d as unknown as { edge: number }).edge = 1010;
+    d.draw(1);
+    expectInk(d, 0, ACTION_COLOR.edit);
+  });
+
+  it("draws an absent fidelity in its own ink rather than the action's", () => {
+    // The same rule the bars follow: a hole in the data must not wear the
+    // colour of the work it is missing from.
+    const { d } = mount(
+      inputWith([], [], [mark({ action: "edit", fidelity: "missing", ts: 1005 })]),
+    );
+    d.setFollow(false);
+    (d as unknown as { edge: number }).edge = 1010;
+    d.draw(1);
+    expectInk(d, 0, ABSENT_INK.missing);
   });
 });
 

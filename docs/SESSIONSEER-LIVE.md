@@ -135,6 +135,9 @@ lose in a render loop:
   by construction, and `0` is not a duration.
 - **Glow is rank-normalized, with a saturation floor.** Bloom implies
   magnitude; raw magnitude through a bloom curve is a lie with a nice finish.
+  The live field (L4) resolves this the other way: it has no magnitude to rank,
+  so it spends the channel on *recency* and lets crowding do the rest — see
+  §4.2.
 - **Depth is the reported chain, or it is nothing.** See §4.1.
 
 ### 4.1 The tree we are not allowed to draw
@@ -166,6 +169,39 @@ reading, seconds no span accounts for. Rows below the band hold the calls, one
 row per reported depth and one more per genuine overlap, because two clocks
 overlapping is a measurement and deserves its own row without being called
 nesting.
+
+### 4.2 What the field is allowed to glow about
+
+The field (L4) is a second canvas *behind* the chart: additive motes on the
+exact rows the chart draws its bars on, so a busy stretch of a run glows.
+
+An event has no magnitude. The stream says that a thing happened, what kind it
+was and when — never how big. So no term in that shader reads a value:
+brightness is **recency**, and everything else bright on screen is **crowding**,
+which additive blending gives for free and which is a real property of the
+stream. A glowing field that meant nothing would be the most persuasive lie in
+the subsystem.
+
+Two consequences that are easy to get wrong:
+
+- **A mote per mark is the wrong rule.** `LiveModel` holds only what it ingested
+  over SSE, so a run that finished before the page loaded has no marks and would
+  sit in total darkness beside a live one — which reads as "this run did
+  nothing". Motes come from *instants the record contains*: a closed span lights
+  its start and its end, an open span lights its start and the live edge, and a
+  mark lights its own moment only when it has no span of its own. A live run and
+  the same run reloaded from disk then glow identically.
+- **A synthetic start lights nothing.** Its start was stamped by us, not
+  observed; the field may only stand where something happened.
+
+The field is also the only part of the live view that needs a GPU and the only
+part that carries no figure — the same decision twice. Without WebGPU it is
+simply absent and the chart above is exactly as legible.
+
+Positions come from `LiveDriver.field()`. The field never recomputes the
+projection, though it easily could: two implementations of one mapping drift,
+and a glow half a row off its bar reads as a second measurement. Same argument
+as the no-fold rule, one layer down.
 
 ## 5. Thoughts
 
