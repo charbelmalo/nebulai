@@ -28,6 +28,8 @@ import { computed, signal, useSignal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { ACTIONS, isAbsent, type Action, type Measured, type SeerEvent } from "../seer/contract";
 import { ACTION_COLOR, stateInk } from "../seer/encoding";
+import { LiveModel } from "../seer/live";
+import { SeerScore } from "./SeerScore";
 import {
   $health,
   $link,
@@ -85,6 +87,18 @@ const $importNote = signal<string | null>(null);
  *  which snapshot it is showing and offers to recompute. */
 const $analyses = signal<Record<string, RunAnalyses>>({});
 
+/** The leading edge: what has happened since the last snapshot arrived.
+ *
+ *  Deliberately not a signal. It changes on every event and a busy agent lands
+ *  dozens a second; re-rendering the page that often is the thing `markDirty`
+ *  exists to avoid. The canvases that read it redraw every frame anyway and
+ *  pull from it there, so nothing is ever stale and nothing re-renders.
+ *
+ *  It holds no figures. `adopt` hands it the server's snapshot and it gives
+ *  that same object back untouched — the reducer owns every derived number,
+ *  and a second fold on this side would drift from the first invisibly. */
+const liveModel = new LiveModel();
+
 const $selectedViews = computed(() =>
   $selected.value.map((id) => $views.value[id]).filter((v): v is RunView => !!v),
 );
@@ -114,6 +128,7 @@ async function loadView(runId: string): Promise<void> {
   try {
     const v = await fetchRun(runId);
     $views.value = { ...$views.value, [runId]: v };
+    liveModel.adopt(runId, v);
   } catch {
     /* a run that vanished stays out of $views; the rail row still shows */
   }
@@ -176,6 +191,7 @@ function forgetRun(runId: string): void {
   $views.value = drop($views.value);
   $tail.value = drop($tail.value);
   $analyses.value = drop($analyses.value);
+  liveModel.forget(runId);
   dirty.delete(runId);
   void reloadComparison();
 }
@@ -195,10 +211,14 @@ export function SeerPage() {
     void reloadRuns();
     const off = connectLive({
       onEvent: (e) => {
+        liveModel.ingest(e);
         pushTail(e);
         markDirty(e.run_id);
       },
       onRunFinished: (runId) => {
+        // Close the open spans before the refetch, so nothing is left growing
+        // on the Score while the snapshot is in flight.
+        liveModel.finish(runId);
         void loadView(runId);
         void reloadRuns();
         if ($selected.value.length > 1) void reloadComparison();
@@ -694,6 +714,7 @@ function RunDetail(props: { view: RunView }) {
         </p>
       )}
 
+      <SeerScore key={v.run_id} view={v} live={liveModel} />
       <Trajectory view={v} />
       <div class="seer-grid">
         <StateBar view={v} />

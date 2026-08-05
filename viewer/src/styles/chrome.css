@@ -5231,6 +5231,97 @@ body.page-seer #stage {
   align-items: start;
 }
 
+/* score (live) ----------------------------------------------------------- */
+
+.seer-score-transport {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.seer-score .seer-btn.is-on {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* the host is the measurement surface: the driver sizes itself from this box,
+   so the height here is the only place the lane count turns into pixels */
+.seer-score-host {
+  position: relative;
+  height: 232px;
+  border: 1px solid var(--hairline);
+  background: var(--bg-sink, rgba(0, 0, 0, 0.18));
+  cursor: crosshair;
+  overflow: hidden;
+}
+
+.seer-score-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* positioned with `translate`, never `transform` — the card's entrance
+   animation owns `transform` and would pin this to the top-left corner */
+.seer-score-readout {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  max-width: 60%;
+  padding: 4px 8px;
+  font: 500 10px/1.4 var(--font-mono, ui-monospace, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: var(--bg-raise);
+  border: 1px solid var(--hairline-strong);
+  box-shadow: var(--shadow-card);
+}
+
+/* scoped the same way `.seer-observing .seer-warn` is — the class has no base
+   colour of its own, which is a wart, but widening it is not this change */
+.seer-score .seer-warn {
+  color: var(--warn);
+}
+
+.seer-score-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font: 500 9px/1 var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.seer-score-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.seer-score-legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 1px;
+}
+
+/* the two absences are drawn hollow here for the same reason they are drawn
+   hollow on the canvas: a filled swatch is a magnitude, and there is none */
+.seer-score-legend i.is-outline {
+  background: none;
+  border: 1px solid #4a4e58;
+}
+
+.seer-score-legend i.is-policy {
+  background: none;
+  border: 1px dashed #5a5470;
+}
+
 /* trajectory ------------------------------------------------------------- */
 
 .seer-traj {
