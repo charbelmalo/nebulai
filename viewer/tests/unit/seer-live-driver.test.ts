@@ -119,6 +119,7 @@ function span(over: Partial<SpanRecord> = {}): SpanRecord {
     effect: "state_changed",
     failed: false,
     detail: "src/a.ts",
+    parent_span_id: null,
     ...over,
   };
 }
@@ -413,13 +414,140 @@ describe("switching the axis moves the marks", () => {
 
   it("skips the morph entirely under reduced motion", () => {
     // Someone who asked for no motion is not helped by a slower version of the
-    // thing they turned off.
+    // thing they turned off. `morphT` is progress, so "arrived" is 1 in both
+    // directions; the mode is what changed.
     const { d } = mount(twoRuns());
     d.setReducedMotion(true);
     d.setMode("fleet");
     expect(d.morphT).toBe(1);
+    expect(d.mode).toBe("fleet");
     d.setMode("score");
-    expect(d.morphT).toBe(0);
+    expect(d.morphT).toBe(1);
+    expect(d.mode).toBe("score");
+  });
+
+  it("travels between the two chosen layouts, never through a third", () => {
+    // score → structure must not detour via fleet. A mark passing through a row
+    // it was never in is a claim about the data, made by the animation.
+    const { d } = mount(twoRuns());
+    d.setMode("fleet");
+    d.draw(1);
+    d.setMode("structure");
+    expect(d.morphFrom).toBe("fleet");
+    expect(d.mode).toBe("structure");
+    d.draw(1);
+    d.setMode("score");
+    expect(d.morphFrom).toBe("structure");
+    expect(d.mode).toBe("score");
+  });
+
+  it("retraces its path when the axis is switched back mid-morph", () => {
+    const { d } = mount(twoRuns());
+    d.draw(0);
+    d.setMode("fleet");
+    d.draw(MORPH_HALF);
+    const half = d.morphT;
+    expect(half).toBeGreaterThan(0);
+    expect(half).toBeLessThan(1);
+    d.setMode("score");
+    // Reversed, not restarted: the remaining distance is what was already
+    // travelled, so the marks go back the way they came.
+    expect(d.morphFrom).toBe("fleet");
+    expect(d.morphT).toBeCloseTo(1 - half, 6);
+  });
+});
+
+// ── structure ────────────────────────────────────────────────────────────────
+
+describe("structure mode does not invent a tree", () => {
+  it("puts every span on one row when no parent was ever reported", () => {
+    // `parent_span_id` is null in every capture we have, and null means "the
+    // agent did not say" rather than "top level". Three sequential calls with
+    // no reported parent are three calls at one depth — anything deeper would
+    // be the viewer making up the nesting the adapter declined to report.
+    //
+    // Three *different* actions on purpose: score mode would put these on three
+    // rows, so a single row can only mean the structure layout is the one
+    // driving `y`.
+    const spans = [
+      span({ span_id: "s1", action: "edit", started_at: 1000, ended_at: 1002 }),
+      span({ span_id: "s2", action: "inspect", started_at: 1002, ended_at: 1004 }),
+      span({ span_id: "s3", action: "verify", started_at: 1004, ended_at: 1006 }),
+    ];
+    const { d, calls } = mount(inputWith(spans));
+    d.setFollow(false);
+    (d as unknown as { edge: number }).edge = 1010;
+    d.setMode("structure");
+    d.draw(1);
+    const ys = new Set(barYs(calls));
+    expect(ys.size).toBe(1);
+  });
+
+  it("indents a span that was reported as running inside another", () => {
+    const spans = [
+      span({ span_id: "parent", started_at: 1000, ended_at: 1010 }),
+      span({ span_id: "child", started_at: 1002, ended_at: 1004, parent_span_id: "parent" }),
+    ];
+    const { d, calls } = mount(inputWith(spans));
+    d.setFollow(false);
+    (d as unknown as { edge: number }).edge = 1020;
+    d.setMode("structure");
+    d.draw(1);
+    const ys = barYs(calls);
+    expect(new Set(ys).size).toBe(2);
+  });
+
+  it("ignores a parent id whose span never arrived", () => {
+    // A chain that points at something we do not have is not a chain. The span
+    // sits one level inside the run, where we can honestly place it.
+    const orphan = [
+      span({
+        span_id: "a",
+        action: "edit",
+        started_at: 1000,
+        ended_at: 1002,
+        parent_span_id: "never-seen",
+      }),
+      span({ span_id: "b", action: "search", started_at: 1002, ended_at: 1004 }),
+    ];
+    const { d, calls } = mount(inputWith(orphan));
+    d.setFollow(false);
+    (d as unknown as { edge: number }).edge = 1010;
+    d.setMode("structure");
+    d.draw(1);
+    expect(new Set(barYs(calls)).size).toBe(1);
+  });
+
+  it("survives a parent chain that points at itself", () => {
+    // Malformed input must flatten, never hang the frame.
+    const cyclic = [
+      span({ span_id: "x", started_at: 1000, ended_at: 1002, parent_span_id: "y" }),
+      span({ span_id: "y", started_at: 1000, ended_at: 1002, parent_span_id: "x" }),
+    ];
+    const { d, calls } = mount(inputWith(cyclic));
+    d.setFollow(false);
+    (d as unknown as { edge: number }).edge = 1010;
+    d.setMode("structure");
+    expect(() => d.draw(1)).not.toThrow();
+    expect(bars(calls).length).toBe(2);
+  });
+
+  it("gives overlapping calls rows of their own without calling it nesting", () => {
+    // Two clocks that overlap is a measurement, not a hierarchy. They need
+    // separate rows to be legible, and they get them at the same depth.
+    const concurrent = [
+      span({ span_id: "p", started_at: 1000, ended_at: 1008 }),
+      span({ span_id: "q", started_at: 1002, ended_at: 1006 }),
+    ];
+    const { d, calls } = mount(inputWith(concurrent));
+    d.setFollow(false);
+    (d as unknown as { edge: number }).edge = 1020;
+    d.setMode("structure");
+    d.draw(1);
+    expect(new Set(barYs(calls)).size).toBe(2);
+    // …and the depth is still 1: nothing was reported as nested.
+    const geo = (d as unknown as { geometry(): { struct: { maxDepth: number } } }).geometry();
+    expect(geo.struct.maxDepth).toBe(1);
   });
 });
 

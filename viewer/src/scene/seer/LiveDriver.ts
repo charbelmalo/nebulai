@@ -6,6 +6,7 @@
  *
  *    score      y = action lane     what kind of work, over time
  *    fleet      y = run             who is doing it, over time
+ *    structure  y = containment     what ran inside what, over time
  *
  *  Switching between them is a *morph*, not a redraw. Every mark keeps its
  *  identity and travels from its old row to its new one, because the point
@@ -13,6 +14,10 @@
  *  between two pictures would say the opposite. Only the lane chrome
  *  cross-fades, because a label is a name rather than a datum, and a name
  *  sliding to a row it does not belong to would be the one lie in the picture.
+ *
+ *  The morph is a `from → to` pair rather than a position on a line, so
+ *  score → structure travels directly instead of detouring through fleet. A
+ *  mark passing through a row it was never in is a claim about the data.
  *
  *  ## Where each bar comes from, and why it matters
  *
@@ -36,6 +41,12 @@
  *  · **An empty lane is a fact.** All nine actions are always drawn, in the
  *    contract's own order. A lane that appears only once work lands in it makes
  *    "this run never ran a test" invisible, and that is usually the finding.
+ *  · **A flat structure is a fact about the capture, not about the agent.**
+ *    `parent_span_id` is on the wire and is null in every run we have; nothing
+ *    here fills that in from proximity or from nesting-shaped tool names. Depth
+ *    comes from the reported chain and from nothing else, so a picture with one
+ *    row of work under each run means "no nesting was reported", which is the
+ *    finding — see `structure()`.
  */
 
 import type { Action, Effect, Fidelity } from "../../seer/contract";
@@ -69,7 +80,9 @@ export interface LiveInput {
   runs: readonly LiveRun[];
 }
 
-export type YMode = "score" | "fleet";
+export type YMode = "score" | "fleet" | "structure";
+
+export const Y_MODES: YMode[] = ["score", "fleet", "structure"];
 
 /** What sits under the cursor. `provisional` is carried so the readout can say
  *  "still open" or "not timed" instead of printing a length. */
@@ -126,12 +139,36 @@ interface HitRect {
   hover: Omit<LiveHover, "x" | "y">;
 }
 
+/** One layout's row height and row count. `y` for a row is
+ *  `AXIS_H + index * h`, so a layout is fully described by these two plus
+ *  whatever assigns an index. */
+interface Rows {
+  h: number;
+  n: number;
+}
+
+/** Where structure mode puts each thing.
+ *
+ *  Two maps rather than one because a run's own band and the calls inside it
+ *  are different kinds of row: the band is the run's wall interval, the rows
+ *  under it are what filled it. */
+interface StructRows extends Rows {
+  /** row index by span id, for both closed and open spans */
+  span: Map<string, number>;
+  /** row index of each run's own band, by run id */
+  root: Map<string, number>;
+  /** the deepest reported chain, for the readout */
+  maxDepth: number;
+}
+
 interface Geometry {
-  /** 0 = score, 1 = fleet. */
+  from: YMode;
+  to: YMode;
+  /** progress from `from` to `to`; 1 when settled. */
   t: number;
-  scoreH: number;
-  fleetH: number;
-  nRuns: number;
+  score: Rows;
+  fleet: Rows;
+  struct: StructRows;
 }
 
 export class LiveDriver {
@@ -156,8 +193,11 @@ export class LiveDriver {
   private cursor: { x: number; y: number } | null = null;
   private reducedMotion = false;
 
-  private morph = 0;
-  private morphTarget = 0;
+  /** The morph, as a journey rather than a position: `t` runs 0 → 1 from
+   *  `modeFrom` to `modeTo`, and sits at 1 whenever nothing is moving. */
+  private modeFrom: YMode = "score";
+  private modeTo: YMode = "score";
+  private morph = 1;
 
   /** Seconds visible across the canvas. */
   windowS = 90;
@@ -192,17 +232,39 @@ export class LiveDriver {
    *  than slowed: someone who has asked for no motion is not helped by a slow
    *  version of the thing they turned off. */
   setMode(mode: YMode): void {
-    this.morphTarget = mode === "fleet" ? 1 : 0;
-    if (this.reducedMotion) this.morph = this.morphTarget;
+    if (mode === this.modeTo) return;
+    if (mode === this.modeFrom && this.morph < 1) {
+      // Turning back mid-flight: run the same interpolation backwards so the
+      // marks retrace the path they were on, rather than jumping to wherever
+      // a fresh morph would have started them.
+      const back = this.modeTo;
+      this.modeTo = this.modeFrom;
+      this.modeFrom = back;
+      this.morph = 1 - this.morph;
+    } else {
+      // Changing target mid-flight: start from whichever end we are nearer, so
+      // the jump is at most half a row rather than a whole layout.
+      this.modeFrom = this.morph < 0.5 ? this.modeFrom : this.modeTo;
+      this.modeTo = mode;
+      this.morph = 0;
+    }
+    if (this.reducedMotion) this.morph = 1;
   }
 
   get mode(): YMode {
-    return this.morphTarget === 1 ? "fleet" : "score";
+    return this.modeTo;
   }
 
-  /** How far through the morph we are. Exposed for tests and verification. */
+  /** How far through the current morph we are, 1 when settled. Exposed for
+   *  tests and browser verification. */
   get morphT(): number {
     return this.morph;
+  }
+
+  /** Where the morph started, for tests that need to know which two layouts
+   *  are being interpolated. */
+  get morphFrom(): YMode {
+    return this.modeFrom;
   }
 
   resize(width: number, height: number, dpr: number): void {
@@ -405,7 +467,7 @@ export class LiveDriver {
     const geo = this.geometry();
 
     this.drawAxis(ctx, edge, t0, x, plot);
-    this.drawLanes(ctx, geo);
+    this.drawLanes(ctx, geo, x, edge);
 
     for (let i = 0; i < this.input.runs.length; i++) {
       const run = this.input.runs[i]!;
@@ -421,53 +483,182 @@ export class LiveDriver {
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     const dt = dtS ?? (this.lastFrame ? Math.min(0.1, (now - this.lastFrame) / 1000) : 0);
     this.lastFrame = now;
-    if (this.morph === this.morphTarget) return;
-    const step = dt / MORPH_S;
-    const d = this.morphTarget - this.morph;
-    this.morph = Math.abs(d) <= step ? this.morphTarget : this.morph + Math.sign(d) * step;
+    if (this.morph >= 1) return;
+    this.morph = Math.min(1, this.morph + dt / MORPH_S);
   }
 
   // ── geometry ───────────────────────────────────────────────────────────
 
-  /** Both lane layouts, every frame, regardless of mode.
+  /** Every layout, every frame, regardless of mode.
    *
-   *  A mark's `y` is the interpolation of its position in each. Holding only
-   *  the current layout would force the morph to be a cross-fade, which asserts
-   *  that these are two pictures rather than one regrouped. */
+   *  A mark's `y` is the interpolation of its position in the two the morph is
+   *  between. Holding only the current layout would force the morph to be a
+   *  cross-fade, which asserts that these are separate pictures rather than one
+   *  regrouped. */
   private geometry(): Geometry {
     const avail = Math.max(1, this.h - AXIS_H - RAIL_H);
     const nRuns = Math.max(1, this.input.runs.length);
     return {
+      from: this.modeFrom,
+      to: this.modeTo,
       t: this.morph,
-      scoreH: clamp(avail / SCORE_LANES.length, LANE_MIN, LANE_MAX),
-      fleetH: clamp(avail / nRuns, LANE_MIN, LANE_MAX),
-      nRuns,
+      score: { h: clamp(avail / SCORE_LANES.length, LANE_MIN, LANE_MAX), n: SCORE_LANES.length },
+      fleet: { h: clamp(avail / nRuns, LANE_MIN, LANE_MAX), n: nRuns },
+      struct: this.structure(avail),
     };
   }
 
-  private scoreRowY(geo: Geometry, lane: ScoreLane): number {
-    return AXIS_H + SCORE_LANES.indexOf(lane) * geo.scoreH;
+  /** Structure mode's rows: one band per run, then the calls that ran inside
+   *  it, one row per depth per concurrent slot.
+   *
+   *  **Depth is only ever the reported chain.** `parent_span_id` arrives from
+   *  Python and is null in every run captured so far, which means "the agent
+   *  did not say", not "top level" — so a span whose parent we never saw is
+   *  placed one level inside the run and nowhere else. Nothing here infers
+   *  nesting from adjacency, from tool names, or from a call happening to sit
+   *  inside another's interval. A run whose calls all land on one row is
+   *  reporting a fact about the adapter, and inventing a tree there would bury
+   *  exactly the finding this subsystem exists to surface.
+   *
+   *  Within a depth, spans that overlap in time are packed into as many
+   *  sub-rows as the overlap demands. That is not a hierarchy claim — two
+   *  clocks that overlap is a measurement — and it is why a second sub-row
+   *  appearing *is* the concurrency, drawn. Rows are recomputed each frame
+   *  from an input in stable order, so the assignment does not jitter. */
+  private structure(avail: number): StructRows {
+    const span = new Map<string, number>();
+    const root = new Map<string, number>();
+    const now = this.now();
+    let row = 0;
+    let maxDepth = 1;
+
+    for (const run of this.input.runs) {
+      root.set(run.runId, row++);
+      const closed = run.view?.spans ?? [];
+      const byId = new Map<string, SpanRecord>();
+      for (const s of closed) byId.set(s.span_id, s);
+
+      const depth = new Map<string, number>();
+      const depthOf = (id: string, guard: number): number => {
+        const seen = depth.get(id);
+        if (seen != null) return seen;
+        const p = byId.get(id)?.parent_span_id;
+        // A parent we never received is not a parent. Guard against a cycle
+        // too: a malformed chain must flatten, never hang the frame.
+        const d = !p || !byId.has(p) || guard > 16 ? 1 : depthOf(p, guard + 1) + 1;
+        depth.set(id, d);
+        return d;
+      };
+
+      const items: { key: string; a: number; b: number; d: number }[] = [];
+      for (const s of closed) {
+        items.push({
+          key: s.span_id,
+          a: s.started_at,
+          b: s.ended_at ?? s.started_at,
+          d: depthOf(s.span_id, 0),
+        });
+      }
+      // An open span has no end, so it occupies its slot up to the live edge —
+      // which is where it is drawn to, and is the only interval it can be said
+      // to hold.
+      for (const s of run.openSpans) items.push({ key: s.spanId, a: s.startedAt, b: now, d: 1 });
+      items.sort((x, y) => x.a - y.a || x.d - y.d);
+
+      const ends = new Map<number, number[]>();
+      const slot = new Map<string, { d: number; r: number }>();
+      for (const it of items) {
+        const lane = ends.get(it.d) ?? [];
+        let r = lane.findIndex((e) => e <= it.a);
+        if (r < 0) {
+          r = lane.length;
+          lane.push(it.b);
+        } else {
+          lane[r] = it.b;
+        }
+        ends.set(it.d, lane);
+        slot.set(it.key, { d: it.d, r });
+      }
+
+      const depths = [...ends.keys()].sort((a, b) => a - b);
+      const base = new Map<number, number>();
+      for (const d of depths) {
+        base.set(d, row);
+        row += ends.get(d)!.length;
+        maxDepth = Math.max(maxDepth, d);
+      }
+      for (const [key, s] of slot) span.set(key, base.get(s.d)! + s.r);
+    }
+
+    const n = Math.max(1, row);
+    return { h: clamp(avail / n, LANE_MIN, LANE_MAX), n, span, root, maxDepth };
   }
 
-  private fleetRowY(geo: Geometry, runIdx: number): number {
-    return AXIS_H + runIdx * geo.fleetH;
+  private rows(geo: Geometry, mode: YMode): Rows {
+    return mode === "fleet" ? geo.fleet : mode === "structure" ? geo.struct : geo.score;
   }
 
-  /** Where a mark sits: its score row and its fleet row, interpolated. */
-  private laneY(geo: Geometry, lane: ScoreLane, runIdx: number): number {
-    const a = this.scoreRowY(geo, lane);
-    const b = this.fleetRowY(geo, runIdx);
+  /** A row index in one layout. `key` is a span id; a mark with no span of its
+   *  own falls back to its run's band, which is where it actually happened. */
+  private rowIndex(
+    geo: Geometry,
+    mode: YMode,
+    lane: ScoreLane,
+    runIdx: number,
+    runId: string,
+    key: string | null,
+  ): number {
+    if (mode === "fleet") return runIdx;
+    if (mode === "structure") {
+      const r = key != null ? geo.struct.span.get(key) : undefined;
+      return r ?? geo.struct.root.get(runId) ?? 0;
+    }
+    return SCORE_LANES.indexOf(lane);
+  }
+
+  private rowY(
+    geo: Geometry,
+    mode: YMode,
+    lane: ScoreLane,
+    runIdx: number,
+    runId: string,
+    key: string | null,
+  ): number {
+    return AXIS_H + this.rowIndex(geo, mode, lane, runIdx, runId, key) * this.rows(geo, mode).h;
+  }
+
+  /** Where a mark sits: its row in the layout the morph left, and its row in
+   *  the one it is heading to, interpolated. */
+  private laneY(
+    geo: Geometry,
+    lane: ScoreLane,
+    runIdx: number,
+    runId: string,
+    key: string | null,
+  ): number {
+    const a = this.rowY(geo, geo.from, lane, runIdx, runId, key);
+    const b = this.rowY(geo, geo.to, lane, runIdx, runId, key);
     return a + (b - a) * geo.t;
   }
 
   private laneH(geo: Geometry): number {
-    return geo.scoreH + (geo.fleetH - geo.scoreH) * geo.t;
+    const a = this.rows(geo, geo.from).h;
+    const b = this.rows(geo, geo.to).h;
+    return a + (b - a) * geo.t;
   }
 
   private railY(geo: Geometry): number {
-    const a = AXIS_H + SCORE_LANES.length * geo.scoreH;
-    const b = AXIS_H + geo.nRuns * geo.fleetH;
+    const f = this.rows(geo, geo.from);
+    const t = this.rows(geo, geo.to);
+    const a = AXIS_H + f.n * f.h;
+    const b = AXIS_H + t.n * t.h;
     return a + (b - a) * geo.t + 2;
+  }
+
+  /** How much of the picture each layout currently owns, for chrome that only
+   *  belongs to one of them. */
+  private weight(geo: Geometry, mode: YMode): number {
+    return (geo.from === mode ? 1 - geo.t : 0) + (geo.to === mode ? geo.t : 0);
   }
 
   // ── chrome ─────────────────────────────────────────────────────────────
@@ -523,35 +714,103 @@ export class LiveDriver {
    *  `verify` sliding down to become the row for `run_a6d2` would be the one
    *  outright lie in the picture — the marks are the same events regrouped, the
    *  names are not the same names. */
-  private drawLanes(ctx: CanvasRenderingContext2D, geo: Geometry): void {
+  private drawLanes(
+    ctx: CanvasRenderingContext2D,
+    geo: Geometry,
+    x: (t: number) => number,
+    edge: number,
+  ): void {
     ctx.save();
     ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.textBaseline = "middle";
 
-    if (geo.t < 1) {
-      const a = 1 - geo.t;
+    const wScore = this.weight(geo, "score");
+    if (wScore > 0) {
+      const h = geo.score.h;
       for (const lane of SCORE_LANES) {
-        const y = this.scoreRowY(geo, lane);
-        ctx.fillStyle = `rgba(255,255,255,${0.014 * a})`;
-        ctx.fillRect(GUTTER, y, this.w - GUTTER, geo.scoreH - 1);
-        ctx.fillStyle = laneInk(lane, 0.78 * a);
-        ctx.fillText(lane, 6, y + geo.scoreH / 2);
+        const y = AXIS_H + SCORE_LANES.indexOf(lane) * h;
+        ctx.fillStyle = `rgba(255,255,255,${0.014 * wScore})`;
+        ctx.fillRect(GUTTER, y, this.w - GUTTER, h - 1);
+        ctx.fillStyle = laneInk(lane, 0.78 * wScore);
+        ctx.fillText(lane, 6, y + h / 2);
       }
     }
 
-    if (geo.t > 0) {
+    const wFleet = this.weight(geo, "fleet");
+    if (wFleet > 0) {
+      const h = geo.fleet.h;
       for (let i = 0; i < this.input.runs.length; i++) {
         const run = this.input.runs[i]!;
-        const y = this.fleetRowY(geo, i);
-        ctx.fillStyle = `rgba(255,255,255,${0.014 * geo.t})`;
-        ctx.fillRect(GUTTER, y, this.w - GUTTER, geo.fleetH - 1);
+        const y = AXIS_H + i * h;
+        ctx.fillStyle = `rgba(255,255,255,${0.014 * wFleet})`;
+        ctx.fillRect(GUTTER, y, this.w - GUTTER, h - 1);
         // The row's name is inked by the run's state, so a fleet of rows shows
         // who is stalled without anyone reading a word of it.
-        ctx.fillStyle = hexA(stateInk(run.state), 0.85 * geo.t);
-        ctx.fillText(run.label.slice(0, 12), 6, y + geo.fleetH / 2);
+        ctx.fillStyle = hexA(stateInk(run.state), 0.85 * wFleet);
+        ctx.fillText(run.label.slice(0, 12), 6, y + h / 2);
       }
     }
+
+    const wStruct = this.weight(geo, "structure");
+    if (wStruct > 0) this.drawRunBands(ctx, geo, wStruct, x, edge);
     ctx.restore();
+  }
+
+  /** Structure mode's root row: the run's own wall interval, and how much of it
+   *  any call actually covered.
+   *
+   *  This is the flamegraph's root, and the part of it that stays *empty* is
+   *  the point. `time_decomposition` calls that remainder `outside_spans_s` —
+   *  the model thinking and the human reading, seconds the run spent with no
+   *  span over them. A root band drawn as solid-because-the-run-was-running
+   *  would hide the single most common shape in these captures: a run that is
+   *  mostly waiting. */
+  private drawRunBands(
+    ctx: CanvasRenderingContext2D,
+    geo: Geometry,
+    w: number,
+    x: (t: number) => number,
+    edge: number,
+  ): void {
+    const h = geo.struct.h;
+    for (const run of this.input.runs) {
+      const idx = geo.struct.root.get(run.runId);
+      if (idx == null) continue;
+      const y = AXIS_H + idx * h;
+      const v = run.view;
+      const a = v?.started_at ?? null;
+      const b = v?.ended_at ?? v?.last_event_at ?? null;
+      const ink = stateInk(run.state);
+
+      if (a != null && b != null && b >= a) {
+        const xa = Math.max(x(a), GUTTER);
+        const xb = Math.min(x(b), this.w);
+        if (xb > GUTTER) {
+          // The interval the run occupied, faint: nothing is claimed about it
+          // beyond "the run existed here".
+          ctx.fillStyle = hexA(ink, 0.1 * w);
+          ctx.fillRect(xa, y + 1, Math.max(1, xb - xa), h - 3);
+          // …and the parts a call covered, over it. What is left faint is the
+          // time no span accounts for.
+          ctx.fillStyle = hexA(ink, 0.3 * w);
+          for (const s of v?.spans ?? []) {
+            const e = s.ended_at;
+            if (e == null || s.synthetic_start || e <= s.started_at) continue;
+            const ca = Math.max(x(s.started_at), xa);
+            const cb = Math.min(x(e), xb);
+            if (cb > ca) ctx.fillRect(ca, y + 1, cb - ca, h - 3);
+          }
+          for (const s of run.openSpans) {
+            const ca = Math.max(x(s.startedAt), xa);
+            const cb = Math.min(x(edge), xb);
+            if (cb > ca) ctx.fillRect(ca, y + 1, cb - ca, h - 3);
+          }
+        }
+      }
+
+      ctx.fillStyle = hexA(ink, 0.85 * w);
+      ctx.fillText(run.label.slice(0, 12), 6, y + h / 2);
+    }
   }
 
   // ── marks ──────────────────────────────────────────────────────────────
@@ -569,7 +828,7 @@ export class LiveDriver {
     const action = (s.action as Action | null) ?? null;
     const end = s.ended_at ?? s.started_at;
     if (end < t0 || s.started_at > edge) return;
-    const y = this.laneY(geo, action ?? "unclassified", runIdx) + 2;
+    const y = this.laneY(geo, action ?? "unclassified", runIdx, run.runId, s.span_id) + 2;
     const barH = Math.max(3, this.laneH(geo) - 6);
     const fid = s.duration_fidelity;
     const ink = s.failed ? "#ff5c7a" : markInk(action, fid);
@@ -623,7 +882,7 @@ export class LiveDriver {
     edge: number,
   ): void {
     const lane: ScoreLane = s.reasoning ? "thinking" : (s.action ?? "unclassified");
-    const y = this.laneY(geo, lane, runIdx) + 2;
+    const y = this.laneY(geo, lane, runIdx, run.runId, s.spanId) + 2;
     const barH = Math.max(3, this.laneH(geo) - 6);
     const xa = Math.max(x(s.startedAt), GUTTER);
     const xb = Math.min(x(edge), this.w);

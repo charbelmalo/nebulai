@@ -135,6 +135,37 @@ lose in a render loop:
   by construction, and `0` is not a duration.
 - **Glow is rank-normalized, with a saturation floor.** Bloom implies
   magnitude; raw magnitude through a bloom curve is a lie with a nice finish.
+- **Depth is the reported chain, or it is nothing.** See §4.1.
+
+### 4.1 The tree we are not allowed to draw
+
+Structure mode (L3) puts containment on the y-axis, and containment is the one
+thing in this subsystem where the tempting inference is also the wrong one.
+
+`parent_span_id` reaches the viewer on every span — Python keeps it so
+`time_decomposition` can subtract a child's seconds from its parent instead of
+counting them twice. Measured against every run captured so far, it is **null
+everywhere**, and no two spans' clocks overlap either. Both facts are about the
+adapters, not about the agents: `claude.py` sets a parent only when a message's
+own parent maps to a tool span it already opened, which in practice is a
+subagent, and nothing else reports nesting at all.
+
+So a flamegraph over this data has nothing to stack, and there are two
+plausible-looking ways to manufacture something — infer a parent from one call
+falling inside another's interval, or read it off nesting-shaped tool names.
+Both would produce a picture with real depth in it, and both would be the
+viewer asserting a relationship the record does not contain. The mode does
+neither. A span whose parent we never received sits one level inside its run,
+the note on the card says so in as many words, and the day an adapter reports a
+chain the rows appear on their own.
+
+What the mode draws instead is the part that *is* measured. Each run gets its
+own band — its wall interval — with the intervals any call covered painted over
+it, so the pale remainder is `outside_spans_s`: the model thinking and the human
+reading, seconds no span accounts for. Rows below the band hold the calls, one
+row per reported depth and one more per genuine overlap, because two clocks
+overlapping is a measurement and deserves its own row without being called
+nesting.
 
 ## 5. Thoughts
 

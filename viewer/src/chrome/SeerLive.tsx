@@ -22,8 +22,20 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { RunView } from "../seer/client";
 import type { LiveModel } from "../seer/live";
-import { LiveDriver, type LiveHover, type LiveRun, type YMode } from "../scene/seer/LiveDriver";
+import {
+  LiveDriver,
+  Y_MODES,
+  type LiveHover,
+  type LiveRun,
+  type YMode,
+} from "../scene/seer/LiveDriver";
 import { ACTION_COLOR, FIDELITY_TEXTURE, NEUTRAL_INK, stateInk } from "../seer/encoding";
+
+const MODE_TITLE: Record<YMode, string> = {
+  score: "y = what kind of work",
+  fleet: "y = which run",
+  structure: "y = what ran inside what",
+};
 
 export function SeerLive(props: { views: RunView[]; live: LiveModel }) {
   const { views, live } = props;
@@ -114,24 +126,18 @@ export function SeerLive(props: { views: RunView[]; live: LiveModel }) {
         <span class="seer-dim"> {windowS}s window · scroll to zoom, drag to look back</span>
         <span class="seer-live-transport">
           <span class="seer-modes" role="group" aria-label="what the vertical axis means">
-            <button
-              type="button"
-              class={`seer-btn${mode === "score" ? " is-on" : ""}`}
-              aria-pressed={mode === "score"}
-              onClick={() => pick("score")}
-              title="y = what kind of work"
-            >
-              score
-            </button>
-            <button
-              type="button"
-              class={`seer-btn${mode === "fleet" ? " is-on" : ""}`}
-              aria-pressed={mode === "fleet"}
-              onClick={() => pick("fleet")}
-              title="y = which run"
-            >
-              fleet
-            </button>
+            {Y_MODES.map((m) => (
+              <button
+                key={m}
+                type="button"
+                class={`seer-btn${mode === m ? " is-on" : ""}`}
+                aria-pressed={mode === m}
+                onClick={() => pick(m)}
+                title={MODE_TITLE[m]}
+              >
+                {m}
+              </button>
+            ))}
           </span>
           <button type="button" class="seer-btn" onClick={() => driverRef.current?.fitAll()}>
             fit
@@ -164,8 +170,9 @@ export function SeerLive(props: { views: RunView[]; live: LiveModel }) {
         end to draw yet. A hollow diamond is a call that finished without a
         clock — reconciled history has no per-item timing, and a bar of any
         length there would be a duration we never measured. Switching the axis
-        moves the same marks rather than redrawing them: score and fleet are one
-        set of events grouped two ways.
+        moves the same marks rather than redrawing them: these are one set of
+        events grouped three ways.
+        {mode === "structure" && <StructureNote views={views} />}
         {dropped > 0 && (
           <>
             {" "}
@@ -214,7 +221,62 @@ function LiveReadout(props: { hover: LiveHover; showRun: boolean }) {
  *  fleet mode the rows are runs and the row *names* are inked by state, so the
  *  legend that matters is which state is which colour. The hues never change
  *  meaning — only which of them the reader currently needs spelled out. */
+/** What a flat structure means, said out loud.
+ *
+ *  Depth comes from `parent_span_id` and from nothing else. That field is on
+ *  the wire and is null in every capture so far, so structure mode almost
+ *  always draws one row of work under each run — and a reader who is not told
+ *  why will read that as "this agent did nothing nested" rather than "no
+ *  adapter reported nesting". The check below is a presence test on a field,
+ *  not a recomputation of a server figure: it asks whether the record contains
+ *  the relationship at all, which is a question about capture. */
+function StructureNote(props: { views: RunView[] }) {
+  const nested = props.views.some((v) => v.spans?.some((s) => s.parent_span_id));
+  if (nested) {
+    return (
+      <>
+        {" "}
+        Depth is the nesting the agent reported, never nesting we guessed from
+        one call sitting inside another's interval. Two rows at the same depth
+        mean two calls whose clocks overlapped.
+      </>
+    );
+  }
+  return (
+    <>
+      {" "}
+      <span class="seer-warn">
+        No nesting was reported for these runs, so every call sits one level
+        inside its run.
+      </span>{" "}
+      That is a fact about the capture, not about the agent — depth comes only
+      from <code>parent_span_id</code>, and guessing it from one call falling
+      inside another's interval would manufacture the tree the adapter declined
+      to report. The pale band on each run's own row is its wall time; the part
+      no call covered is the time the record does not account for.
+    </>
+  );
+}
+
 function LiveLegend(props: { views: RunView[]; mode: YMode }) {
+  if (props.mode === "structure") {
+    const seen = new Map<string, string>();
+    for (const v of props.views) seen.set(v.state, v.state.replace(/_/g, " "));
+    return (
+      <div class="seer-live-legend">
+        {[...seen.entries()].map(([state, label]) => (
+          <span key={state}>
+            <i style={{ background: stateInk(state) }} />
+            {label}
+          </span>
+        ))}
+        <span class="seer-dim">
+          each run's own row is its wall time; rows below it are what ran inside
+          it, one per reported depth and per overlap
+        </span>
+      </div>
+    );
+  }
   if (props.mode === "fleet") {
     const seen = new Map<string, string>();
     for (const v of props.views) seen.set(v.state, v.state.replace(/_/g, " "));

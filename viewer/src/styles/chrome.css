@@ -5245,7 +5245,9 @@ body.page-seer #stage {
   display: flex;
 }
 
-.seer-modes .seer-btn:first-child {
+/* one segmented control, not three buttons: every pill but the last drops its
+   right border so the group reads as a single choice */
+.seer-modes .seer-btn:not(:last-child) {
   border-right-width: 0;
 }
 
