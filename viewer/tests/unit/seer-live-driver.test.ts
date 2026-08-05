@@ -1,4 +1,4 @@
-/** ScoreDriver — the drawing rules that are claims about the data.
+/** LiveDriver — the drawing rules that are claims about the data.
  *
  *  Most of what a chart does is taste and cannot be tested. Three things here
  *  are not taste, and this file pins them:
@@ -14,8 +14,8 @@
  */
 
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { ScoreDriver, capFor, hexA, niceStep } from "../../src/scene/seer/ScoreDriver";
-import type { ScoreInput } from "../../src/scene/seer/ScoreDriver";
+import { LiveDriver, capFor, hexA, niceStep } from "../../src/scene/seer/LiveDriver";
+import type { LiveInput, LiveRun } from "../../src/scene/seer/LiveDriver";
 import { EFFECT_CAP } from "../../src/seer/encoding";
 import type { SpanRecord } from "../../src/seer/client";
 import type { Mark, OpenSpan } from "../../src/seer/live";
@@ -95,9 +95,9 @@ function stubCanvas(): { canvas: HTMLCanvasElement; calls: Call[] } {
 
 /** Mounts a driver without starting its rAF loop, so a test draws exactly one
  *  frame and nothing races it. */
-function mount(input: ScoreInput): { d: ScoreDriver; calls: Call[] } {
+function mount(input: LiveInput): { d: LiveDriver; calls: Call[] } {
   const { canvas, calls } = stubCanvas();
-  const d = new ScoreDriver();
+  const d = new LiveDriver();
   d.init(canvas);
   d.resize(800, 240, 1);
   d.setSource(() => input);
@@ -123,12 +123,19 @@ function span(over: Partial<SpanRecord> = {}): SpanRecord {
   };
 }
 
-function inputWith(spans: SpanRecord[], open: OpenSpan[] = [], marks: Mark[] = []): ScoreInput {
+function run(id: string, spans: SpanRecord[], open: OpenSpan[] = [], marks: Mark[] = []): LiveRun {
   return {
-    view: { run_id: "r", spans } as unknown as ScoreInput["view"],
+    runId: id,
+    label: id,
+    state: "completed",
+    view: { run_id: id, spans } as unknown as LiveRun["view"],
     openSpans: open,
     marks,
   };
+}
+
+function inputWith(spans: SpanRecord[], open: OpenSpan[] = [], marks: Mark[] = []): LiveInput {
+  return { runs: [run("r", spans, open, marks)] };
 }
 
 /** Every rectangle wide enough to read as a duration. Caps are narrower than
@@ -147,6 +154,10 @@ function bars(calls: Call[]): Call[] {
 function laneRows(calls: Call[]): Call[] {
   return calls.filter((c) => c.op === "fillRect" && c.args[2]! >= LANE_ROW_W && c.args[3]! > 10);
 }
+
+/** Half a morph, in seconds. Mirrors MORPH_S in the driver; a test that read
+ *  the constant could not catch it changing to something unwatchable. */
+const MORPH_HALF = 0.28;
 
 // ── the rules ────────────────────────────────────────────────────────────────
 
@@ -311,5 +322,128 @@ describe("hexA", () => {
   it("carries a palette hex into a canvas alpha colour", () => {
     expect(hexA("#62d9c0", 0.5)).toBe("rgba(98,217,192,0.5)");
     expect(hexA("#000000", 1)).toBe("rgba(0,0,0,1)");
+  });
+});
+
+// ── the morph ────────────────────────────────────────────────────────────────
+
+/** Two runs, each doing one `edit` at the same moment. In score mode both bars
+ *  share the `edit` row; in fleet mode they are on rows of their own. Nothing
+ *  else about them differs, so any y difference is the axis and only the axis. */
+function twoRuns(): LiveInput {
+  const s = () => [span({ started_at: 1000, ended_at: 1004, action: "edit" })];
+  return { runs: [run("a", s()), run("b", s())] };
+}
+
+function barYs(calls: Call[]): number[] {
+  return bars(calls).map((c) => c.args[1]!).sort((x, y) => x - y);
+}
+
+describe("switching the axis moves the marks", () => {
+  it("draws the same number of bars at every point in the morph", () => {
+    // The whole claim of the morph: these are one set of events regrouped. A
+    // count that changed on the way across would mean it is really two
+    // pictures being cross-faded, which asserts the opposite.
+    const { d, calls } = mount(twoRuns());
+    d.setFollow(false);
+    (d as unknown as { edge: number }).edge = 1010;
+
+    const counts: number[] = [];
+    d.draw(0);
+    counts.push(bars(calls).length);
+    d.setMode("fleet");
+    for (const dt of [0.1, 0.2, 0.2, 0.2]) {
+      calls.length = 0;
+      d.draw(dt);
+      counts.push(bars(calls).length);
+    }
+    expect(counts).toEqual([2, 2, 2, 2, 2]);
+    expect(d.morphT).toBe(1);
+  });
+
+  it("stacks two runs' identical work on one row in score mode", () => {
+    const { d, calls } = mount(twoRuns());
+    d.setFollow(false);
+    (d as unknown as { edge: number }).edge = 1010;
+    d.draw(0);
+    const ys = barYs(calls);
+    // Same action, same lane. The run they came from is invisible here, which
+    // is exactly what the fleet axis exists to reveal.
+    expect(ys[0]).toBe(ys[1]);
+  });
+
+  it("separates them onto their own rows in fleet mode", () => {
+    const { d, calls } = mount(twoRuns());
+    d.setFollow(false);
+    (d as unknown as { edge: number }).edge = 1010;
+    d.setMode("fleet");
+    d.draw(1);
+    expect(d.morphT).toBe(1);
+    const ys = barYs(calls);
+    expect(ys[1]! - ys[0]!).toBeGreaterThan(5);
+  });
+
+  it("puts a mark strictly between its two rows part-way across", () => {
+    const { d, calls } = mount(twoRuns());
+    d.setFollow(false);
+    (d as unknown as { edge: number }).edge = 1010;
+    d.draw(0);
+    const at0 = barYs(calls);
+    calls.length = 0;
+    d.setMode("fleet");
+    d.draw(1);
+    const at1 = barYs(calls);
+    calls.length = 0;
+    d.setMode("score");
+    d.draw(MORPH_HALF);
+    const mid = barYs(calls);
+    // Travelling, not teleporting: every bar sits strictly between the row it
+    // left and the row it is heading for. Direction is not asserted — the
+    // score rows happen to sit below the fleet rows here, and pinning that
+    // would be a test of the lane order rather than of the morph.
+    for (let i = 0; i < mid.length; i++) {
+      const lo = Math.min(at0[i]!, at1[i]!);
+      const hi = Math.max(at0[i]!, at1[i]!);
+      expect(mid[i], `bar ${i}`).toBeGreaterThan(lo);
+      expect(mid[i], `bar ${i}`).toBeLessThan(hi);
+    }
+    expect(d.morphT).toBeGreaterThan(0);
+    expect(d.morphT).toBeLessThan(1);
+  });
+
+  it("skips the morph entirely under reduced motion", () => {
+    // Someone who asked for no motion is not helped by a slower version of the
+    // thing they turned off.
+    const { d } = mount(twoRuns());
+    d.setReducedMotion(true);
+    d.setMode("fleet");
+    expect(d.morphT).toBe(1);
+    d.setMode("score");
+    expect(d.morphT).toBe(0);
+  });
+});
+
+describe("fitAll", () => {
+  it("frames every run on the surface and leaves follow mode", () => {
+    const input: LiveInput = {
+      runs: [
+        run("a", [span({ started_at: 1000, ended_at: 1004 })]),
+        run("b", [span({ started_at: 1200, ended_at: 1260 })]),
+      ],
+    };
+    const { d } = mount(input);
+    d.fitAll();
+    // Several runs captured at different times have no common window, and
+    // following the live edge would show an empty chart when none is live.
+    expect(d.isFollowing).toBe(false);
+    expect(d.windowS).toBeGreaterThanOrEqual(260);
+  });
+
+  it("does nothing when there is nothing to frame", () => {
+    const { d } = mount({ runs: [] });
+    const before = d.windowS;
+    d.fitAll();
+    expect(d.windowS).toBe(before);
+    expect(d.isFollowing).toBe(true);
   });
 });

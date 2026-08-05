@@ -1,11 +1,18 @@
-/** ScoreDriver — the run as a score: time across, action down.
+/** LiveDriver — one surface, several meanings of `y`.
  *
- *  The first of the live view's projections. Its geometry is `x = time,
- *  y = action lane`, which is also the geometry the fleet strip and the span
- *  tree use with a different `y` — so the morph between them (L2, L3) is a
- *  change of one axis, not a change of view. Everything it draws it draws
- *  through `seer/encoding.ts`, so a green bar here means what a green particle
- *  means in the field.
+ *  The live view is not a set of charts. It is one event stream drawn several
+ *  ways, and the ways that share a time axis share this driver: **x is always
+ *  time**, and the mode decides what `y` means.
+ *
+ *    score      y = action lane     what kind of work, over time
+ *    fleet      y = run             who is doing it, over time
+ *
+ *  Switching between them is a *morph*, not a redraw. Every mark keeps its
+ *  identity and travels from its old row to its new one, because the point
+ *  being made is that these are the same events regrouped — a cross-fade
+ *  between two pictures would say the opposite. Only the lane chrome
+ *  cross-fades, because a label is a name rather than a datum, and a name
+ *  sliding to a row it does not belong to would be the one lie in the picture.
  *
  *  ## Where each bar comes from, and why it matters
  *
@@ -42,20 +49,33 @@ import {
   NEUTRAL_INK,
   isProvisional,
   markInk,
+  stateInk,
   type EffectCap,
   type Texture,
 } from "../../seer/encoding";
 
-export interface ScoreInput {
-  /** Python's record. Null before the first fetch, which is honest: no bars. */
+/** One run's contribution to the surface. `view` is Python's snapshot and may
+ *  be null before the first fetch, which is honest: no bars yet. */
+export interface LiveRun {
+  runId: string;
+  label: string;
+  state: string | null;
   view: RunView | null;
   openSpans: readonly OpenSpan[];
   marks: readonly Mark[];
 }
 
+export interface LiveInput {
+  runs: readonly LiveRun[];
+}
+
+export type YMode = "score" | "fleet";
+
 /** What sits under the cursor. `provisional` is carried so the readout can say
  *  "still open" or "not timed" instead of printing a length. */
-export interface ScoreHover {
+export interface LiveHover {
+  runId: string;
+  runLabel: string;
   label: string;
   action: Action | null;
   detail: string | null;
@@ -68,9 +88,9 @@ export interface ScoreHover {
   y: number;
 }
 
-const EMPTY_INPUT: ScoreInput = { view: null, openSpans: [], marks: [] };
+const EMPTY_INPUT: LiveInput = { runs: [] };
 
-const GUTTER = 78;
+const GUTTER = 82;
 const AXIS_H = 15;
 const RAIL_H = 9;
 const LANE_MIN = 11;
@@ -80,12 +100,15 @@ const MAX_WINDOW_S = 3600;
 /** Bars thinner than this are still drawn — a 3ms tool call happened, and a run
  *  made of hundreds of them should look busy rather than empty. */
 const MIN_BAR_PX = 2;
+/** Seconds for a full mode morph. Long enough that the eye can follow a mark
+ *  from one row to another, which is the entire argument the morph is making. */
+const MORPH_S = 0.55;
 
-type LaneKey = Action | "thinking" | "unclassified";
+type ScoreLane = Action | "thinking" | "unclassified";
 
-/** Lane order: thinking on top, then the contract's own action order — which
- *  roughly follows a healthy run's path, so a trajectory reads top-to-bottom —
- *  and `unclassified` last.
+/** Score-mode lane order: thinking on top, then the contract's own action order
+ *  — which roughly follows a healthy run's path, so a trajectory reads
+ *  top-to-bottom — and `unclassified` last.
  *
  *  That last lane is not a rounding error. Work the adapter declined to
  *  classify has to land somewhere it can be counted by eye; folding it into a
@@ -93,20 +116,29 @@ type LaneKey = Action | "thinking" | "unclassified";
  *  make, and dropping it would make an adapter that classifies nothing look
  *  like an agent that did nothing. A run with a fat `unclassified` lane is
  *  telling you about the adapter, and that is worth seeing. */
-const LANES: LaneKey[] = ["thinking", ...ACTIONS, "unclassified"];
+export const SCORE_LANES: ScoreLane[] = ["thinking", ...ACTIONS, "unclassified"];
 
 interface HitRect {
   x0: number;
   x1: number;
   y0: number;
   y1: number;
-  hover: Omit<ScoreHover, "x" | "y">;
+  hover: Omit<LiveHover, "x" | "y">;
 }
 
-export class ScoreDriver {
+interface Geometry {
+  /** 0 = score, 1 = fleet. */
+  t: number;
+  scoreH: number;
+  fleetH: number;
+  nRuns: number;
+}
+
+export class LiveDriver {
   private canvas: HTMLCanvasElement | null = null;
   private ctx: CanvasRenderingContext2D | null = null;
   private raf = 0;
+  private lastFrame = 0;
   private w = 0;
   private h = 0;
   private dpr = 1;
@@ -118,11 +150,14 @@ export class ScoreDriver {
    *  make the page the slowest thing watching the agent — the same reason
    *  `markDirty` coalesces its refetch. The chart already redraws every frame,
    *  so reading the model there costs nothing and is never stale. */
-  private source: () => ScoreInput = () => EMPTY_INPUT;
-  private input: ScoreInput = EMPTY_INPUT;
+  private source: () => LiveInput = () => EMPTY_INPUT;
+  private input: LiveInput = EMPTY_INPUT;
   private hits: HitRect[] = [];
   private cursor: { x: number; y: number } | null = null;
   private reducedMotion = false;
+
+  private morph = 0;
+  private morphTarget = 0;
 
   /** Seconds visible across the canvas. */
   windowS = 90;
@@ -131,7 +166,7 @@ export class ScoreDriver {
   private edge = 0;
   private following = true;
 
-  onHover?: (h: ScoreHover | null) => void;
+  onHover?: (h: LiveHover | null) => void;
   onFollowChange?: (following: boolean) => void;
   onWindowChange?: (windowS: number) => void;
 
@@ -145,12 +180,29 @@ export class ScoreDriver {
     this.loop();
   }
 
-  setSource(source: () => ScoreInput): void {
+  setSource(source: () => LiveInput): void {
     this.source = source;
   }
 
   setReducedMotion(on: boolean): void {
     this.reducedMotion = on;
+  }
+
+  /** Switch what `y` means. Under reduced motion the morph is skipped rather
+   *  than slowed: someone who has asked for no motion is not helped by a slow
+   *  version of the thing they turned off. */
+  setMode(mode: YMode): void {
+    this.morphTarget = mode === "fleet" ? 1 : 0;
+    if (this.reducedMotion) this.morph = this.morphTarget;
+  }
+
+  get mode(): YMode {
+    return this.morphTarget === 1 ? "fleet" : "score";
+  }
+
+  /** How far through the morph we are. Exposed for tests and verification. */
+  get morphT(): number {
+    return this.morph;
   }
 
   resize(width: number, height: number, dpr: number): void {
@@ -208,6 +260,40 @@ export class ScoreDriver {
     this.edge = newEdge;
   }
 
+  /** Frame the window on everything currently on the surface.
+   *
+   *  The control that makes fleet mode usable at all: several runs captured at
+   *  different times have no common window, and "follow the live edge" shows an
+   *  empty chart when none of them is live. */
+  fitAll(): void {
+    // Pulls the source rather than trusting `this.input`, which is only
+    // refreshed by `draw()`. A fit issued before the first frame — the obvious
+    // way to open on an old run — would otherwise silently do nothing.
+    this.input = this.source();
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const r of this.input.runs) {
+      for (const s of r.view?.spans ?? []) {
+        lo = Math.min(lo, s.started_at);
+        hi = Math.max(hi, s.ended_at ?? s.started_at);
+      }
+      for (const s of r.openSpans) {
+        lo = Math.min(lo, s.startedAt);
+        hi = Math.max(hi, this.now());
+      }
+      for (const m of r.marks) {
+        lo = Math.min(lo, m.ts);
+        hi = Math.max(hi, m.ts);
+      }
+    }
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return;
+    const pad = Math.max(1, (hi - lo) * 0.06);
+    this.windowS = clamp(hi - lo + pad * 2, MIN_WINDOW_S, MAX_WINDOW_S);
+    this.onWindowChange?.(this.windowS);
+    this.setFollow(false);
+    this.edge = hi + pad;
+  }
+
   dispose(): void {
     cancelAnimationFrame(this.raf);
     this.raf = 0;
@@ -233,13 +319,13 @@ export class ScoreDriver {
    *  ahead of the newest thing we have heard about, which is the property the
    *  drawing actually needs. */
   private now(): number {
-    const wall = Date.now() / 1000;
-    const newest = this.input.marks.length
-      ? this.input.marks[this.input.marks.length - 1]!.ts
-      : 0;
-    let open = 0;
-    for (const s of this.input.openSpans) open = Math.max(open, s.startedAt);
-    return Math.max(wall, newest, open);
+    let newest = Date.now() / 1000;
+    for (const r of this.input.runs) {
+      const m = r.marks;
+      if (m.length) newest = Math.max(newest, m[m.length - 1]!.ts);
+      for (const s of r.openSpans) newest = Math.max(newest, s.startedAt);
+    }
+    return newest;
   }
 
   private currentEdge(): number {
@@ -300,12 +386,13 @@ export class ScoreDriver {
     this.draw();
   };
 
-  /** Exposed for tests and for the frozen-frame verification path: draws one
-   *  frame synchronously without the rAF loop. */
-  draw(): void {
+  /** Draws one frame synchronously. `dtS` is passed in by tests so a morph can
+   *  be stepped deterministically; live frames measure it themselves. */
+  draw(dtS?: number): void {
     const ctx = this.ctx;
     if (!ctx || this.w <= 0 || this.h <= 0) return;
     this.input = this.source();
+    this.advanceMorph(dtS);
 
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.clearRect(0, 0, this.w, this.h);
@@ -314,27 +401,76 @@ export class ScoreDriver {
     const edge = this.currentEdge();
     const t0 = edge - this.windowS;
     const plot = Math.max(1, this.w - GUTTER);
-    const laneH = clamp(
-      (this.h - AXIS_H - RAIL_H) / LANES.length,
-      LANE_MIN,
-      LANE_MAX,
-    );
     const x = (t: number): number => GUTTER + ((t - t0) / this.windowS) * plot;
+    const geo = this.geometry();
 
     this.drawAxis(ctx, edge, t0, x, plot);
-    this.drawLanes(ctx, laneH);
+    this.drawLanes(ctx, geo);
 
-    const view = this.input.view;
-    if (view) {
-      for (const s of view.spans) this.drawClosedSpan(ctx, s, x, laneH, t0, edge);
+    for (let i = 0; i < this.input.runs.length; i++) {
+      const run = this.input.runs[i]!;
+      for (const s of run.view?.spans ?? []) {
+        this.drawClosedSpan(ctx, run, i, s, x, geo, t0, edge);
+      }
+      for (const s of run.openSpans) this.drawOpenSpan(ctx, run, i, s, x, geo, edge);
     }
-    for (const s of this.input.openSpans) this.drawOpenSpan(ctx, s, x, laneH, edge);
-    this.drawRail(ctx, x, laneH, t0, edge);
+    this.drawRail(ctx, x, geo, t0, edge);
   }
 
-  private laneY(key: LaneKey, laneH: number): number {
-    return AXIS_H + LANES.indexOf(key) * laneH;
+  private advanceMorph(dtS?: number): void {
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const dt = dtS ?? (this.lastFrame ? Math.min(0.1, (now - this.lastFrame) / 1000) : 0);
+    this.lastFrame = now;
+    if (this.morph === this.morphTarget) return;
+    const step = dt / MORPH_S;
+    const d = this.morphTarget - this.morph;
+    this.morph = Math.abs(d) <= step ? this.morphTarget : this.morph + Math.sign(d) * step;
   }
+
+  // ── geometry ───────────────────────────────────────────────────────────
+
+  /** Both lane layouts, every frame, regardless of mode.
+   *
+   *  A mark's `y` is the interpolation of its position in each. Holding only
+   *  the current layout would force the morph to be a cross-fade, which asserts
+   *  that these are two pictures rather than one regrouped. */
+  private geometry(): Geometry {
+    const avail = Math.max(1, this.h - AXIS_H - RAIL_H);
+    const nRuns = Math.max(1, this.input.runs.length);
+    return {
+      t: this.morph,
+      scoreH: clamp(avail / SCORE_LANES.length, LANE_MIN, LANE_MAX),
+      fleetH: clamp(avail / nRuns, LANE_MIN, LANE_MAX),
+      nRuns,
+    };
+  }
+
+  private scoreRowY(geo: Geometry, lane: ScoreLane): number {
+    return AXIS_H + SCORE_LANES.indexOf(lane) * geo.scoreH;
+  }
+
+  private fleetRowY(geo: Geometry, runIdx: number): number {
+    return AXIS_H + runIdx * geo.fleetH;
+  }
+
+  /** Where a mark sits: its score row and its fleet row, interpolated. */
+  private laneY(geo: Geometry, lane: ScoreLane, runIdx: number): number {
+    const a = this.scoreRowY(geo, lane);
+    const b = this.fleetRowY(geo, runIdx);
+    return a + (b - a) * geo.t;
+  }
+
+  private laneH(geo: Geometry): number {
+    return geo.scoreH + (geo.fleetH - geo.scoreH) * geo.t;
+  }
+
+  private railY(geo: Geometry): number {
+    const a = AXIS_H + SCORE_LANES.length * geo.scoreH;
+    const b = AXIS_H + geo.nRuns * geo.fleetH;
+    return a + (b - a) * geo.t + 2;
+  }
+
+  // ── chrome ─────────────────────────────────────────────────────────────
 
   private drawAxis(
     ctx: CanvasRenderingContext2D,
@@ -380,22 +516,40 @@ export class ScoreDriver {
     ctx.restore();
   }
 
-  private drawLanes(ctx: CanvasRenderingContext2D, laneH: number): void {
+  /** Lane backgrounds and names for both layouts, each faded by how far the
+   *  morph has travelled away from it.
+   *
+   *  The chrome stays *put* and fades; only marks travel. A row labelled
+   *  `verify` sliding down to become the row for `run_a6d2` would be the one
+   *  outright lie in the picture — the marks are the same events regrouped, the
+   *  names are not the same names. */
+  private drawLanes(ctx: CanvasRenderingContext2D, geo: Geometry): void {
     ctx.save();
     ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.textBaseline = "middle";
-    for (const key of LANES) {
-      const y = this.laneY(key, laneH);
-      const special = key === "thinking" || key === "unclassified";
-      ctx.fillStyle = special ? "rgba(255,255,255,0.022)" : "rgba(255,255,255,0.012)";
-      ctx.fillRect(GUTTER, y, this.w - GUTTER, laneH - 1);
-      ctx.fillStyle =
-        key === "thinking"
-          ? "rgba(176,166,240,0.72)"
-          : key === "unclassified"
-            ? hexA(NEUTRAL_INK, 0.85)
-            : hexA(ACTION_COLOR[key], 0.78);
-      ctx.fillText(key, 6, y + laneH / 2);
+
+    if (geo.t < 1) {
+      const a = 1 - geo.t;
+      for (const lane of SCORE_LANES) {
+        const y = this.scoreRowY(geo, lane);
+        ctx.fillStyle = `rgba(255,255,255,${0.014 * a})`;
+        ctx.fillRect(GUTTER, y, this.w - GUTTER, geo.scoreH - 1);
+        ctx.fillStyle = laneInk(lane, 0.78 * a);
+        ctx.fillText(lane, 6, y + geo.scoreH / 2);
+      }
+    }
+
+    if (geo.t > 0) {
+      for (let i = 0; i < this.input.runs.length; i++) {
+        const run = this.input.runs[i]!;
+        const y = this.fleetRowY(geo, i);
+        ctx.fillStyle = `rgba(255,255,255,${0.014 * geo.t})`;
+        ctx.fillRect(GUTTER, y, this.w - GUTTER, geo.fleetH - 1);
+        // The row's name is inked by the run's state, so a fleet of rows shows
+        // who is stalled without anyone reading a word of it.
+        ctx.fillStyle = hexA(stateInk(run.state), 0.85 * geo.t);
+        ctx.fillText(run.label.slice(0, 12), 6, y + geo.fleetH / 2);
+      }
     }
     ctx.restore();
   }
@@ -404,20 +558,24 @@ export class ScoreDriver {
 
   private drawClosedSpan(
     ctx: CanvasRenderingContext2D,
+    run: LiveRun,
+    runIdx: number,
     s: SpanRecord,
     x: (t: number) => number,
-    laneH: number,
+    geo: Geometry,
     t0: number,
     edge: number,
   ): void {
     const action = (s.action as Action | null) ?? null;
     const end = s.ended_at ?? s.started_at;
     if (end < t0 || s.started_at > edge) return;
-    const y = this.laneY(action ?? "unclassified", laneH) + 2;
-    const barH = Math.max(3, laneH - 6);
+    const y = this.laneY(geo, action ?? "unclassified", runIdx) + 2;
+    const barH = Math.max(3, this.laneH(geo) - 6);
     const fid = s.duration_fidelity;
     const ink = s.failed ? "#ff5c7a" : markInk(action, fid);
     const hover = {
+      runId: run.runId,
+      runLabel: run.label,
       label: s.detail || action || "unclassified",
       action,
       detail: s.detail,
@@ -457,14 +615,16 @@ export class ScoreDriver {
 
   private drawOpenSpan(
     ctx: CanvasRenderingContext2D,
+    run: LiveRun,
+    runIdx: number,
     s: OpenSpan,
     x: (t: number) => number,
-    laneH: number,
+    geo: Geometry,
     edge: number,
   ): void {
-    const key: LaneKey = s.reasoning ? "thinking" : (s.action ?? "unclassified");
-    const y = this.laneY(key, laneH) + 2;
-    const barH = Math.max(3, laneH - 6);
+    const lane: ScoreLane = s.reasoning ? "thinking" : (s.action ?? "unclassified");
+    const y = this.laneY(geo, lane, runIdx) + 2;
+    const barH = Math.max(3, this.laneH(geo) - 6);
     const xa = Math.max(x(s.startedAt), GUTTER);
     const xb = Math.min(x(edge), this.w);
     if (xb <= GUTTER) return;
@@ -483,12 +643,9 @@ export class ScoreDriver {
     // A pulse while output is actually streaming. Steady when it is not, so
     // "thinking quietly" and "producing" are distinguishable at a glance.
     const producing = s.producingUntil != null && edge - s.producingUntil < 1.5;
-    if (producing && !this.reducedMotion) {
-      const a = 0.45 + 0.35 * Math.sin(Date.now() / 140);
+    if (producing) {
+      const a = this.reducedMotion ? 0.8 : 0.45 + 0.35 * Math.sin(Date.now() / 140);
       ctx.fillStyle = hexA(ink, a);
-      ctx.fillRect(xb - 2, y - 1, 2, barH + 2);
-    } else if (producing) {
-      ctx.fillStyle = hexA(ink, 0.8);
       ctx.fillRect(xb - 2, y - 1, 2, barH + 2);
     }
 
@@ -498,6 +655,8 @@ export class ScoreDriver {
       y0: y,
       y1: y + barH,
       hover: {
+        runId: run.runId,
+        runLabel: run.label,
         label: s.reasoning ? "thinking" : (s.action ?? "tool"),
         action: s.action,
         detail: null,
@@ -519,18 +678,20 @@ export class ScoreDriver {
   private drawRail(
     ctx: CanvasRenderingContext2D,
     x: (t: number) => number,
-    laneH: number,
+    geo: Geometry,
     t0: number,
     edge: number,
   ): void {
-    const y = AXIS_H + LANES.length * laneH + 2;
+    const y = this.railY(geo);
     ctx.save();
     ctx.fillStyle = "rgba(255,255,255,0.03)";
     ctx.fillRect(GUTTER, y, this.w - GUTTER, RAIL_H - 3);
-    for (const m of this.input.marks) {
-      if (m.ts < t0 || m.ts > edge) continue;
-      ctx.fillStyle = hexA(markInk(m.action, m.fidelity), 0.62);
-      ctx.fillRect(Math.round(x(m.ts)), y, 1, RAIL_H - 3);
+    for (const run of this.input.runs) {
+      for (const m of run.marks) {
+        if (m.ts < t0 || m.ts > edge) continue;
+        ctx.fillStyle = hexA(markInk(m.action, m.fidelity), 0.62);
+        ctx.fillRect(Math.round(x(m.ts)), y, 1, RAIL_H - 3);
+      }
     }
     ctx.restore();
   }
@@ -648,6 +809,12 @@ export class ScoreDriver {
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+function laneInk(lane: ScoreLane, alpha: number): string {
+  if (lane === "thinking") return `rgba(176,166,240,${alpha})`;
+  if (lane === "unclassified") return hexA(NEUTRAL_INK, alpha);
+  return hexA(ACTION_COLOR[lane], alpha);
 }
 
 /** The cap for a span's effect. `null` and anything we do not recognise both

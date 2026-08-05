@@ -29,7 +29,7 @@ import { useEffect } from "preact/hooks";
 import { ACTIONS, isAbsent, type Action, type Measured, type SeerEvent } from "../seer/contract";
 import { ACTION_COLOR, stateInk } from "../seer/encoding";
 import { LiveModel } from "../seer/live";
-import { SeerScore } from "./SeerScore";
+import { SeerLive } from "./SeerLive";
 import {
   $health,
   $link,
@@ -257,6 +257,7 @@ export function SeerPage() {
       <div class="seer-shell">
         <SeerRail />
         <div class="seer-stage">
+          {views.length > 0 && <SeerLive views={views} live={liveModel} />}
           {$selected.value.length === 0 && <SeerEmpty />}
           {$selected.value.length === 1 && views[0] && <RunDetail view={views[0]} />}
           {$selected.value.length > 1 && <CompareDetail views={views} />}
@@ -714,7 +715,6 @@ function RunDetail(props: { view: RunView }) {
         </p>
       )}
 
-      <SeerScore key={v.run_id} view={v} live={liveModel} />
       <Trajectory view={v} />
       <div class="seer-grid">
         <StateBar view={v} />
