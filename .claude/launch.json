@@ -9,6 +9,12 @@
       "autoPort": true
     },
     {
+      "name": "seer-server",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "python", "-m", "nebulai", "seer", "serve", "--watch"],
+      "port": 8125
+    },
+    {
       "name": "viewer",
       "runtimeExecutable": "uv",
       "runtimeArgs": ["run", "python", "-m", "http.server", "8899", "--directory", "."],

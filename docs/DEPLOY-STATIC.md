@@ -71,7 +71,7 @@ app's own assets **and** the baked-data root resolve under the sub-path:
 cd viewer
 npm ci
 VITE_BASE=/psychiX/nebulai-maps/ \
-VITE_LIVE_URL= VITE_BUILD_URL= VITE_EMBED_HOST= \
+VITE_LIVE_URL= VITE_BUILD_URL= VITE_EMBED_HOST= VITE_SEER_URL= \
   npm run build                                  # -> viewer/dist/
 ```
 
@@ -85,11 +85,15 @@ Two groups of build-time env vars, both required for this deploy:
   `https://…/psychiX/nebulai-maps/out/…`. **If you omit `VITE_BASE`, the base
   defaults to `./` and data 404s under the sub-path.** The trailing slash is
   required.
-- **`VITE_LIVE_URL= VITE_BUILD_URL= VITE_EMBED_HOST=`** (empty) — blanks the
-  optional live/build/embed endpoints so the static site is bring-your-own-endpoint
-  and contacts no backend on its own (§8). Omitting these bakes in the local-dev
-  loopback defaults (`127.0.0.1:8123/8124`, `localhost:11434`) instead — **don't**,
-  for a public deploy.
+- **`VITE_LIVE_URL= VITE_BUILD_URL= VITE_EMBED_HOST= VITE_SEER_URL=`** (empty) —
+  blanks the optional live/build/embed/seer endpoints so the static site is
+  bring-your-own-endpoint and contacts no backend on its own (§8). Omitting these
+  bakes in the local-dev loopback defaults (`127.0.0.1:8123/8124/8125`,
+  `localhost:11434`) instead — **don't**, for a public deploy. `VITE_SEER_URL` is
+  the one most easily forgotten because it arrived last: left unset, every public
+  visitor's browser tries to reach a SessionSeer collector on *their own*
+  `127.0.0.1:8125`. Blanked, the Seer page says no server is configured, which is
+  the truth for a static visitor.
 
 Confirm the base after building:
 
@@ -230,11 +234,15 @@ This exact flow was verified on a deployment-shaped local server before handover
 
 ## 8. Live features = bring-your-own-endpoint (no backend required)
 
-Built with the empty `VITE_LIVE_URL/VITE_BUILD_URL/VITE_EMBED_HOST` (§3), the
-optional live features (the #25 "Live Nebula" driver, "+ your prompt" trace/SAE
-re-derive, on-demand build, and the model probe) ship with **blank default
+Built with the empty `VITE_LIVE_URL/VITE_BUILD_URL/VITE_EMBED_HOST/VITE_SEER_URL`
+(§3), the optional live features (the #25 "Live Nebula" driver, "+ your prompt"
+trace/SAE re-derive, on-demand build, the model probe, and the SessionSeer page)
+ship with **blank default
 endpoints**. They are inert until a visitor pastes their own OpenAI-compatible /
-nebulai server URL under **Settings → Model Probing**. The static site contacts
+nebulai server URL under **Settings → Model Probing**. SessionSeer is inert in a
+different way and deliberately so: it captures agent runs on the machine the
+collector runs on, so a static visitor has nothing for it to watch and the page
+says so rather than probing for one. The static site contacts
 **no** backend on its own — every map, chord, hierarchy, compare and Internals
 panel is served from the baked `out/` tree. You do **not** need to run any
 server-side process for the site to be fully functional as a map viewer.
