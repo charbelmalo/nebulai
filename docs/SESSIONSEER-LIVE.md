@@ -216,6 +216,65 @@ look different on purpose:
   says which mode it is in. It never renders an empty box that could be read
   as "the agent wasn't thinking".
 
+### 5.1 The third state the first two were swallowing
+
+Building L5 against real captures turned up a state the design had not
+allowed for: **the agent never carried the text at all**. Codex thread history
+records *that* the model reasoned and keeps none of what it said, so
+`--keep-reasoning` changes nothing for a reconciled run. Every one of the 135
+reasoning fragments in the longest captured run was arriving labelled
+`dropped_by_policy` with `chars: 0` — a decision nobody made, and a size of zero
+for text that was never in the record. That is the "missing must never render as
+`0`" rule failing one layer below the UI, where no amount of careful drawing
+could have recovered it.
+
+`reasoning_payload` now returns three answers rather than two, keyed on the
+difference between `None` and `""`:
+
+| what the agent gave us | fidelity | payload |
+|---|---|---|
+| text, and we asked to keep it | `native` | `text` |
+| text, and we declined | `dropped_by_policy` | `chars` |
+| no field at all | `missing` | `chars: null` |
+
+`""` is deliberately not the third case. An agent that emitted a reasoning item
+with no words told us something; an absent field did not.
+
+The rail draws the third in missing ink rather than policy ink, for the same
+reason the legend keeps those two swatches apart. Existing logs keep their old
+labels — the log is the record, and rewriting one to match a later opinion is
+the thing this subsystem exists not to do — so a run captured before this change
+still shows `0 characters dropped by policy` until it is re-imported.
+
+### 5.2 Why the rail reads the log back
+
+`LiveModel` holds only what it ingested over SSE, so a run that finished before
+the tab connected has no thoughts in it — the same trap the field hit in §4.2,
+where a historical run sat dark beside a live one and read as a run that did
+nothing. The rail therefore asks `/seer/run/<id>/events` for each selected run
+once and folds the reasoning events out of it.
+
+Two rules keep that from becoming a second model:
+
+- **Thoughts only.** Marks are the leading edge, bounded by a time window and
+  feeding the chart and the field. Pouring an hour of history into them would
+  either be trimmed away immediately or inflate `droppedMarks`, a figure that
+  means something else.
+- **Folded by identity, never by addition.** Codex re-emits one `item.reasoning`
+  as its text grows, so five events describe one thought; Claude emits a single
+  completed event per thinking block. Summing `chars` across a stream would
+  triple the first and leave the second correct — the delta rule's trap in a
+  different shape. A thought is keyed by its span (or by the first event's id
+  when there is no span) and the newest event *replaces* its content. That also
+  makes the fold order-insensitive, which is what lets a backfilled event land
+  after a live one without walking the thought backwards.
+
+A duration needs both ends observed. Claude reports a thinking block only once
+it is finished, so its start and end are the same instant and the rail prints
+`—` rather than `0.0s`. An open stream on a run that has since finished reads
+"no end" — the run ended before the stream was closed, which is a gap in the
+capture and not a thought that is still running.
+
 ## 6. Order of build
 
 | | | depends on |

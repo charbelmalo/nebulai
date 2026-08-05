@@ -30,6 +30,7 @@ import { ACTIONS, isAbsent, type Action, type Measured, type SeerEvent } from ".
 import { ACTION_COLOR, stateInk } from "../seer/encoding";
 import { LiveModel } from "../seer/live";
 import { SeerLive } from "./SeerLive";
+import { SeerThoughts } from "./SeerThoughts";
 import {
   $health,
   $link,
@@ -98,6 +99,11 @@ const $analyses = signal<Record<string, RunAnalyses>>({});
  *  that same object back untouched — the reducer owns every derived number,
  *  and a second fold on this side would drift from the first invisibly. */
 const liveModel = new LiveModel();
+
+// Debug handle, same pattern as `__seerLive`. The thought rail has four states
+// and a captured log only ever demonstrates one of them at a time; this is how
+// the other three get looked at without launching an agent to produce them.
+(window as unknown as { __seerModel?: LiveModel }).__seerModel = liveModel;
 
 const $selectedViews = computed(() =>
   $selected.value.map((id) => $views.value[id]).filter((v): v is RunView => !!v),
@@ -258,6 +264,7 @@ export function SeerPage() {
         <SeerRail />
         <div class="seer-stage">
           {views.length > 0 && <SeerLive views={views} live={liveModel} />}
+          {views.length > 0 && <SeerThoughts views={views} live={liveModel} />}
           {$selected.value.length === 0 && <SeerEmpty />}
           {$selected.value.length === 1 && views[0] && <RunDetail view={views[0]} />}
           {$selected.value.length > 1 && <CompareDetail views={views} />}

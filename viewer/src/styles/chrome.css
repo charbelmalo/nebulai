@@ -5357,6 +5357,118 @@ body.page-seer #stage {
   border: 1px dashed #5a5470;
 }
 
+/* thought rail ------------------------------------------------------------ */
+
+.seer-thoughts .seer-warn {
+  color: var(--warn);
+}
+
+.seer-thought-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 232px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.seer-thought {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 8px;
+  border-left: 2px solid var(--accent);
+}
+
+.seer-thought:nth-child(odd) {
+  background: var(--bg-pill);
+}
+
+/* the dropped state is drawn in policy ink and dashed, matching the legend
+   swatch: the absence is visibly *ours*, not the agent's */
+.seer-thought.is-policy {
+  border-left: 2px dashed #5a5470;
+}
+
+/* the agent never carried the text — missing ink, solid-but-hollow, the same
+   distinction the legend draws between `missing` and `policy` */
+.seer-thought.is-absent {
+  border-left: 2px solid #4a4e58;
+}
+
+.seer-thought-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font: 500 10px/1.5 var(--font-ui);
+  white-space: nowrap;
+}
+
+.seer-thought-meta strong {
+  font-weight: 600;
+}
+
+.seer-thought-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 108px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.8;
+}
+
+.seer-thought-run i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+
+/* an open stream is the only animated thing in the rail, and it animates
+   because it is the only thing that is still changing */
+.seer-thought-live {
+  color: var(--accent);
+  animation: seer-thought-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes seer-thought-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seer-thought-live {
+    animation: none;
+  }
+}
+
+.seer-thought-body {
+  font: 400 11px/1.55 var(--font-ui);
+  color: var(--text-dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.seer-thought-body.is-policy,
+.seer-thought-body.is-absent {
+  font-variant-numeric: tabular-nums;
+  font-style: italic;
+}
+
 /* trajectory ------------------------------------------------------------- */
 
 .seer-traj {
