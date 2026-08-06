@@ -228,6 +228,11 @@ heuristic | missing | dropped_by_policy`, and `missing` is never rendered as
 the build actually does, including where it departs from the design:
 [`docs/SESSIONSEER-HANDOVER.md`](docs/SESSIONSEER-HANDOVER.md).
 
+An audit of the viewer against a twelve-feature LLM-observability spec — what
+ships, what needs only a view, and what needs a pipeline first — plus the plan
+to lift the flat deck.gl charts onto the `three/webgpu` stack the Atlas already
+uses: [`docs/OBSERVABILITY-SURFACE.md`](docs/OBSERVABILITY-SURFACE.md).
+
 ## Honesty notes
 
 - **Plan C's geometry is the model's own** (embedding rows). For Plans A/B, laying points out by *label* embeddings shows the label-embedder's semantics, not the model's — the viewer will expose both projections (decoder-direction vs label space) as a toggle.
