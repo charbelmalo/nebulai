@@ -515,8 +515,17 @@ class CodexAppServerAdapter(BaseAdapter):
         ]
 
     def _reasoning(self, item, span_id, done, item_id) -> list[Event]:
-        parts = item.get("content") or item.get("summary") or []
-        text = "".join(c.get("text") or "" for c in parts if isinstance(c, dict))
+        # No content parts is not an empty thought — it is thread history,
+        # which records that the model reasoned and keeps none of what it said.
+        # Joining an absent list into `""` would report a zero-character
+        # reasoning fragment that we chose not to keep, and all three of those
+        # words would be wrong.
+        parts = item.get("content") or item.get("summary")
+        text = (
+            "".join(c.get("text") or "" for c in parts if isinstance(c, dict))
+            if parts is not None
+            else None
+        )
         payload, fid = self.reasoning_payload(text)
         return [
             self.event(

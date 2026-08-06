@@ -27,6 +27,10 @@
 import { computed, signal, useSignal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { ACTIONS, isAbsent, type Action, type Measured, type SeerEvent } from "../seer/contract";
+import { ACTION_COLOR, stateInk } from "../seer/encoding";
+import { LiveModel } from "../seer/live";
+import { SeerLive } from "./SeerLive";
+import { SeerThoughts } from "./SeerThoughts";
 import {
   $health,
   $link,
@@ -84,40 +88,34 @@ const $importNote = signal<string | null>(null);
  *  which snapshot it is showing and offers to recompute. */
 const $analyses = signal<Record<string, RunAnalyses>>({});
 
+/** The leading edge: what has happened since the last snapshot arrived.
+ *
+ *  Deliberately not a signal. It changes on every event and a busy agent lands
+ *  dozens a second; re-rendering the page that often is the thing `markDirty`
+ *  exists to avoid. The canvases that read it redraw every frame anyway and
+ *  pull from it there, so nothing is ever stale and nothing re-renders.
+ *
+ *  It holds no figures. `adopt` hands it the server's snapshot and it gives
+ *  that same object back untouched — the reducer owns every derived number,
+ *  and a second fold on this side would drift from the first invisibly. */
+const liveModel = new LiveModel();
+
+// Debug handle, same pattern as `__seerLive`. The thought rail has four states
+// and a captured log only ever demonstrates one of them at a time; this is how
+// the other three get looked at without launching an agent to produce them.
+(window as unknown as { __seerModel?: LiveModel }).__seerModel = liveModel;
+
 const $selectedViews = computed(() =>
   $selected.value.map((id) => $views.value[id]).filter((v): v is RunView => !!v),
 );
 
 const TAIL_MAX = 200;
 
-/** Colours for the 9-action taxonomy. Same family as the Sessions field so a
- *  green bar means "edit" on both pages. */
-const ACTION_COLOR: Record<Action, string> = {
-  inspect: "#5cc7ed",
-  search: "#62d9c0",
-  edit: "#7dde96",
-  execute: "#c782f0",
-  verify: "#f5bf5c",
-  vcs: "#b0a6f0",
-  delegate: "#f090c8",
-  interact: "#f07896",
-  report: "#969eb5",
-};
-
-const STATE_COLOR: Record<string, string> = {
-  starting: "#686c76",
-  idle: "#4a4e58",
-  model_running: "#5cc7ed",
-  tool_running: "#7dde96",
-  waiting_permission: "#f07896",
-  waiting_clarification: "#f5bf5c",
-  waiting_user: "#f5bf5c",
-  compacting: "#c782f0",
-  interrupted: "#f5b13d",
-  completed: "#3ecf8e",
-  failed: "#ff5c7a",
-  detached: "#686c76",
-};
+/** Colours come from `seer/encoding.ts`, which is the only place allowed to
+ *  decide what a hue means. This page and the live view draw the same run in
+ *  different geometries, and the moment they disagree about what green is, a
+ *  glance between them misleads. Same family as the Sessions field, so a green
+ *  bar means "edit" on all three. */
 
 // ── loading ──────────────────────────────────────────────────────────────────
 
@@ -136,6 +134,7 @@ async function loadView(runId: string): Promise<void> {
   try {
     const v = await fetchRun(runId);
     $views.value = { ...$views.value, [runId]: v };
+    liveModel.adopt(runId, v);
   } catch {
     /* a run that vanished stays out of $views; the rail row still shows */
   }
@@ -198,6 +197,7 @@ function forgetRun(runId: string): void {
   $views.value = drop($views.value);
   $tail.value = drop($tail.value);
   $analyses.value = drop($analyses.value);
+  liveModel.forget(runId);
   dirty.delete(runId);
   void reloadComparison();
 }
@@ -217,10 +217,14 @@ export function SeerPage() {
     void reloadRuns();
     const off = connectLive({
       onEvent: (e) => {
+        liveModel.ingest(e);
         pushTail(e);
         markDirty(e.run_id);
       },
       onRunFinished: (runId) => {
+        // Close the open spans before the refetch, so nothing is left growing
+        // on the Score while the snapshot is in flight.
+        liveModel.finish(runId);
         void loadView(runId);
         void reloadRuns();
         if ($selected.value.length > 1) void reloadComparison();
@@ -259,6 +263,8 @@ export function SeerPage() {
       <div class="seer-shell">
         <SeerRail />
         <div class="seer-stage">
+          {views.length > 0 && <SeerLive views={views} live={liveModel} />}
+          {views.length > 0 && <SeerThoughts views={views} live={liveModel} />}
           {$selected.value.length === 0 && <SeerEmpty />}
           {$selected.value.length === 1 && views[0] && <RunDetail view={views[0]} />}
           {$selected.value.length > 1 && <CompareDetail views={views} />}
@@ -618,7 +624,7 @@ function RunRow(props: { run: RunSummary; selected: boolean }) {
         aria-label={`${r.agent} run ${r.label || r.run_id}, ${state}${dur ? `, ${dur}` : ""}`}
         onClick={() => toggleSelected(r.run_id)}
       >
-        <span class="seer-run-dot" style={{ background: STATE_COLOR[state] ?? "#686c76" }} />
+        <span class="seer-run-dot" style={{ background: stateInk(state) }} />
         <span class="seer-run-main">
           <span class="seer-run-agent">
             {r.agent}
@@ -681,7 +687,7 @@ function RunDetail(props: { view: RunView }) {
             {v.agent} <span class="seer-dim">{v.agent_version}</span>
           </h2>
           <p class="seer-run-line tnum">
-            <span class="seer-state" style={{ color: STATE_COLOR[v.state] ?? "var(--text-dim)" }}>
+            <span class="seer-state" style={{ color: stateInk(v.state) }}>
               {v.state.replace(/_/g, " ")}
             </span>
             {v.overlays.map((o) => (
@@ -876,7 +882,7 @@ function StateBar(props: { view: RunView }) {
                   key={state}
                   style={{
                     width: `${(secs / total) * 100}%`,
-                    background: STATE_COLOR[state] ?? "#686c76",
+                    background: stateInk(state),
                   }}
                   title={`${stateLabel(state, observed)} — ${fmtSeconds(secs)}`}
                 />
@@ -889,7 +895,7 @@ function StateBar(props: { view: RunView }) {
                 <li key={state}>
                   <span
                     class="seer-swatch"
-                    style={{ background: STATE_COLOR[state] ?? "#686c76" }}
+                    style={{ background: stateInk(state) }}
                   />
                   <span>{stateLabel(state, observed)}</span>
                   <b>{fmtSeconds(secs)}</b>

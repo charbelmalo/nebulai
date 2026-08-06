@@ -61,6 +61,15 @@ export interface SpanRecord {
   effect: string | null;
   failed: boolean;
   detail: string | null;
+  /** The call this one ran inside, when the agent reported one.
+   *
+   *  Null is the overwhelmingly common case and it means "not reported",
+   *  never "top level" — the two are different claims and only the first is
+   *  one we can make. Python keeps it so `time_decomposition` can subtract a
+   *  child's seconds from its parent instead of counting them twice; the live
+   *  view's structure mode reads it for depth, and draws a flat picture when
+   *  it is absent rather than inventing a tree. */
+  parent_span_id: string | null;
 }
 
 export interface DataQuality {

@@ -228,6 +228,13 @@ heuristic | missing | dropped_by_policy`, and `missing` is never rendered as
 the build actually does, including where it departs from the design:
 [`docs/SESSIONSEER-HANDOVER.md`](docs/SESSIONSEER-HANDOVER.md).
 
+The Seer page also *watches* a run happen — one time axis, three meanings of
+`y`, a GPU field that carries no magnitude, and a thought rail with a state for
+every way reasoning can be absent. Set-up and how to read it:
+[`docs/SESSIONSEER-LIVE-SETUP.md`](docs/SESSIONSEER-LIVE-SETUP.md); the design,
+including the projection that was refused and why:
+[`docs/SESSIONSEER-LIVE.md`](docs/SESSIONSEER-LIVE.md).
+
 An audit of the viewer against a twelve-feature LLM-observability spec — what
 ships, what needs only a view, and what needs a pipeline first — plus the plan
 to lift the flat deck.gl charts onto the `three/webgpu` stack the Atlas already

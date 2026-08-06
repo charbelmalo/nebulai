@@ -145,6 +145,40 @@ def test_codex_reasoning_is_dropped_by_policy_not_missing():
     assert "text" not in r.payload
 
 
+def test_reasoning_absent_from_the_record_is_missing_not_dropped():
+    """The third state, which the first two used to swallow.
+
+    Codex thread history records *that* the model reasoned and keeps none of
+    what it said, so `--keep-reasoning` changes nothing there. Labelling those
+    fragments `dropped_by_policy` put them in the data-quality panel's "we
+    chose not to keep" column for a decision nobody made, and printed a size of
+    `0` for text that was never in the record.
+    """
+    for keep in (False, True):
+        a = mk(CodexExecAdapter, keep_reasoning=keep)
+        ev = a.feed(json.dumps({
+            "type": "item.completed",
+            "item": {"id": "r1", "type": "reasoning"},  # no `text` key at all
+        }))
+        (r,) = ev
+        assert r.source.fidelity is Fidelity.MISSING
+        assert r.payload["chars"] is None, "missing must not render as zero"
+        assert "text" not in r.payload
+
+
+def test_reasoning_emitted_with_no_words_is_still_a_thought():
+    """`""` is not the missing case. The agent told us something: it reasoned,
+    and the reasoning was empty. An absent field told us nothing."""
+    a = mk(CodexExecAdapter)
+    ev = a.feed(json.dumps({
+        "type": "item.completed",
+        "item": {"id": "r1", "type": "reasoning", "text": ""},
+    }))
+    (r,) = ev
+    assert r.source.fidelity is Fidelity.DROPPED_BY_POLICY
+    assert r.payload["chars"] == 0
+
+
 def test_codex_reasoning_is_kept_when_asked():
     a = mk(CodexExecAdapter, keep_reasoning=True)
     (r,) = a.feed(json.dumps({

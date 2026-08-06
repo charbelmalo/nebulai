@@ -205,15 +205,32 @@ class BaseAdapter:
     def reasoning_payload(self, text: str | None) -> tuple[dict[str, Any], Fidelity]:
         """Payload + fidelity for a reasoning fragment.
 
-        All three agents will hand us this text. Returning
-        `DROPPED_BY_POLICY` (not `MISSING`) is the whole point: a researcher
-        reading the data-quality panel must be able to tell "the agent never
-        told us" from "we chose not to keep it".
+        Three outcomes, and the whole value of this function is that they stay
+        three:
+
+        * `NATIVE` — we asked to keep the text and the agent gave us some.
+        * `DROPPED_BY_POLICY` — the agent gave us the text and *we* declined.
+        * `MISSING` — the agent never carried the text at all. Codex thread
+          history is the case that matters: it records that the model reasoned
+          and drops what it reasoned, so `--keep-reasoning` changes nothing
+          there and there is no size to report.
+
+        Collapsing the third into the second is not a rounding error. It puts
+        135 fragments in the data-quality panel's "we chose not to keep" column
+        for a reconciled run where nobody chose anything, and it prints a size
+        of `0` for text that was never in the record — the exact "missing must
+        not render as zero" failure, one layer earlier than the UI.
+
+        `""` is deliberately *not* the third case. An agent that emitted a
+        reasoning item with no words told us something; an absent field did
+        not.
         """
+        if text is None:
+            return {"chars": None, "text_retained": False}, Fidelity.MISSING
         if self.keep_reasoning:
-            return {"text": text or ""}, Fidelity.NATIVE
+            return {"text": text}, Fidelity.NATIVE
         return (
-            {"chars": len(text or ""), "text_retained": False},
+            {"chars": len(text), "text_retained": False},
             Fidelity.DROPPED_BY_POLICY,
         )
 

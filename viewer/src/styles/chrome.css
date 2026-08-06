@@ -5231,6 +5231,244 @@ body.page-seer #stage {
   align-items: start;
 }
 
+/* live surface ----------------------------------------------------------- */
+
+.seer-live-transport {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* the mode pills sit together: they are one choice, not three buttons */
+.seer-modes {
+  display: flex;
+}
+
+/* one segmented control, not three buttons: every pill but the last drops its
+   right border so the group reads as a single choice */
+.seer-modes .seer-btn:not(:last-child) {
+  border-right-width: 0;
+}
+
+.seer-live .seer-btn.is-on {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* the host is the measurement surface: the driver sizes itself from this box,
+   so the height here is the only place the lane count turns into pixels */
+.seer-live-host {
+  position: relative;
+  height: 232px;
+  border: 1px solid var(--hairline);
+  background: var(--bg-sink, rgba(0, 0, 0, 0.18));
+  cursor: crosshair;
+  overflow: hidden;
+}
+
+.seer-live-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* above the field, and the only one of the two that takes the pointer: the
+     chart owns hover and drag, the field is scenery */
+  position: relative;
+  z-index: 1;
+}
+
+/* the field sits underneath and is purely additive light, so it must never
+   intercept a pointer or contribute a background of its own */
+.seer-live-field {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+  transition: opacity 180ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seer-live-field {
+    transition: none;
+  }
+}
+
+/* positioned with `translate`, never `transform` — the card's entrance
+   animation owns `transform` and would pin this to the top-left corner */
+.seer-live-readout {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  max-width: 60%;
+  padding: 4px 8px;
+  font: 500 10px/1.4 var(--font-mono, ui-monospace, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: var(--bg-raise);
+  border: 1px solid var(--hairline-strong);
+  box-shadow: var(--shadow-card);
+}
+
+/* scoped the same way `.seer-observing .seer-warn` is — the class has no base
+   colour of its own, which is a wart, but widening it is not this change */
+.seer-live .seer-warn {
+  color: var(--warn);
+}
+
+.seer-live-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font: 500 9px/1 var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.seer-live-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.seer-live-legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 1px;
+}
+
+/* the two absences are drawn hollow here for the same reason they are drawn
+   hollow on the canvas: a filled swatch is a magnitude, and there is none */
+.seer-live-legend i.is-outline {
+  background: none;
+  border: 1px solid #4a4e58;
+}
+
+.seer-live-legend i.is-policy {
+  background: none;
+  border: 1px dashed #5a5470;
+}
+
+/* thought rail ------------------------------------------------------------ */
+
+.seer-thoughts .seer-warn {
+  color: var(--warn);
+}
+
+.seer-thought-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 232px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.seer-thought {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 8px;
+  border-left: 2px solid var(--accent);
+}
+
+.seer-thought:nth-child(odd) {
+  background: var(--bg-pill);
+}
+
+/* the dropped state is drawn in policy ink and dashed, matching the legend
+   swatch: the absence is visibly *ours*, not the agent's */
+.seer-thought.is-policy {
+  border-left: 2px dashed #5a5470;
+}
+
+/* the agent never carried the text — missing ink, solid-but-hollow, the same
+   distinction the legend draws between `missing` and `policy` */
+.seer-thought.is-absent {
+  border-left: 2px solid #4a4e58;
+}
+
+.seer-thought-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font: 500 10px/1.5 var(--font-ui);
+  white-space: nowrap;
+}
+
+.seer-thought-meta strong {
+  font-weight: 600;
+}
+
+.seer-thought-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 108px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.8;
+}
+
+.seer-thought-run i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+
+/* an open stream is the only animated thing in the rail, and it animates
+   because it is the only thing that is still changing */
+.seer-thought-live {
+  color: var(--accent);
+  animation: seer-thought-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes seer-thought-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seer-thought-live {
+    animation: none;
+  }
+}
+
+.seer-thought-body {
+  font: 400 11px/1.55 var(--font-ui);
+  color: var(--text-dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.seer-thought-body.is-policy,
+.seer-thought-body.is-absent {
+  font-variant-numeric: tabular-nums;
+  font-style: italic;
+}
+
 /* trajectory ------------------------------------------------------------- */
 
 .seer-traj {
