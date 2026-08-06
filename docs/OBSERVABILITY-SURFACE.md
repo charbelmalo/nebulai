@@ -153,10 +153,10 @@ first or you will hand-roll it five times.
    not currently produce. Reducer work plus a stacked view — real, but bounded.
 
 10. **Session agent graph (#2).** Turn the turn-cloud into a path: node→edge
-    layout, numbered steps, per-step timing. **Merge
-    `claude/session-seer-realtime-viz-5e026a` first** — its `LiveDriver`
-    `structure` y-mode ("what ran inside what") is most of the layout problem
-    already solved, and duplicating it would be waste.
+    layout, numbered steps, per-step timing. **Start from
+    `scene/seer/LiveDriver.ts`** — its `structure` y-mode ("what ran inside
+    what") is most of the layout problem already solved, and re-deriving it
+    would be waste. Merged into `main` at `04f72ea`.
 
 ### Tier 3 — complex integrations
 
@@ -211,10 +211,6 @@ orthographic reading is the honest one.
 
 ## 6. What was not done
 
-- **`claude/session-seer-realtime-viz-5e026a` is not merged.** 7 commits,
-  ~5,200 lines: `LiveDriver.ts` (1,257), `LiveField.ts`, `SeerLive.tsx`,
-  `SeerThoughts.tsx`, `seer/encoding.ts`, `seer/live.ts`, plus 1,509 lines of
-  tests. It is the only branch not in `main` and it blocks item 10.
 - No implementation from §4 has started.
 - The reference comp itself was not reproduced pixel-for-pixel, by design —
   see the §3 constraint on interpolated surfaces.
