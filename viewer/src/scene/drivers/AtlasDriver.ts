@@ -38,7 +38,24 @@ const ORBIT_EL_SPEED = 0.006; // rad per px of vertical drag
 const ORBIT_EL_MIN = -0.55;
 const ORBIT_EL_MAX = 0.85;
 const WHEEL_ORBIT_AZ = 0.004; // rad per px of horizontal wheel/swipe
+const WHEEL_ORBIT_EL = 0.003; // rad per px of shift+vertical wheel/swipe
 const EL_CLAMP_MAX = 1.45; // ~83° from overhead — keep the horizon off-screen
+
+// wheel/trackpad. Browsers report deltas in three units (px / line / page) and
+// only Chrome-on-mac reliably uses px, so everything is normalized to px before
+// it reaches the zoom. Per-event log-zoom is clamped because a trackpad flick
+// can deliver one 400px delta that would otherwise jump ~1.6× in a single tick.
+const WHEEL_LINE_PX = 16;
+const WHEEL_PAGE_PX = 100;
+const WHEEL_ZOOM_GAIN = 0.0012; // log-factor per px of wheel delta
+const PINCH_ZOOM_GAIN = 0.012; // trackpad pinch arrives as small ctrl+wheel
+const WHEEL_ZOOM_MAX = 0.22; // max log-factor a single event may contribute
+
+// touch: 1 finger pans, 2 fingers pinch-zoom + twist-orbit + drag-tilt (the
+// Maps convention). Thresholds keep a shaky two-finger hold from spinning the
+// camera before the user has actually committed to a twist.
+const TOUCH_TWIST_DEADZONE = 0.06; // rad — twist ignored below this
+const TOUCH_TILT_SPEED = 0.005; // rad per px of two-finger vertical drag
 
 // navigation smoothing: raw input moves *targets*; the rendered angles ease
 // toward them, and a released drag coasts on its exponentially-decaying
@@ -114,6 +131,20 @@ export class AtlasDriver implements SceneDriver {
   /** wheel zoom: pending log-factor drained over ~120 ms, cursor-anchored */
   private zoomPending = 0;
   private zoomAnchor = { x: 0, y: 0 };
+
+  /** live touch points, in order of contact — 2+ entries switch to the pinch
+   *  gesture. Mouse/pen pointers are never tracked here. */
+  private touches = new Map<number, { x: number; y: number }>();
+  /** two-finger gesture baseline, sampled when the second finger lands */
+  private pinch: {
+    dist: number;
+    angle: number;
+    cx: number;
+    cy: number;
+    /** accumulated twist and whether it has cleared the rotation deadzone */
+    twist: number;
+    twistOn: boolean;
+  } | null = null;
 
   /** dataset bounds in pos2 space; fit is deferred while the viewport is
    *  degenerate (booting in a hidden/zero-size tab) and applied on resize */
@@ -379,14 +410,24 @@ export class AtlasDriver implements SceneDriver {
       // morph progresses — the video's axonometric flythrough look. Orbit adds
       // azimuth + extra elevation; both are scaled by morph so at morph=0 the
       // camera is exactly overhead (flat map, no overlay drift).
-      const el = Math.min(this.morph * (TILT_RAD + this.orbitEl), EL_CLAMP_MAX);
-      const az = this.morph * this.orbitAz;
+      const [az, el] = this.orbitAngles();
       const sinEl = Math.sin(el);
+      const cosEl = Math.cos(el);
+      const sinAz = Math.sin(az);
+      const cosAz = Math.cos(az);
       this.camera.position.set(
-        this.cam.cx + Math.sin(az) * sinEl * this.camDist,
-        this.cam.cy - Math.cos(az) * sinEl * this.camDist,
-        Math.cos(el) * this.camDist,
+        this.cam.cx + sinAz * sinEl * this.camDist,
+        this.cam.cy - cosAz * sinEl * this.camDist,
+        cosEl * this.camDist,
       );
+      // This map is Z-up, so three's default camera.up (world +Y) lies *inside*
+      // the map plane. Letting lookAt derive the roll from it pins world +Y to
+      // screen-vertical at every azimuth and goes degenerate at the top of the
+      // arc — the camera rocks instead of turning. Hand it the exact up of the
+      // spherical frame instead: it is orthogonal to the view direction for
+      // every (az, el), and at az=el=0 it is (0,1,0), so the flat 2-D map keeps
+      // the orientation the HTML/SVG overlays project against.
+      this.camera.up.set(-cosEl * sinAz, cosEl * cosAz, sinEl);
       this.camera.lookAt(this.cam.cx, this.cam.cy, 0);
       this.camera.updateProjectionMatrix();
       // refresh matrixWorldInverse now (render would too, but a frame later)
@@ -401,6 +442,55 @@ export class AtlasDriver implements SceneDriver {
 
     if (this.bloomOn && this.bloomPipe) this.bloomPipe.post.render();
     else this.renderer.render(this.scene, this.camera);
+  }
+
+  /** The rendered spherical camera angles: azimuth around the map's +Z axis and
+   *  elevation measured *from* overhead. Both are scaled by the morph so a flat
+   *  2-D map stays exactly top-down, and elevation is capped short of the
+   *  horizon. Every gesture that has to reason about the camera's ground frame
+   *  (pan, hover, fly-to framing) reads them from here so they can't drift out
+   *  of step with the matrix frame() builds. */
+  private orbitAngles(): [az: number, el: number] {
+    return [
+      this.morph * this.orbitAz,
+      Math.min(this.morph * (TILT_RAD + this.orbitEl), EL_CLAMP_MAX),
+    ];
+  }
+
+  /** Pan by a screen-space drag delta. Camera2D pans along world X/Y, so once
+   *  the orbit carries an azimuth a raw delta slides the map off at an angle —
+   *  rotate the delta into the camera's ground frame first. The vertical
+   *  component is additionally divided by cos(el) because a tilted view
+   *  foreshortens depth, and without it the map lags the cursor. */
+  private panScreen(dxPx: number, dyPx: number): void {
+    const [az, el] = this.orbitAngles();
+    const dy = dyPx / Math.max(Math.cos(el), 0.35);
+    const cosAz = Math.cos(az);
+    const sinAz = Math.sin(az);
+    this.cam.panPixels(dxPx * cosAz + dy * sinAz, -dxPx * sinAz + dy * cosAz);
+    this.userDroveCamera = true;
+    this.cameraDirty = true;
+  }
+
+  /** Feed a raw orbit delta (radians) through the smoothing targets, clamping
+   *  elevation. Shared by mouse drag, wheel/trackpad swipe and touch. */
+  private orbitBy(dAz: number, dEl: number): void {
+    this.orbitAzTarget += dAz;
+    this.orbitElTarget = Math.min(
+      Math.max(this.orbitElTarget + dEl, ORBIT_EL_MIN),
+      ORBIT_EL_MAX,
+    );
+    this.userDroveCamera = true;
+    this.cameraDirty = true;
+  }
+
+  /** Orbiting is a 3-D affordance: on the first movement of an orbit gesture,
+   *  lift a flat map into the flythrough so the gesture is never a no-op. A
+   *  stray click/tap without movement leaves the map alone. */
+  private ensure3DForOrbit(): void {
+    if (this.morph <= 0.02 && appStore.getState().dims !== 3) {
+      appStore.getState().setDims(3);
+    }
   }
 
   /** Per-frame navigation integrator: auto-orbit, release inertia, easing of
@@ -462,6 +552,15 @@ export class AtlasDriver implements SceneDriver {
           this.orbitEl = this.orbitElTarget;
       }
       this.cameraDirty = true;
+    }
+
+    // auto-orbit winds the azimuth up without bound; fold both angles by the
+    // same multiple of 2π so a long-running spin can't bleed float precision
+    // into the trig (the shift is invisible — it preserves target − rendered)
+    if (Math.abs(this.orbitAz) > Math.PI * 2) {
+      const turns = Math.trunc(this.orbitAz / (Math.PI * 2)) * Math.PI * 2;
+      this.orbitAz -= turns;
+      this.orbitAzTarget -= turns;
     }
 
     // drain the pending wheel zoom, anchored where the cursor last was
@@ -751,6 +850,21 @@ export class AtlasDriver implements SceneDriver {
     c.addEventListener(
       "pointerdown",
       (e) => {
+        if (e.pointerType === "touch") {
+          this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          // a second finger ends whatever the first one was doing and starts
+          // the pinch/twist/tilt gesture from a fresh baseline
+          if (this.touches.size >= 2) {
+            this.pointerDown = null;
+            this.lastPointer = null;
+            this.dragging = false;
+            this.orbiting = false;
+            this.orbitLast = null;
+            this.beginPinch();
+            this.hoverClear();
+            return;
+          }
+        }
         // middle (wheel-click) or right button → orbit the camera
         if (e.button === 1 || e.button === 2) {
           e.preventDefault();
@@ -779,21 +893,18 @@ export class AtlasDriver implements SceneDriver {
     c.addEventListener(
       "pointermove",
       (e) => {
-        if (this.orbiting && this.orbitLast) {
-          this.userDroveCamera = true;
-          // orbiting is a 3-D affordance — on the first drag movement, lift a
-          // flat map into the flythrough so the gesture is never a no-op (a
-          // stray middle/right *click* without drag leaves the map alone)
-          if (this.morph <= 0.02 && appStore.getState().dims !== 3) {
-            appStore.getState().setDims(3);
+        if (e.pointerType === "touch" && this.touches.has(e.pointerId)) {
+          this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (this.touches.size >= 2) {
+            this.stepPinch();
+            return;
           }
+        }
+        if (this.orbiting && this.orbitLast) {
+          this.ensure3DForOrbit();
           const dAz = (e.clientX - this.orbitLast.x) * ORBIT_AZ_SPEED;
           const dEl = (e.clientY - this.orbitLast.y) * ORBIT_EL_SPEED;
-          this.orbitAzTarget += dAz;
-          this.orbitElTarget = Math.min(
-            Math.max(this.orbitElTarget + dEl, ORBIT_EL_MIN),
-            ORBIT_EL_MAX,
-          );
+          this.orbitBy(dAz, dEl);
           // EMA of the live velocity — becomes the coast speed on release
           const now = performance.now();
           const dtS = Math.max((now - this.orbitMoveAt) / 1000, 1e-3);
@@ -801,7 +912,6 @@ export class AtlasDriver implements SceneDriver {
           this.orbitElVel = this.orbitElVel * 0.7 + (dEl / dtS) * 0.3;
           this.orbitMoveAt = now;
           this.orbitLast = { x: e.clientX, y: e.clientY };
-          this.cameraDirty = true;
           return;
         }
         if (this.pointerDown && this.lastPointer) {
@@ -813,23 +923,36 @@ export class AtlasDriver implements SceneDriver {
             this.hoverClear();
           }
           if (this.dragging) {
-            this.userDroveCamera = true;
-            // tilted view foreshortens vertically — scale dy so the map
-            // tracks the cursor instead of lagging it
-            const el = Math.min(this.morph * (TILT_RAD + this.orbitEl), EL_CLAMP_MAX);
-            const tiltComp = 1 / Math.max(Math.cos(el), 0.5);
-            this.cam.panPixels(
-              e.clientX - this.lastPointer.x,
-              (e.clientY - this.lastPointer.y) * tiltComp,
-            );
+            this.panScreen(e.clientX - this.lastPointer.x, e.clientY - this.lastPointer.y);
             this.lastPointer = { x: e.clientX, y: e.clientY };
-            this.cameraDirty = true;
             return;
           }
           this.lastPointer = { x: e.clientX, y: e.clientY };
         }
+        // touch has no hover state — a finger down is a gesture, not a cursor
+        if (e.pointerType === "touch") return;
         this.mouse = { x: e.clientX, y: e.clientY };
         this.hoverDirty = true;
+      },
+      opts,
+    );
+
+    // a cancelled pointer (OS gesture, browser scroll takeover, palm reject)
+    // never delivers pointerup — without this the drag/pinch state sticks
+    c.addEventListener(
+      "pointercancel",
+      (e) => {
+        this.touches.delete(e.pointerId);
+        // re-sample rather than keep a baseline that names a gone finger — a
+        // stale dist/angle would jump the camera on the next move
+        this.pinch = null;
+        if (this.touches.size >= 2) this.beginPinch();
+        this.pointerDown = null;
+        this.lastPointer = null;
+        this.dragging = false;
+        this.orbiting = false;
+        this.orbitLast = null;
+        c.style.cursor = "";
       },
       opts,
     );
@@ -837,6 +960,24 @@ export class AtlasDriver implements SceneDriver {
     c.addEventListener(
       "pointerup",
       (e) => {
+        if (e.pointerType === "touch") {
+          this.touches.delete(e.pointerId);
+          if (this.pinch) {
+            // lifting out of a pinch: re-baseline if a finger remains, and
+            // never let the leftover contact fall through to the tap path
+            this.pinch = null;
+            if (this.touches.size >= 2) this.beginPinch();
+            else {
+              const [only] = [...this.touches.values()];
+              if (only) {
+                this.pointerDown = { x: only.x, y: only.y };
+                this.lastPointer = { x: only.x, y: only.y };
+                this.dragging = true; // continue as a pan, not a fresh tap
+              }
+            }
+            return;
+          }
+        }
         if (this.orbiting) {
           this.orbiting = false;
           this.orbitLast = null;
@@ -856,15 +997,15 @@ export class AtlasDriver implements SceneDriver {
         c.style.cursor = "";
         if (wasDrag) return;
 
-        // click: select the picked point's cluster (noise → point selection)
-        const picked = this.pick(e.clientX, e.clientY);
-        const store = appStore.getState();
-        if (!picked) {
-          store.setSelection(null); // click empty space deselects
+        // click/tap: select the picked point's cluster (noise → point selection)
+        if (this.morph > 0.5 && this.hoveredIndex === null) {
+          // the flythrough resolves picks from the id-buffer result that *hover*
+          // populates — and a tap never hovers, so it has to run its own pick or
+          // every touch in 3-D would read as a deselect
+          void this.selectAtAsync(e.clientX, e.clientY);
           return;
         }
-        const cid = this.dataset?.columns.clusterId[picked.id] ?? -1;
-        store.setSelection(cid >= 0 ? { kind: "cluster", id: cid } : picked);
+        this.applyPick(this.pick(e.clientX, e.clientY));
       },
       opts,
     );
@@ -883,19 +1024,42 @@ export class AtlasDriver implements SceneDriver {
       (e) => {
         e.preventDefault();
         this.userDroveCamera = true;
-        // in 3-D, a horizontal-dominant trackpad swipe orbits the azimuth;
-        // pinch-zoom (ctrlKey) and vertical scroll / mouse-wheel keep zooming
-        if (this.morph > 0.02 && !e.ctrlKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
-          this.orbitAzTarget += e.deltaX * WHEEL_ORBIT_AZ;
-          this.cameraDirty = true;
-          return;
+        // normalize to pixels first — Firefox reports lines and a page-scroll
+        // wheel reports pages, both of which read as a near-dead zoom otherwise
+        const unit =
+          e.deltaMode === 1 ? WHEEL_LINE_PX : e.deltaMode === 2 ? WHEEL_PAGE_PX : 1;
+        const dx = e.deltaX * unit;
+        const dy = e.deltaY * unit;
+        // trackpad pinch arrives as ctrl+wheel with a much smaller delta, so it
+        // needs its own gain to feel 1:1 with the fingers
+        const pinching = e.ctrlKey;
+
+        if (this.morph > 0.02 && !pinching) {
+          // in 3-D a horizontal-dominant two-finger swipe orbits the azimuth,
+          // and shift+swipe takes elevation — vertical stays zoom, which is the
+          // one gesture a plain mouse wheel also has to serve
+          if (Math.abs(dx) > Math.abs(dy)) {
+            this.ensure3DForOrbit();
+            this.orbitBy(dx * WHEEL_ORBIT_AZ, 0);
+            return;
+          }
+          if (e.shiftKey) {
+            this.ensure3DForOrbit();
+            this.orbitBy(0, dy * WHEEL_ORBIT_EL);
+            return;
+          }
         }
+
         // accumulate in log space, drained over ~120 ms in stepNavigation so
         // discrete wheel ticks read as one continuous glide
+        const step = Math.max(
+          -WHEEL_ZOOM_MAX,
+          Math.min(dy * (pinching ? PINCH_ZOOM_GAIN : WHEEL_ZOOM_GAIN), WHEEL_ZOOM_MAX),
+        );
         if (this.reducedMotion) {
-          this.cam.zoomAt(e.clientX, e.clientY, Math.exp(e.deltaY * 0.0012));
+          this.cam.zoomAt(e.clientX, e.clientY, Math.exp(step));
         } else {
-          this.zoomPending += e.deltaY * 0.0012;
+          this.zoomPending += step;
           this.zoomAnchor = { x: e.clientX, y: e.clientY };
         }
         this.cameraDirty = true;
@@ -911,6 +1075,94 @@ export class AtlasDriver implements SceneDriver {
       },
       opts,
     );
+  }
+
+  /** Turn a picked point into a store selection: its cluster, or the bare point
+   *  when it's noise. Null clears — clicking empty space deselects. */
+  private applyPick(picked: Selection | null): void {
+    const store = appStore.getState();
+    if (!picked) {
+      store.setSelection(null);
+      return;
+    }
+    const cid = this.dataset?.columns.clusterId[picked.id] ?? -1;
+    store.setSelection(cid >= 0 ? { kind: "cluster", id: cid } : picked);
+  }
+
+  /** One id-buffer pick for a tap in the flythrough. Results that resolve after
+   *  a dataset switch or a return to 2-D are dropped, matching updateHover3D. */
+  private async selectAtAsync(x: number, y: number): Promise<void> {
+    const picker = this.idPicker;
+    const dataset = this.dataset;
+    if (!picker || picker.broken || !dataset) {
+      this.applyPick(null);
+      return;
+    }
+    this.idPickBusy = true;
+    try {
+      const i = await picker.pick(this.camera, x, y);
+      if (this.dataset !== dataset || this.morph <= 0.5) return;
+      this.applyPick(i >= 0 && i < dataset.columns.count ? { kind: "point", id: i } : null);
+    } finally {
+      this.idPickBusy = false;
+    }
+  }
+
+  /** Sample the two-finger baseline: separation, twist angle and midpoint. */
+  private beginPinch(): void {
+    const [a, b] = [...this.touches.values()];
+    if (!a || !b) return;
+    this.pinch = {
+      dist: Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1),
+      angle: Math.atan2(b.y - a.y, b.x - a.x),
+      cx: (a.x + b.x) / 2,
+      cy: (a.y + b.y) / 2,
+      twist: 0,
+      twistOn: false,
+    };
+    this.zoomPending = 0; // don't let a stale wheel glide fight the fingers
+  }
+
+  /** Two-finger frame: separation → cursor-anchored zoom, twist → azimuth,
+   *  midpoint drag → tilt (2-D has no tilt, so there the midpoint pans). This
+   *  is the Maps convention, and it keeps one finger free for plain panning. */
+  private stepPinch(): void {
+    const prev = this.pinch;
+    if (!prev) return;
+    const [a, b] = [...this.touches.values()];
+    if (!a || !b) return;
+
+    const dist = Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1);
+    const angle = Math.atan2(b.y - a.y, b.x - a.x);
+    const cx = (a.x + b.x) / 2;
+    const cy = (a.y + b.y) / 2;
+
+    // spreading the fingers must zoom *in*, i.e. shrink world-units-per-pixel
+    if (Math.abs(dist - prev.dist) > 0.5) {
+      this.cam.zoomAt(cx, cy, prev.dist / dist);
+      this.userDroveCamera = true;
+      this.cameraDirty = true;
+    }
+
+    const dMid = { x: cx - prev.cx, y: cy - prev.cy };
+    // twist → azimuth. atan2 wraps at ±π; fold the delta back into (−π, π] so
+    // crossing the seam can't fling the camera a full turn.
+    let dAngle = angle - prev.angle;
+    if (dAngle > Math.PI) dAngle -= Math.PI * 2;
+    else if (dAngle < -Math.PI) dAngle += Math.PI * 2;
+    // a pinch is never perfectly parallel, so rotation stays latched off until
+    // the accumulated twist clears the deadzone — otherwise every zoom would
+    // also drift the azimuth. Once engaged it stays engaged for the gesture.
+    const twist = prev.twist + dAngle;
+    const engaged = prev.twistOn || Math.abs(twist) > TOUCH_TWIST_DEADZONE;
+
+    if (this.morph > 0.02) {
+      this.orbitBy(engaged ? dAngle : 0, dMid.y * TOUCH_TILT_SPEED);
+    } else if (dMid.x !== 0 || dMid.y !== 0) {
+      this.panScreen(dMid.x, dMid.y);
+    }
+
+    this.pinch = { dist, angle, cx, cy, twist, twistOn: engaged };
   }
 
   private updateHover(): void {
