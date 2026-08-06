@@ -90,4 +90,40 @@ describe("suggestK", () => {
     expect(suggestK([], 100)).toBe(0);
     expect(suggestK([0, 0, 0], 0)).toBe(0);
   });
+
+  it("puts the median wherever the caller asks", () => {
+    // A 3-D axis wants the body mid-cube; a bar strip wants it low so the tall
+    // bars read. Same data, same invertible mapping, different bend.
+    const vals = [...Array.from({ length: 200 }, () => 400), 90_000, 180_000];
+    for (const target of [0.45, 0.3, 0.2, 0.1]) {
+      const k = suggestK(vals, 180_000, true, target);
+      expect(asinhScale(180_000, k).toUnit(400)).toBeCloseTo(target, 2);
+    }
+  });
+
+  it("stays exactly invertible at every target", () => {
+    // The honesty rule the whole module rests on: moving the bend changes the
+    // SPACING and nothing else, so a tick still reads its true value.
+    const vals = [...Array.from({ length: 50 }, (_, i) => 1 + i), 9_000, 98_500];
+    for (const target of [0.45, 0.2, 0.08]) {
+      const s = asinhScale(98_500, suggestK(vals, 98_500, true, target));
+      for (const v of vals) expect(s.toValue(s.toUnit(v))).toBeCloseTo(v, 6);
+    }
+  });
+
+  it("returns linear rather than bending the wrong way", () => {
+    // asinh only ever raises a small value's position. A median already above
+    // the requested target has no solution, and the honest answer is "linear",
+    // not a k that silently misses.
+    const vals = Array.from({ length: 20 }, (_, i) => 90_000 + i);
+    expect(suggestK(vals, 100_000, true, 0.2)).toBe(0);
+  });
+
+  it("leaves the default callers exactly where they were", () => {
+    // The target parameter is additive: every existing call site passes three
+    // arguments or fewer and must land on the same k it always did.
+    const vals = [...Array.from({ length: 200 }, () => 400), 90_000, 180_000];
+    expect(suggestK(vals, 180_000)).toBe(suggestK(vals, 180_000, false, 0.45));
+    expect(suggestK(vals, 180_000, true)).toBe(suggestK(vals, 180_000, true, 0.45));
+  });
 });

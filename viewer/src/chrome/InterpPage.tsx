@@ -28,6 +28,8 @@ import type { DatasetEntry } from "../data/schema";
 import type { InterpDriver, InterpGroup } from "../scene/interp/InterpDriver";
 import { GROUP_LABEL, INTERP_FEATURES, findFeature } from "../scene/interp/registry";
 import { SelectRow } from "./controls";
+import { ChartCard } from "./ChartCard";
+import type { StatTile } from "./StatStrip";
 import {
   $capabilities,
   $datasetId,
@@ -91,6 +93,8 @@ export function InterpPage() {
   // bundle URLs the active view was computed from (captured during the
   // driver's load) — powers the legend's "download data" affordance
   const dataUrls = useSignal<string[]>([]);
+  // Footer stat strip, published by the driver after its bundle lands.
+  const statTiles = useSignal<StatTile[]>([]);
   // Which real step the loading is in: spinning up the renderer vs fetching
   // the bundle + computing the layout. Two awaits, two honest stages.
   const phase = useSignal<"renderer" | "data">("renderer");
@@ -159,9 +163,11 @@ export function InterpPage() {
   useEffect(() => {
     const canvas = canvasRef.current;
     const overlay = overlayRef.current;
-    // Size from the STAGE container, never the canvas: deck.gl resizes the
-    // canvas to its own width/height props, so measuring the canvas would feed
-    // deck's size back into itself (a shrinking loop). The stage is the truth.
+    // Size from the HOST container, never the canvas: deck.gl writes its own
+    // width/height props back onto the canvas as inline pixel styles, so
+    // measuring the canvas would feed deck's size into itself (a shrinking
+    // loop). The host is laid out by flex inside `.chart-card-body`, so it is
+    // the plot area minus the header and the stat strip — the truth.
     const host = canvas?.parentElement;
     if (!canvas || !overlay || !host || !model || !feature) return;
 
@@ -173,6 +179,7 @@ export function InterpPage() {
     phase.value = "renderer";
     errMsg.value = "";
     dataUrls.value = [];
+    statTiles.value = [];
 
     const dprOf = () => Math.min(window.devicePixelRatio || 1, 2);
     const sizeNow = () => {
@@ -220,6 +227,21 @@ export function InterpPage() {
         return;
       }
       status.value = "ready";
+      // Footer stat strip — read ONCE here rather than per frame, so the tiles
+      // describe the bundle that just loaded and stay stable while the user
+      // orbits. Drivers that have nothing honest to report omit `stats`.
+      statTiles.value = d.stats?.() ?? [];
+      // Publishing tiles ADDS the footer strip, which shortens the canvas host
+      // the driver was sized against a moment ago. The ResizeObserver below
+      // would eventually catch that, but only on its next delivery — one frame
+      // in which the plot is a strip-height too tall and its bottom edge hides
+      // behind the strip. Re-measure on the frame after Preact has committed
+      // the strip and hand the driver the size that is actually on screen.
+      requestAnimationFrame(() => {
+        if (disposed) return;
+        const s = sizeNow();
+        d.resize(s.w, s.h, dprOf());
+      });
       // cross-view linking: hand the current global pick to the fresh driver
       d.setSelection?.(appStore.getState().interpSelection);
       // Only spin a RAF for drivers that actually animate; static views (e.g.
@@ -491,7 +513,7 @@ export function InterpPage() {
         </p>
       </aside>
 
-      <div class={`interp-stage${isForward && traces.value.length > 0 ? " has-tracebar" : ""}`}>
+      <div class="interp-stage">
         {isForward && traces.value.length > 0 && (
           <div class="interp-tracebar" role="radiogroup" aria-label="Prompt">
             <span class="interp-tracebar-label">prompt</span>
@@ -555,6 +577,42 @@ export function InterpPage() {
           </div>
         )}
 
+        <ChartCard
+          class="interp-chart"
+          n={feature?.n}
+          title={feature?.label ?? "Internals"}
+          subtitle={feature?.subtitle}
+          tag={model ?? undefined}
+          tiles={status.value === "ready" ? statTiles.value : []}
+          controls={
+            feature && (
+              <>
+                {status.value === "ready" && dataUrls.value.length > 0 && (
+                  <button
+                    type="button"
+                    class="interp-legend-toggle interp-legend-data"
+                    title={`Download this view's data (${dataUrls.value.length} file${dataUrls.value.length > 1 ? "s" : ""})`}
+                    aria-label="Download this view's source data as JSON"
+                    onClick={downloadData}
+                  >
+                    ⤓
+                  </button>
+                )}
+                <button
+                  type="button"
+                  class="interp-legend-toggle"
+                  aria-expanded={legendIsOpen}
+                  title={legendIsOpen ? "Collapse the encoding key" : "Expand the encoding key"}
+                  onClick={() => {
+                    legendOpen.value = !legendIsOpen;
+                  }}
+                >
+                  {legendIsOpen ? "− key" : "+ key"}
+                </button>
+              </>
+            )
+          }
+        >
         {/* req 10 — keyboard focus + ARIA readout. The plot is a GPU canvas with
             no focusable DOM per datum, so the host itself is the focus target:
             tabbable, labelled with the live feature's name + blurb (composed
@@ -624,32 +682,14 @@ export function InterpPage() {
           <div
             class={`interp-legend corner-${feature.legendCorner ?? "tr"}${legendIsOpen ? "" : " is-collapsed"}`}
           >
+            {/* The card is now purely the ENCODING KEY — identity, provenance
+                and controls moved up into the ChartCard header, where they
+                cannot cover the data they describe. What is left has to stay
+                on the canvas: swatches decode marks, and the note qualifies
+                what the marks mean. */}
             <div class="interp-legend-head">
               <span class="interp-legend-n">#{feature.n}</span>
-              <h3 class="interp-legend-title">{feature.label}</h3>
-              {legendIsOpen && <span class="interp-legend-model">{model ?? "—"}</span>}
-              {status.value === "ready" && dataUrls.value.length > 0 && (
-                <button
-                  type="button"
-                  class="interp-legend-toggle interp-legend-data"
-                  title={`Download this view's data (${dataUrls.value.length} file${dataUrls.value.length > 1 ? "s" : ""})`}
-                  aria-label="Download this view's source data as JSON"
-                  onClick={downloadData}
-                >
-                  ⤓
-                </button>
-              )}
-              <button
-                type="button"
-                class="interp-legend-toggle"
-                aria-expanded={legendIsOpen}
-                title={legendIsOpen ? "Collapse legend" : "Expand legend"}
-                onClick={() => {
-                  legendOpen.value = !legendIsOpen;
-                }}
-              >
-                {legendIsOpen ? "−" : "+"}
-              </button>
+              <h3 class="interp-legend-title">key</h3>
             </div>
             {legendIsOpen && <p class="interp-legend-blurb">{feature.blurb}</p>}
             {legendIsOpen && feature.legend && (
@@ -782,6 +822,7 @@ export function InterpPage() {
         {!model && (
           <div class="interp-status">Load a dataset to inspect its internals.</div>
         )}
+        </ChartCard>
       </div>
     </div>
   );

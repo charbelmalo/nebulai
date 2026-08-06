@@ -15,7 +15,7 @@
  *  one-call `clearSessionAnalyses()` (surfaced in Settings → Sessions).
  */
 
-import type { SessionAnalysis } from "./sessionlog";
+import { buildComposition, type SessionAnalysis } from "./sessionlog";
 
 const DB_NAME = "nebulai";
 const DB_VERSION = 1;
@@ -61,11 +61,36 @@ export function saveSessionAnalysis(a: SessionAnalysis): Promise<void> {
   return tx<IDBValidKey>("readwrite", (s) => s.put(a)).then(() => undefined);
 }
 
+/** Fill in fields the fold gained after a record was written.
+ *
+ *  Records are stored as-is, with no schema version, so a row saved by an
+ *  older build is missing whatever the analysis has learned to compute since.
+ *  Every gap is filled with EMPTY, never with a reconstruction: the raw
+ *  transcript is deliberately not kept (see the privacy note above), so there
+ *  is nothing to recompute from, and a plausible-looking guess derived from
+ *  the fields that did survive would be a fabricated measurement.
+ *
+ *  Empty is also readable downstream — a card with no outcome bars is showing
+ *  you that it has no outcome data, which is the truth. `SessionsStats` says so
+ *  in words when the record is old enough to be missing them. */
+export function normalizeSessionAnalysis(a: SessionAnalysis): SessionAnalysis {
+  if (!Array.isArray(a.toolOutcomes)) a.toolOutcomes = [];
+  if (typeof a.unattributedErrors !== "number") a.unattributedErrors = 0;
+  // The context composition is the one gap that CAN be filled honestly, and so
+  // it is the one exception to the empty-not-reconstructed rule above. It reads
+  // nothing but per-turn token counts, and those are persisted — running the
+  // same pure function over the same real numbers is not a guess. What does not
+  // survive is the usage-consistency check, so `exact` goes in as null: unknown,
+  // which is neither the true it might have been nor a false we cannot support.
+  if (!a.context && Array.isArray(a.turns)) a.context = buildComposition(a.turns, null);
+  return a;
+}
+
 /** All persisted analyses, most-recently-loaded first. Returns [] if the
  *  store is empty or IndexedDB is unavailable (degrades, never throws). */
 export function loadAllSessionAnalyses(): Promise<SessionAnalysis[]> {
   return tx<SessionAnalysis[]>("readonly", (s) => s.getAll() as IDBRequest<SessionAnalysis[]>)
-    .then((rows) => rows.sort((a, b) => b.loadedAt - a.loadedAt))
+    .then((rows) => rows.map(normalizeSessionAnalysis).sort((a, b) => b.loadedAt - a.loadedAt))
     .catch(() => []);
 }
 

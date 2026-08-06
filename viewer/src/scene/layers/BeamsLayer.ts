@@ -14,13 +14,12 @@ import {
   instancedDynamicBufferAttribute,
   mix,
   positionGeometry,
-  texture,
   uniform,
   uv,
   vec2,
   vec3,
 } from "three/tsl";
-import { rampTextureData } from "../../styles/tokens";
+import { rampNode } from "../ramp";
 
 export const MAX_BEAMS = 64;
 
@@ -53,7 +52,6 @@ export class BeamsLayer {
   private end3Attr: THREE.InstancedBufferAttribute;
   private weightAttr: THREE.InstancedBufferAttribute;
   private material: THREE.MeshBasicNodeMaterial;
-  private rampTex: THREE.DataTexture;
 
   constructor() {
     const starts = new Float32Array(MAX_BEAMS * 2);
@@ -72,9 +70,6 @@ export class BeamsLayer {
     const aStart3 = instancedDynamicBufferAttribute<"vec3">(this.start3Attr, "vec3");
     const aEnd3 = instancedDynamicBufferAttribute<"vec3">(this.end3Attr, "vec3");
     const aWeight = instancedDynamicBufferAttribute<"float">(this.weightAttr, "float");
-
-    this.rampTex = new THREE.DataTexture(rampTextureData(), 256, 1, THREE.RGBAFormat);
-    this.rampTex.needsUpdate = true;
 
     const material = new THREE.MeshBasicNodeMaterial({
       transparent: true,
@@ -110,7 +105,7 @@ export class BeamsLayer {
       .add(perp.mul(across.mul(widthWorld).add(bow)));
 
     // gradient along the beam through the shared 5-stop ramp
-    material.colorNode = texture(this.rampTex, vec2(t, 0.5)).rgb;
+    material.colorNode = rampNode(t);
 
     // soft ribbon: fade across the width and at both ends; weight IS the
     // opacity — one visual channel, honestly mapped, nothing animated
@@ -166,6 +161,5 @@ export class BeamsLayer {
   dispose(): void {
     this.material.dispose();
     this.object.geometry.dispose();
-    this.rampTex.dispose();
   }
 }

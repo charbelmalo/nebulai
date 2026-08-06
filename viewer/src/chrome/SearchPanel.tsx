@@ -6,14 +6,14 @@
 import { useSignal } from "@preact/signals";
 import { requestFlyToCluster, requestFlyToPoint } from "../app/actions";
 import { appStore } from "../app/store";
-import { knnNeighbors } from "../data/edges";
+import { knnDistance, knnDistanceFloor, knnNeighbors } from "../data/edges";
+import { rampRgb } from "../scene/interp/chart-theme";
 import { $dataset, $mapQuery, $selection } from "./state";
 
 /** hard cap on rendered rows across all groups — 50K-token vocabularies can
  *  match thousands of rows and the panel must stay a panel, not a dump */
 const MAX_ROWS = 100;
 const ROWS_PER_GROUP = 8;
-const KNN_CHIPS = 5;
 
 export function SearchPanel() {
   const collapsed = useSignal(false);
@@ -117,14 +117,11 @@ export function SearchPanel() {
   );
 }
 
-/** One match row; when selected it expands with its kNN row — the "links in
- *  thinking patterns" affordance (sims are 10-D cluster-space, per legend). */
+/** One match row; when selected it expands into its full ranked kNN table. */
 function SearchRow({ id }: { id: number }) {
   const ds = $dataset.value!;
   const sel = $selection.value;
   const selected = sel?.kind === "point" && sel.id === id;
-  const edges = ds.columns.edges;
-  const neighbors = selected && edges ? knnNeighbors(edges, id).slice(0, KNN_CHIPS) : [];
 
   return (
     <div class={selected ? "search-row is-selected" : "search-row"}>
@@ -138,25 +135,114 @@ function SearchRow({ id }: { id: number }) {
       >
         {ds.columns.labels[id]}
       </button>
-      {selected && neighbors.length > 0 && (
-        <div class="search-chips">
-          {neighbors.map((nb) => (
-            <button
-              type="button"
-              class="search-chip"
-              key={nb.id}
-              title={`similarity ${nb.sim.toFixed(3)} (10-D cluster space)`}
-              onClick={() => {
-                appStore.getState().setSelection({ kind: "point", id: nb.id });
-                requestFlyToPoint(nb.id);
-              }}
-            >
-              {ds.columns.labels[nb.id]}
-              <span class="search-chip-sim">{nb.sim.toFixed(2)}</span>
-            </button>
-          ))}
-        </div>
-      )}
+      {selected && <KnnTable id={id} />}
+    </div>
+  );
+}
+
+/** The ranked nearest-neighbour table — every neighbour the export stored for
+ *  this point, in rank order, with its score, the distance behind that score,
+ *  and a bar for scanning the falloff.
+ *
+ *  On the two things this deliberately does NOT have:
+ *
+ *  · **No metric selector.** The audit asked for one. There is nothing to
+ *    select between. Neighbours were ranked ONCE, offline, by exact Euclidean
+ *    distance in 10-D `u_cluster` space, and only the resulting ids and scores
+ *    were exported — the source vectors are not in the bundle. A selector
+ *    would either do nothing or re-sort a fixed list under a metric this build
+ *    cannot compute, which is a control that lies about what it changes.
+ *  · **No "similarity" label.** The stored number is `exp(-(d/sigma)^2)`, a
+ *    unitless kernel value, not a cosine. Calling it similarity invites reading
+ *    0.85 as an angle. It is headed `score`, and the distance it came from sits
+ *    next to it.
+ *
+ *  The BAR draws the distance, not the score, and that choice came from the
+ *  data rather than from taste. The kernel saturates hard: sigma is the median
+ *  neighbour distance over the whole export, so on the bundled GPT-2 atlas a
+ *  typical point's own nearest neighbour already sits past 2*sigma, scoring
+ *  0.006, and the rest of its row rounds to 0.000. Drawn on a 0–1 score scale
+ *  every bar in this panel would be an empty track — technically honest and
+ *  completely useless. The distances behind those same scores (0.17, 0.19, …)
+ *  are well spread and are what the neighbour search actually ranked on. */
+function KnnTable({ id }: { id: number }) {
+  const ds = $dataset.value!;
+  const edges = ds.columns.edges;
+  const sigma = edges?.knn?.sigma ?? 0;
+  const neighbors = edges ? knnNeighbors(edges, id) : [];
+  if (neighbors.length === 0) return null;
+
+  // Fixed track: 0 to the distance at which scores round away. Fixed, not
+  // fitted to this row set — a bar has to mean the same thing after clicking
+  // through to another point, and the floor is a property of the export, so
+  // it is the one honest bound available.
+  const floor = knnDistanceFloor(sigma);
+
+  return (
+    <div class="knn-table">
+      <div class="knn-head">
+        <span class="knn-head-title">nearest neighbours</span>
+        <span
+          class="knn-head-meta"
+          title={
+            `Ranked offline by exact Euclidean distance in 10-D u_cluster space. ` +
+            `score = exp(-(d/sigma)^2), sigma = ${sigma.toFixed(4)} (the median ` +
+            `neighbour distance across the whole export, so scores and distances ` +
+            `are comparable between points). Bars show distance on a fixed ` +
+            `0–${floor.toFixed(2)} track; ${floor.toFixed(2)} is where a score ` +
+            `rounds to 0.000 and the distance stops being recoverable.`
+          }
+        >
+          k={neighbors.length} · 10-D u_cluster · σ={sigma.toFixed(3)}
+        </span>
+      </div>
+      <ol class="knn-rows">
+        {neighbors.map((nb, i) => {
+          const d = knnDistance(nb.sim, sigma);
+          // Colour agrees with length: both read d, so near is ramp-hot and
+          // far is ramp-cold. `1 - d/floor` because the ramp's low end is the
+          // attention-getting one and NEAR is what deserves it.
+          const t = d === null ? 0 : Math.max(0, Math.min(1, 1 - d / floor));
+          const [r, g, b] = rampRgb(t);
+          return (
+            <li class="knn-row" key={nb.id}>
+              <span class="knn-rank">{i + 1}</span>
+              <button
+                type="button"
+                class="knn-label"
+                onClick={() => {
+                  appStore.getState().setSelection({ kind: "point", id: nb.id });
+                  requestFlyToPoint(nb.id);
+                }}
+              >
+                {ds.columns.labels[nb.id]}
+              </button>
+              <span class="knn-bar" aria-hidden="true">
+                <span
+                  class="knn-bar-fill"
+                  style={{
+                    width: `${(d === null ? 1 : Math.min(1, d / floor)) * 100}%`,
+                    background: d === null ? "var(--hairline)" : `rgb(${r},${g},${b})`,
+                  }}
+                />
+              </span>
+              <span class="knn-score">{nb.sim.toFixed(3)}</span>
+              <span
+                class="knn-dist"
+                title={
+                  d === null
+                    ? `Farther than ${floor.toFixed(2)}. The exact distance is gone: ` +
+                      `scores are rounded to 3 decimals on export and this one rounded ` +
+                      `to 0.000, so only the lower bound survives.`
+                    : "Euclidean distance in 10-D u_cluster space"
+                }
+              >
+                {d === null ? `>${floor.toFixed(1)}` : d.toFixed(2)}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }

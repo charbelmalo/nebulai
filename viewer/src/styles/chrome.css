@@ -2455,6 +2455,14 @@ body.page-seer #stage {
   flex-direction: column;
 }
 
+/* The chart fills whatever the tracebar above it left over. Without this the
+   card is content-sized, and since the canvas host only asks for its share of
+   the card, the plot collapses to zero height. */
+.interp-chart {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 /* the drivers size from this host (canvas.parentElement) — the tracebar above
    it takes real layout height, so canvas-drawn top labels are never occluded */
 .interp-canvas-host {
@@ -2632,7 +2640,9 @@ body.page-seer #stage {
   width: 328px;
   max-width: calc(100% - 48px);
   /* bounded footprint: the blurb scrolls instead of the card swallowing the
-     plot — no information lost, far less data occluded */
+     plot — no information lost, far less data occluded. Percentages resolve
+     against `.chart-card-body`, i.e. the plot area, so no term here has to
+     account for the header above it or the stat strip below it. */
   max-height: min(52vh, calc(100% - 110px));
   display: flex;
   flex-direction: column;
@@ -2645,16 +2655,10 @@ body.page-seer #stage {
   pointer-events: none;
 }
 
-/* when the prompt tracebar is in flow above the canvas, drop top-docked cards
-   below its band so the two glass surfaces never stack */
-.interp-stage.has-tracebar .interp-legend {
-  top: 66px;
-  max-height: min(52vh, calc(100% - 152px));
-}
-.interp-stage.has-tracebar .interp-legend.corner-bl,
-.interp-stage.has-tracebar .interp-legend.corner-br {
-  top: auto;
-}
+/* The stage used to carry a `.has-tracebar` class purely to push top-docked
+   legends below the prompt bar. Both that bar and the chart header are in flow
+   ABOVE `.chart-card-body`, and the legend is positioned against that body, so
+   it already starts below both — the class and its rules are gone. */
 
 /* radial views dock the legend to the empty (low-power) quadrant so it never
    covers the dominant spokes at the top/right of the disc. */
@@ -3218,6 +3222,54 @@ body.page-seer #stage {
   transform-origin: center center;
   translate: -50% 0;
 }
+
+/* ChartStage overlay labels (3-D stages). The split is deliberate: the driver
+   writes the PROJECTED position into inline `translate`, and the anchoring
+   offset lives here in `transform`. Both in one property and the driver would
+   clobber the anchor every time the camera moved. */
+.interp-stage-lab,
+.interp-stage-cap {
+  position: absolute;
+  top: 0;
+  left: 0;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.interp-stage-lab {
+  font: 500 10px/1.1 var(--font-mono);
+  color: var(--text-dim);
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transform: translate(-50%, -50%);
+}
+.interp-stage-lab.is-row,
+.interp-stage-lab.is-h {
+  text-align: right;
+  transform: translate(-100%, -50%);
+}
+.interp-stage-lab.is-hl {
+  text-align: left;
+  transform: translate(0, -50%);
+}
+.interp-stage-lab.is-h,
+.interp-stage-lab.is-hl {
+  font-size: 9px;
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+}
+.interp-stage-lab.is-sel {
+  color: var(--data-hot);
+  font-weight: 700;
+}
+.interp-stage-cap {
+  font: 650 9px/1 var(--font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  opacity: 0.7;
+  transform: translate(-50%, -50%);
+}
 /* Rollout depth transport — the shared `.transport` shell (see that block).
    Centred over the interp stage rather than edge-anchored: the stage has no
    side rails to clear, and the matrix it sits under is itself centred.
@@ -3235,37 +3287,15 @@ body.page-seer #stage {
   pointer-events: auto;
 }
 
-/* Residual-Stream Ribbon (#8) — per-token end labels + layer ticks */
+/* Residual-Stream Ribbon (#8) — overlay host for the ChartStage axis labels.
+   The de-collision pass the flat version needed is gone with it: end labels
+   stacked because eleven trajectories converged on near-identical final norms
+   in one plane. On the stage each token owns a lattice row, so the names are
+   spaced by the geometry rather than by a nudge loop. */
 .interp-rs-labels {
   position: absolute;
   inset: 0;
   pointer-events: none;
-}
-.interp-rs-tok {
-  position: absolute;
-  left: 0;
-  top: 0;
-  font: 600 10.5px/1 var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  opacity: 0.82;
-  transition: opacity 0.12s ease;
-}
-.interp-rs-tok.is-hot {
-  opacity: 1;
-  text-shadow: 0 0 8px currentColor;
-}
-.interp-rs-xtick {
-  position: absolute;
-  left: 0;
-  top: 0;
-  font: 500 10px/1 var(--font-mono);
-  color: var(--text-dim);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.interp-rs-ycap {
-  transform-origin: left center;
 }
 
 /* Hover chrome for the emissive 2D fields (see scene/interp/field2d.ts).
@@ -4074,15 +4104,31 @@ body.page-seer #stage {
 
 /* stat cards (bottom-right over the plot) — KPI anatomy:
    name → LARGE number → tiny uppercase label → detail chips */
+/* Bottom-anchored HUD, but BOUNDED at the top and scrollable. Unbounded, a
+   third card tall enough to overflow pushed the newest analysis off the top of
+   the stage with nothing to say it was there — the one card you most want after
+   loading a file. `margin-top: auto` on the first child keeps the stack hugging
+   the bottom while it fits, without the flex-end + overflow combination that
+   makes the first item unreachable. */
 .sessions-stats {
   position: absolute;
   right: 18px;
+  top: 18px;
   bottom: 18px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-width: 312px;
+  width: 312px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  /* the empty track stays click-through so the scene behind it still orbits;
+     the cards themselves opt back in, which is also what makes their tooltips
+     reachable at all */
   pointer-events: none;
+}
+.sessions-stats > :first-child {
+  margin-top: auto;
 }
 .sessions-stat-card {
   padding: 14px 16px;
@@ -4091,6 +4137,7 @@ body.page-seer #stage {
   background: var(--glass-bg);
   backdrop-filter: var(--glass-blur);
   box-shadow: var(--shadow-card);
+  pointer-events: auto;
 }
 .sessions-stat-name {
   font: 600 12px/1.25 var(--font-ui);
@@ -4113,28 +4160,142 @@ body.page-seer #stage {
   color: var(--text-dim);
   background: color-mix(in srgb, var(--text) 9%, transparent);
 }
-.sessions-stat-row {
+/* ── chart card (shared) ─────────────────────────────────────────────────────
+   Owned by chrome/ChartCard.tsx. Header in flow above the plot, canvas, footer
+   strip. The header never floats: it is the one place a chart states what it
+   is showing, and a floating version could be collapsed or screenshotted away.
+   Column layout with the canvas as the only flexible row, so the header and
+   strip keep their intrinsic heights and the plot absorbs the remainder. */
+.chart-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+/* The plot area, and the positioning context for the caller's floating
+   overlays (legend, status, tour bar) — see the note in ChartCard.tsx. It is
+   the flex child that absorbs the leftover height, so the header and the stat
+   strip take exactly the space their content needs and the plot gets the rest. */
+.chart-card-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chart-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+.chart-card-id {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.chart-card-title {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font: 600 15px/1.25 var(--font-ui);
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.chart-card-n {
+  font: 600 10px/1.2 var(--font-mono);
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+.chart-card-tag {
+  font: 500 9px/1.2 var(--font-mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 5px;
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+}
+.chart-card-sub {
+  margin: 3px 0 0;
+  font: 400 11.5px/1.4 var(--font-ui);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chart-card-controls {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── stat tiles (shared) ─────────────────────────────────────────────────────
+   Owned by chrome/StatStrip.tsx. Used by the Sessions cards (packed 3-up in
+   .stat-row) and by the footer strip under every interp chart (.stat-strip).
+   Tabular figures are load-bearing: these sit in a row and re-render during
+   playback, and proportional digits make the column edges shimmer. */
+.stat-row {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 10px;
   margin-bottom: 8px;
 }
-.sessions-stat {
+.stat {
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
-.sessions-stat-v {
+.stat-v {
   font: 650 19px/1.15 var(--font-ui);
   letter-spacing: -0.02em;
   color: var(--text);
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.sessions-stat-l {
+.stat-l {
   margin-top: 2px;
   font: 500 9px/1.3 var(--font-ui);
   letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The full-width footer strip under a chart. Tiles share the row evenly and
+   are separated by hairlines — the reference comp's "4–5 labeled metrics"
+   anatomy. Scrolls rather than wrapping on narrow stages so the strip stays
+   exactly one row tall and never pushes the canvas. */
+.stat-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border-top: 1px solid var(--hairline);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.stat-strip::-webkit-scrollbar {
+  display: none;
+}
+.stat-strip .stat {
+  flex: 1 1 0;
+  min-width: 92px;
+  padding: 10px 14px;
+  border-left: 1px solid var(--hairline);
+}
+.stat-strip .stat:first-child {
+  border-left: none;
+  padding-left: 0;
+}
+.stat-strip .stat-v {
+  font-size: 17px;
 }
 .sessions-stat-tools {
   display: flex;
@@ -4154,6 +4315,244 @@ body.page-seer #stage {
 .sessions-tool-chip b {
   color: var(--text);
 }
+/* Per-tool outcome bars. One row per tool, stacked ok → failed → unresolved on
+   a track shared across the whole card, so bar length is a count you can read
+   between rows and not a per-row percentage. The three colours are the only
+   place in the card where hue carries meaning, so they are the token trio and
+   nothing else borrows them here. */
+.tool-outcomes {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+.tool-outcome-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 12px;
+  margin-bottom: 7px;
+  font: 400 9.5px/1.35 var(--font-mono);
+  color: var(--text-faint);
+}
+.tool-outcome-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+/* the swatch, so the legend keys to the bars without a separate shape */
+.tool-outcome-key::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: currentcolor;
+}
+.tool-outcome-key b {
+  color: var(--text);
+  font-weight: 600;
+}
+.tool-outcome-key.is-ok {
+  color: var(--accent);
+}
+.tool-outcome-key.is-failed {
+  color: var(--danger);
+}
+.tool-outcome-key.is-unresolved {
+  color: var(--warn);
+}
+.tool-outcome-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.tool-outcome-row {
+  display: grid;
+  grid-template-columns: minmax(0, 84px) minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 8px;
+}
+.tool-outcome-name {
+  font: 400 10px/1.35 var(--font-mono);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-outcome-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.tool-outcome-seg {
+  height: 100%;
+  min-width: 1px; /* a single call still has to be visible */
+}
+.tool-outcome-seg.is-ok {
+  background: var(--accent);
+}
+.tool-outcome-seg.is-failed {
+  background: var(--danger);
+}
+.tool-outcome-seg.is-unresolved {
+  background: var(--warn);
+}
+.tool-outcome-n {
+  font: 500 10px/1.35 var(--font-mono);
+  color: var(--text);
+  text-align: right;
+}
+/* the tools past the row budget, said in words rather than pooled into a bar */
+.tool-outcome-rest {
+  margin: 6px 0 0;
+  font: 400 9.5px/1.5 var(--font-ui);
+  color: var(--text-faint);
+}
+.tool-outcome-rest b {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+/* ── context utilization (#4) ───────────────────────────────────────────────
+   Columns are stacked bottom-up, so the flex column is REVERSED and the
+   segments are emitted cheapest-first. Colour is ordered by what a token
+   costs: muted for cache the turn merely re-read, accent for cache it wrote,
+   hot for tokens sent uncached. A tall pale column is a big cheap window; gold
+   at the top is what you actually paid full price for. */
+.ctx-util {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+.ctx-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 12px;
+  margin-bottom: 7px;
+  font: 400 9.5px/1.35 var(--font-mono);
+  color: var(--text-faint);
+}
+.ctx-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ctx-key::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: currentcolor;
+}
+.ctx-key b {
+  color: var(--text);
+  font-weight: 600;
+}
+.ctx-key.is-reused {
+  color: var(--text-faint);
+}
+.ctx-key.is-written {
+  color: var(--accent);
+}
+.ctx-key.is-fresh {
+  color: var(--data-hot);
+}
+/* the peak is a number, not a band — no swatch to key it to */
+.ctx-key.is-peak::before {
+  display: none;
+}
+/* what the three numbers are OF; without it they read as session totals */
+.ctx-scope {
+  flex: 1 0 100%;
+  color: var(--text-faint);
+  opacity: 0.75;
+}
+.ctx-cols {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 46px;
+  padding-bottom: 1px;
+  border-bottom: 1px solid var(--hairline-strong);
+  overflow: hidden;
+}
+.ctx-col {
+  display: flex;
+  flex-direction: column-reverse;
+  flex: 1 1 0;
+  min-width: 1px;
+  border-radius: 1px 1px 0 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+.ctx-seg {
+  width: 100%;
+  min-height: 1px; /* a few hundred tokens beside a 90k window still exist */
+}
+.ctx-seg.is-reused {
+  background: color-mix(in srgb, var(--text-faint) 62%, transparent);
+}
+.ctx-seg.is-written {
+  background: var(--accent);
+}
+.ctx-seg.is-fresh {
+  background: var(--data-hot);
+}
+/* a turn whose window shrank — marked on the column itself, since the sentence
+   below names turn numbers and the eye needs somewhere to put them */
+.ctx-col.is-compacted {
+  box-shadow: inset 0 -2px 0 0 var(--danger);
+}
+.ctx-growth {
+  margin: 7px 0 0;
+  font: 400 9.5px/1.5 var(--font-ui);
+  color: var(--text-faint);
+}
+.ctx-growth b {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+/* --- pace: the gap before each step -------------------------------------
+   Deliberately quieter than the context columns above it. Those are a
+   partition of a token count and earn saturated colour; this is one scalar per
+   step, and its job is to let the eye find the few tall cells. The tallest one
+   gets the accent, because "which step was the slow one" is the question the
+   strip exists to answer. */
+.pace-util {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+.ctx-key.is-pace {
+  color: var(--accent);
+}
+.ctx-key.is-pace-sum::before {
+  display: none; /* a total, not a band */
+}
+.pace-cells {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 26px;
+  padding-bottom: 1px;
+  border-bottom: 1px solid var(--hairline-strong);
+  overflow: hidden;
+}
+.pace-cell {
+  flex: 1 1 0;
+  min-width: 1px;
+  min-height: 1px;
+  border-radius: 1px 1px 0 0;
+  background: color-mix(in srgb, var(--text-faint) 55%, transparent);
+}
+.pace-cell.is-slowest {
+  background: var(--accent);
+}
+
 .sessions-auth {
   display: flex;
   flex-wrap: wrap;
@@ -4185,6 +4584,16 @@ body.page-seer #stage {
 .sessions-stat-note b {
   color: var(--text);
   font-weight: 600;
+}
+/* when the note stands in for the outcome bars it takes their divider too */
+.sessions-stat-note-top {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+.sessions-stat-note code {
+  font: 400 9px/1.5 var(--font-mono);
+  color: var(--text-dim);
 }
 
 /* Axis tick labels for the emissive field. Positioned by the driver in CSS
@@ -4684,35 +5093,121 @@ body.page-seer #stage {
   background: var(--bg-pill);
 }
 
-.search-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 4px 8px 6px 18px;
+/* ── ranked kNN table (atlas search panel) ───────────────────────────────
+   Replaces the five neighbour chips. A chip could show a label and a number;
+   it could not show RANK, and rank is the whole point of a k-nearest list.
+   Grid columns are fixed so the score and distance digits line up down the
+   column — tabular figures do the rest. */
+.knn-table {
+  padding: 4px 8px 8px 18px;
 }
 
-.search-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 8px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-pill);
-  background: transparent;
+.knn-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0 5px;
+}
+
+.knn-head-title {
+  font: 500 9px/1.2 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--text-dim);
-  font: 400 10px/1.5 var(--font-mono);
-  white-space: pre;
+}
+
+/* carries the provenance tooltip: space, metric, and the global sigma */
+.knn-head-meta {
+  font: 400 9px/1.2 var(--font-mono);
+  color: var(--text-faint);
+  cursor: help;
+  border-bottom: 1px dotted var(--hairline-strong, var(--hairline));
+}
+
+.knn-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.knn-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) 56px 34px 30px;
+  align-items: center;
+  gap: 7px;
+  border-radius: 4px;
+  padding: 1px 3px;
+}
+
+.knn-row:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.knn-rank {
+  font: 400 9px/1.4 var(--font-mono);
+  color: var(--text-faint);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.knn-label {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  color: var(--text-dim);
+  font: 400 10.5px/1.5 var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
   transition: color var(--t-fast) var(--ease-out);
 }
 
-.search-chip:hover {
+.knn-label:hover {
   color: var(--text);
 }
 
-.search-chip-sim {
-  color: var(--text-faint);
+/* the DISTANCE, drawn — see the note in SearchPanel.tsx for why not the score.
+   The track is a fixed 0-to-rounding-floor extent, not one fitted to this row
+   set, so a bar means the same thing after clicking through to another point.
+   A row whose distance was rounded away fills the track in flat --hairline:
+   we know it is at least this far, and a bound should not look like a
+   measurement. */
+.knn-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  overflow: hidden;
+}
+
+.knn-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+}
+
+.knn-score,
+.knn-dist {
+  font: 400 9.5px/1.4 var(--font-mono);
+  text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.knn-score {
+  color: var(--text-dim);
+}
+
+/* the distance is the derived column — recovered by inverting the kernel, and
+   an em dash when the export's 3-decimal rounding lost it */
+.knn-dist {
+  color: var(--text-faint);
+  cursor: help;
 }
 
 .search-more {

@@ -14,13 +14,18 @@ import { signal, useSignal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
 import { appStore } from "../app/store";
 import {
+  buildAgentGraph,
   CATEGORY_ORDER,
   parseSessionTranscript,
   type SessionAnalysis,
+  type SessionTurn,
   type ToolCategory,
+  type ToolOutcome,
 } from "./sessionlog";
+import { Stat } from "./StatStrip";
 import { SessionFieldDriver, type PlaybackState } from "../scene/sessions/SessionFieldDriver";
 import { categoryColor } from "../scene/sessions/appearance";
+import { asinhScale, suggestK } from "../scene/sessions/scales";
 import {
   deleteSessionAnalysis,
   loadAllSessionAnalyses,
@@ -53,14 +58,31 @@ const CATEGORY_HELP: Record<ToolCategory, string> = {
   reflect: "pure text or thinking",
 };
 
+/** A hand-written stand-in for a real `.jsonl`, so the page has something to
+ *  show before you drop a transcript on it.
+ *
+ *  Every `tool_use` carries an `id` and every one but the last is answered by a
+ *  `tool_result` quoting it, because that is what a real transcript looks like
+ *  and the outcome split reads exactly those links. An earlier version of this
+ *  fixture omitted both, which was invisible until the split existed and then
+ *  rendered a demo session whose every call was unresolved. The failing
+ *  `npm test` and the trailing unanswered call are deliberate: they are the
+ *  only two states a clean sample would never otherwise exercise. */
 const SAMPLE_TRANSCRIPT = [
   `{"type":"user","timestamp":"2026-07-09T18:00:00Z","message":{"role":"user","content":"Refactor the auth module and add tests."}}`,
   `{"type":"assistant","requestId":"req-a","timestamp":"2026-07-09T18:00:12Z","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":40,"output_tokens":180,"cache_read_input_tokens":12000,"cache_creation_input_tokens":8000},"content":[{"type":"thinking","thinking":"look at the module"}]}}`,
-  `{"type":"assistant","requestId":"req-a","timestamp":"2026-07-09T18:00:12Z","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":40,"output_tokens":180,"cache_read_input_tokens":12000,"cache_creation_input_tokens":8000},"content":[{"type":"tool_use","name":"Read","input":{"file_path":"src/auth.ts"}}]}}`,
-  `{"type":"user","timestamp":"2026-07-09T18:00:20Z","message":{"role":"user","content":[{"type":"tool_result","content":"...file contents..."}]}}`,
-  `{"type":"assistant","requestId":"req-b","timestamp":"2026-07-09T18:00:40Z","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":30,"output_tokens":900,"cache_read_input_tokens":22000,"cache_creation_input_tokens":3000},"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"src/auth.ts"}}]}}`,
-  `{"type":"assistant","requestId":"req-c","timestamp":"2026-07-09T18:01:20Z","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":20,"output_tokens":520,"cache_read_input_tokens":30000,"cache_creation_input_tokens":1500},"content":[{"type":"tool_use","name":"Bash","input":{"command":"npm test"}}]}}`,
-  `{"type":"assistant","requestId":"req-d","timestamp":"2026-07-09T18:01:50Z","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":260,"cache_read_input_tokens":33000,"cache_creation_input_tokens":600},"content":[{"type":"text","text":"Done — auth refactored and tests pass."}]}}`,
+  `{"type":"assistant","requestId":"req-a","timestamp":"2026-07-09T18:00:12Z","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":40,"output_tokens":180,"cache_read_input_tokens":12000,"cache_creation_input_tokens":8000},"content":[{"type":"tool_use","id":"tu-1","name":"Read","input":{"file_path":"src/auth.ts"}}]}}`,
+  `{"type":"user","timestamp":"2026-07-09T18:00:20Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-1","content":"...file contents..."}]}}`,
+  `{"type":"assistant","requestId":"req-b","timestamp":"2026-07-09T18:00:40Z","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":30,"output_tokens":900,"cache_read_input_tokens":22000,"cache_creation_input_tokens":3000},"content":[{"type":"tool_use","id":"tu-2","name":"Edit","input":{"file_path":"src/auth.ts"}}]}}`,
+  `{"type":"user","timestamp":"2026-07-09T18:00:52Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-2","content":"edited"}]}}`,
+  `{"type":"assistant","requestId":"req-c","timestamp":"2026-07-09T18:01:20Z","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":20,"output_tokens":520,"cache_read_input_tokens":30000,"cache_creation_input_tokens":1500},"content":[{"type":"tool_use","id":"tu-3","name":"Bash","input":{"command":"npm test"}}]}}`,
+  `{"type":"user","timestamp":"2026-07-09T18:01:34Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-3","is_error":true,"content":"1 failing: expired token still accepted"}]}}`,
+  `{"type":"assistant","requestId":"req-d","timestamp":"2026-07-09T18:01:50Z","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":260,"cache_read_input_tokens":33000,"cache_creation_input_tokens":600},"content":[{"type":"tool_use","id":"tu-4","name":"Edit","input":{"file_path":"src/auth.ts"}}]}}`,
+  `{"type":"user","timestamp":"2026-07-09T18:02:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-4","content":"edited"}]}}`,
+  `{"type":"assistant","requestId":"req-e","timestamp":"2026-07-09T18:02:18Z","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":12,"output_tokens":300,"cache_read_input_tokens":35000,"cache_creation_input_tokens":700},"content":[{"type":"tool_use","id":"tu-5","name":"Bash","input":{"command":"npm test"}}]}}`,
+  `{"type":"user","timestamp":"2026-07-09T18:02:31Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-5","content":"12 passing"}]}}`,
+  `{"type":"assistant","requestId":"req-f","timestamp":"2026-07-09T18:02:44Z","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":14,"output_tokens":190,"cache_read_input_tokens":36000,"cache_creation_input_tokens":400},"content":[{"type":"tool_use","id":"tu-6","name":"Read","input":{"file_path":"src/auth.test.ts"}}]}}`,
+  `{"type":"assistant","requestId":"req-g","timestamp":"2026-07-09T18:02:58Z","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":260,"cache_read_input_tokens":37000,"cache_creation_input_tokens":300},"content":[{"type":"text","text":"Done — auth refactored and tests pass."}]}}`,
 ].join("\n");
 
 export function SessionsPage() {
@@ -594,12 +616,12 @@ function TurnInspector(props: { analyses: SessionAnalysis[] }) {
           </div>
         )}
 
-        <div class="sessions-stat-row">
+        <div class="stat-row">
           <Stat label="t+" value={fmtSpan(t.tSec)} />
           <Stat label="context" value={fmtTok(t.cacheRead)} />
           <Stat label="new ctx" value={fmtTok(t.cacheWrite)} />
         </div>
-        <div class="sessions-stat-row">
+        <div class="stat-row">
           <Stat label="output" value={fmtTok(t.outputTokens)} />
           <Stat label="thinking" value={`${t.thinkingBlocks}`} />
           <Stat label="prose" value={`${t.textLen}ch`} />
@@ -645,12 +667,12 @@ function SessionsStats(props: { sessions: SessionAnalysis[] }) {
             {a.name}
             <span class="sessions-stat-fmt">{a.format}</span>
           </div>
-          <div class="sessions-stat-row">
+          <div class="stat-row">
             <Stat label="model" value={a.model ?? "—"} />
             <Stat label="responses" value={`${a.nAssistant}`} />
             <Stat label="span" value={fmtSpan(a.spanSec)} />
           </div>
-          <div class="sessions-stat-row">
+          <div class="stat-row">
             <Stat
               label={a.outputReliable ? "output" : "output ✧"}
               value={`${fmtTok(a.totalOutput)}`}
@@ -658,7 +680,7 @@ function SessionsStats(props: { sessions: SessionAnalysis[] }) {
             <Stat label="context peak" value={`${fmtTok(a.contextPeak)}`} />
             <Stat label="cache-wr" value={`${fmtTok(a.totalCacheWrite)}`} />
           </div>
-          <div class="sessions-stat-row">
+          <div class="stat-row">
             <Stat label="tools" value={`${a.toolTotal}`} />
             <Stat label="files" value={`${a.filesTouched.length}`} />
             {a.subAgentCount > 0 ? (
@@ -667,14 +689,24 @@ function SessionsStats(props: { sessions: SessionAnalysis[] }) {
               <Stat label="errors" value={`${a.errorCount}`} />
             )}
           </div>
-          {a.toolHistogram.length > 0 && (
-            <div class="sessions-stat-tools">
-              {a.toolHistogram.slice(0, 5).map(([name, n]) => (
-                <span key={name} class="sessions-tool-chip">
-                  {name.split("__").pop()} <b>{n}</b>
-                </span>
-              ))}
-            </div>
+          {a.toolOutcomes.length > 0 ? (
+            <ToolOutcomeChart outcomes={a.toolOutcomes} unattributed={a.unattributedErrors} />
+          ) : (
+            a.toolTotal > 0 && (
+              <p class="sessions-stat-note sessions-stat-note-top">
+                This analysis was saved before per-tool outcomes were recorded, and the raw
+                transcript isn’t kept — load the <code>.jsonl</code> again to get the split.
+              </p>
+            )
+          )}
+          <PaceChart turns={a.turns} />
+          {a.context ? (
+            <ContextChart ctx={a.context} />
+          ) : (
+            <p class="sessions-stat-note sessions-stat-note-top">
+              This analysis predates the context breakdown and its turns weren’t stored either —
+              load the <code>.jsonl</code> again to decompose the window.
+            </p>
           )}
           {a.authoritative && <AuthoritativeStrip auth={a.authoritative} />}
           {!a.outputReliable && (
@@ -686,6 +718,368 @@ function SessionsStats(props: { sessions: SessionAnalysis[] }) {
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+/** How many tools get a bar. Everything past this is summed into a one-line
+ *  remainder — stated, never dropped: a card that shows six bars and stops is
+ *  indistinguishable from a session that only used six tools. */
+const OUTCOME_ROWS = 6;
+
+/** Per-tool outcome bars, replacing the old count-only chip row.
+ *
+ *  Each bar is one tool's calls, stacked ok → failed → unresolved, on a track
+ *  scaled to the busiest tool in the session. Shared scale, not per-row
+ *  normalisation: the point of stacking them is to compare, and a bar that
+ *  fills its own row regardless of count compares nothing.
+ *
+ *  `unresolved` earns its own colour rather than being blank track. It means a
+ *  `tool_use` that never got a `tool_result` — interrupted, or the log ends
+ *  mid-call — which is a real thing that happened, not missing data. Blanking
+ *  it would quietly shorten the bar and inflate the apparent success rate. */
+function ToolOutcomeChart(props: { outcomes: ToolOutcome[]; unattributed: number }) {
+  const all = props.outcomes;
+  const rows = all.slice(0, OUTCOME_ROWS);
+  const tail = all.slice(OUTCOME_ROWS);
+  // sorted descending by the fold, so the head is the max
+  const max = Math.max(rows[0]?.total ?? 0, 1);
+  const sum = (k: "ok" | "failed" | "unresolved") => all.reduce((s, o) => s + o[k], 0);
+  const totals = { ok: sum("ok"), failed: sum("failed"), unresolved: sum("unresolved") };
+  // The remainder gets a sentence, not a bar. A pool of seventeen tools is not
+  // a peer of `Bash` — drawn on the same axis it routinely outgrows every named
+  // tool (measured: 213 calls against the busiest tool's 40) and squashes the
+  // rows the chart exists to show, while inviting a comparison that is a
+  // category error anyway.
+  const rest = tail.length
+    ? {
+        tools: tail.length,
+        ok: tail.reduce((s, o) => s + o.ok, 0),
+        failed: tail.reduce((s, o) => s + o.failed, 0),
+        unresolved: tail.reduce((s, o) => s + o.unresolved, 0),
+        total: tail.reduce((s, o) => s + o.total, 0),
+      }
+    : null;
+
+  return (
+    <div class="tool-outcomes">
+      <div class="tool-outcome-legend">
+        <span class="tool-outcome-key is-ok" title="tool_result returned without is_error">
+          ok <b>{totals.ok}</b>
+        </span>
+        <span class="tool-outcome-key is-failed" title="tool_result flagged is_error">
+          failed <b>{totals.failed}</b>
+        </span>
+        <span
+          class="tool-outcome-key is-unresolved"
+          title="the call was made but no tool_result ever came back — interrupted, or the log ends mid-call"
+        >
+          unresolved <b>{totals.unresolved}</b>
+        </span>
+      </div>
+      <ul class="tool-outcome-rows">
+        {rows.map((r) => (
+          <li class="tool-outcome-row" key={r.tool}>
+            <span class="tool-outcome-name" title={r.tool}>
+              {r.tool.split("__").pop()}
+            </span>
+            <span
+              class="tool-outcome-bar"
+              title={`${r.tool}: ${r.ok} ok · ${r.failed} failed · ${r.unresolved} unresolved`}
+            >
+              {(["ok", "failed", "unresolved"] as const).map((k) =>
+                r[k] > 0 ? (
+                  <span
+                    key={k}
+                    class={`tool-outcome-seg is-${k}`}
+                    style={{ width: `${(r[k] / max) * 100}%` }}
+                  />
+                ) : null,
+              )}
+            </span>
+            <span class="tool-outcome-n">{r.total}</span>
+          </li>
+        ))}
+      </ul>
+      {rest && (
+        <p class="tool-outcome-rest">
+          <b>{rest.tools}</b> more {rest.tools === 1 ? "tool" : "tools"}, not drawn:{" "}
+          <b>{rest.total}</b> calls — {rest.ok} ok, {rest.failed} failed, {rest.unresolved}{" "}
+          unresolved
+        </p>
+      )}
+      {props.unattributed > 0 && (
+        <p class="sessions-stat-note">
+          <b>{props.unattributed}</b> further{" "}
+          {props.unattributed === 1 ? "failure is" : "failures are"} counted in this session but
+          absent from the bars above: the audit format reports them without a{" "}
+          <b>tool_use_id</b>, so there is no tool to charge them to.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Context utilization (#4).
+ *
+ *  One column per main-agent turn, stacked bottom-up **reused → new → fresh**,
+ *  on a track scaled to the session's largest prompt. Height is that turn's
+ *  whole context window; the split is where the tokens came from as far as the
+ *  cache is concerned, which is the part a transcript actually meters.
+ *
+ *  WHAT THIS IS NOT. The feature asked to segment the window into
+ *  system / user / output / retrieved. Three of those four cannot be separated
+ *  from a Claude Code transcript — it meters tokens per request, not per
+ *  content block — and the fourth does not exist in this repo at all (no RAG).
+ *
+ *  The line below the columns therefore reports growth and model output as TWO
+ *  measured totals, and explicitly declines to subtract one from the other. The
+ *  subtraction is the trap: it reads as "what the tools contributed" and it is
+ *  not, because tool output enters the window without being billed as output
+ *  while thinking is billed as output and never re-fed. Measured on a real
+ *  731-turn transcript, that difference sums to −351k tokens.
+ *
+ *  A shared scale, not per-column normalisation: the whole point is to see the
+ *  window grow, and a column that fills its own track regardless of size shows
+ *  no growth at all. */
+/** Where a session's time actually went — the "per-step timing" half of
+ *  requested feature #2.
+ *
+ *  The field already draws the path and the tooltip already names each step's
+ *  gap, but a 700-node cloud does not answer "which steps were the slow ones"
+ *  by hover. This strip does: one cell per measured gap, in step order.
+ *
+ *  Two scoping decisions worth stating rather than burying. The cells are
+ *  **asinh**-scaled, the same treatment the field's axes use and for the same
+ *  reason — step gaps run from 0.4s to twenty minutes, and a linear strip would
+ *  be one spike and several hundred invisible cells. And the concentration
+ *  figure is over **measured step time**, not wall clock: when more than one
+ *  agent ran, their gaps overlap in real time and summing them would over-count
+ *  the session. On every real transcript here there is exactly one agent and
+ *  the two coincide, but the label has to hold in the case that doesn't. */
+const PACE_MEDIAN_AT = 0.2;
+
+function PaceChart(props: { turns: SessionTurn[] }) {
+  const g = buildAgentGraph(props.turns);
+  if (!g.timed) {
+    if (props.turns.length === 0) return null;
+    // Two different reasons produce no gaps, and conflating them would report a
+    // data problem where there is none. 204 of the 239 real transcripts here
+    // have no gap for the ordinary reason: they are one turn long.
+    const single = g.paths.every((p) => p.steps.length < 2);
+    return (
+      <p class="sessions-stat-note sessions-stat-note-top">
+        {single
+          ? "One step per agent — a gap needs two responses to measure."
+          : "No two consecutive responses both carried a timestamp, so no step could be timed."}
+      </p>
+    );
+  }
+  const steps = g.paths
+    .flatMap((p) => p.steps)
+    .filter((s) => s.gapSec !== null)
+    .sort((x, y) => x.turn - y.turn);
+  const gaps = steps.map((s) => s.gapSec!);
+  const total = gaps.reduce((a, b) => a + b, 0);
+  const max = gaps.reduce((a, b) => (b > a ? b : a), 0);
+  // Median at 0.2 of the strip, not the 0.45 a 3-D axis wants: a bar chart of a
+  // heavy tail should sit low and let the slow steps stand up. Measured — see
+  // `suggestK`. `force` because a strip is worth bending even on a mild spread.
+  const scale = asinhScale(max, suggestK(gaps, max, true, PACE_MEDIAN_AT));
+
+  // How few steps account for half the measured time. The heavy tail is the
+  // finding: on a long session a handful of steps own most of the clock.
+  const sorted = [...gaps].sort((a, b) => b - a);
+  let half = 0;
+  let acc = 0;
+  while (half < sorted.length && acc < total / 2) acc += sorted[half++]!;
+
+  const slowest = steps.reduce((a, b) => (b.gapSec! > a.gapSec! ? b : a));
+  const multi = g.paths.length > 1;
+
+  return (
+    <div class="pace-util">
+      <div class="ctx-legend">
+        <span class="ctx-scope">between steps</span>
+        <span class="ctx-key is-pace" title="the largest gap between two consecutive responses">
+          longest <b>{fmtSpan(max)}</b>
+        </span>
+        <span class="ctx-key is-pace-sum" title="every measured gap, summed">
+          measured <b>{fmtSpan(total)}</b>
+        </span>
+      </div>
+      <div
+        class="pace-cells"
+        role="img"
+        aria-label={`gap before each of ${steps.length} steps, asinh-scaled`}
+      >
+        {steps.map((s) => (
+          <span
+            key={`${s.agentId}:${s.turn}`}
+            class={`pace-cell${s.turn === slowest.turn ? " is-slowest" : ""}`}
+            style={{ height: `${Math.max(scale.toUnit(s.gapSec!) * 100, 2)}%` }}
+            title={
+              `turn ${s.turn + 1} — ${fmtSpan(s.gapSec!)} since the previous step\n` +
+              (multi ? `${s.agentId === "main" ? "main" : "sub-agent"} step ${s.step} of ${s.ofSteps}` : `step ${s.step} of ${s.ofSteps}`)
+            }
+          />
+        ))}
+      </div>
+      <p class="ctx-growth">
+        Half the measured step time falls in <b>{half}</b> of {steps.length}{" "}
+        {steps.length === 1 ? "gap" : "gaps"}; the longest is <b>{fmtSpan(max)}</b> before turn{" "}
+        <b>{slowest.turn + 1}</b>. A gap is elapsed time between two responses — tool work, model
+        latency and, after a human prompt, the human — not how long the step itself took.
+      </p>
+      {multi && (
+        <p class="sessions-stat-note">
+          <b>{g.paths.length}</b> agents ran here, so each step is numbered and timed within its own
+          agent and the totals above are summed step time, not wall clock — concurrent agents
+          overlap.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ContextChart(props: { ctx: NonNullable<SessionAnalysis["context"]> }) {
+  const c = props.ctx;
+  const n = c.slices.length;
+  if (n === 0) {
+    return (
+      <p class="sessions-stat-note sessions-stat-note-top">
+        No main-agent turns carried usage, so there is no window to decompose.
+        {c.excludedSidechain > 0 &&
+          ` ${c.excludedSidechain} sub-agent ${c.excludedSidechain === 1 ? "turn ran" : "turns ran"} in a separate context.`}
+      </p>
+    );
+  }
+  const peak = Math.max(c.peakPrompt, 1);
+  const last = c.slices[n - 1]!;
+  const compacted = new Set(c.compactedAt);
+  // Summed over the steps that GREW, with compactions left out: a compaction
+  // drops ~150k in one step and would otherwise swamp every real number here.
+  // It gets its own sentence instead.
+  let grew = 0;
+  let wrote = 0;
+  let steps = 0;
+  for (const s of c.slices) {
+    if (s.growth === null || compacted.has(s.turn)) continue;
+    grew += s.growth;
+    wrote += s.priorOutput ?? 0;
+    steps++;
+  }
+  // How often the window grew by LESS than the model had just written. Not an
+  // error: thinking is billed as output and then dropped from the next prompt.
+  const shortfall = c.slices.filter(
+    (s) => !compacted.has(s.turn) && s.residual !== null && s.residual < 0,
+  ).length;
+  const KEYS = [
+    { k: "reused", label: "reused", hint: "already in the cache — the conversation so far" },
+    { k: "written", label: "new", hint: "written into the cache for the first time this turn" },
+    { k: "fresh", label: "fresh", hint: "sent uncached" },
+  ] as const;
+  // The legend reads the LAST turn, not the session — three numbers under a
+  // bare "reused / new / fresh" invite being read as totals, which they aren't.
+  //
+  // The two halves have to count the same thing. `last.turn + 1` is a position
+  // among ALL turns while `n` counts only the drawn (main-agent) ones, which
+  // read "turn 7 of 4" the first time a session with a sub-agent was rendered.
+  // The numerator is worth keeping — a session turn number is what joins this
+  // label to the field and to the column tooltips — so the denominator moves to
+  // match it. `n + excludedSidechain` is the session's turn count, and on the
+  // single-agent sessions that make up every real transcript here the second
+  // term is 0 and the label is what it always was.
+  const scope = `turn ${last.turn + 1} of ${n + c.excludedSidechain}`;
+
+  return (
+    <div class="ctx-util">
+      <div class="ctx-legend">
+        <span class="ctx-scope">at {scope}</span>
+        {KEYS.map((d) => (
+          <span key={d.k} class={`ctx-key is-${d.k}`} title={`${d.hint} — at ${scope}`}>
+            {d.label} <b>{fmtTok(last[d.k])}</b>
+          </span>
+        ))}
+        <span class="ctx-key is-peak" title="largest prompt any single turn was sent">
+          peak <b>{fmtTok(c.peakPrompt)}</b>
+        </span>
+      </div>
+      <div class="ctx-cols" role="img" aria-label={`context window across ${n} turns`}>
+        {c.slices.map((s) => (
+          <span
+            key={s.turn}
+            class={`ctx-col${compacted.has(s.turn) ? " is-compacted" : ""}`}
+            style={{ height: `${(s.prompt / peak) * 100}%` }}
+            title={
+              `turn ${s.turn + 1} — ${fmtTok(s.prompt)} in context\n` +
+              `${fmtTok(s.reused)} reused · ${fmtTok(s.written)} new · ${fmtTok(s.fresh)} fresh\n` +
+              (s.growth === null
+                ? "first turn — nothing to difference against"
+                : `${s.growth >= 0 ? "+" : "−"}${fmtTok(Math.abs(s.growth))} vs the turn before` +
+                  (s.priorOutput !== null
+                    ? `; the model had just written ${fmtTok(s.priorOutput)}`
+                    : ""))
+            }
+          >
+            {KEYS.map((d) =>
+              s[d.k] > 0 ? (
+                <span
+                  key={d.k}
+                  class={`ctx-seg is-${d.k}`}
+                  style={{ height: `${(s[d.k] / s.prompt) * 100}%` }}
+                />
+              ) : null,
+            )}
+          </span>
+        ))}
+      </div>
+      {steps > 0 && (
+        <p class="ctx-growth">
+          Over {steps} growing {steps === 1 ? "step" : "steps"} the window gained{" "}
+          <b>{fmtTok(grew)}</b> while the model wrote <b>{fmtTok(wrote)}</b>. Two measurements, not
+          a split: what a tool returns enters the window without ever being billed as output, and
+          thinking is billed as output but never fed back
+          {shortfall > 0 && (
+            <>
+              {" "}
+              — which is why on <b>{shortfall}</b> of {steps === 1 ? "that step" : "those steps"} the
+              window grew by less than the model had just written
+            </>
+          )}
+          .
+        </p>
+      )}
+      {c.compactedAt.length > 0 && (
+        <p class="sessions-stat-note">
+          The window <b>shrank</b> at {c.compactedAt.length === 1 ? "turn" : "turns"}{" "}
+          {c.compactedAt.map((t) => t + 1).join(", ")} — compaction, or a context reset. Held out of
+          the totals above, where a single 150k drop would swamp every other number, but kept in the
+          columns, which show the window as it really was.
+        </p>
+      )}
+      {c.excludedSidechain > 0 && (
+        <p class="sessions-stat-note">
+          <b>{c.excludedSidechain}</b> sub-agent{" "}
+          {c.excludedSidechain === 1 ? "turn is" : "turns are"} not drawn: each sub-agent runs in
+          its own window, and differencing across it would measure the gap between two unrelated
+          conversations.
+        </p>
+      )}
+      {c.exact === false && (
+        <p class="sessions-stat-note">
+          At least one response reported different prompt usage on different lines, so each column’s
+          three parts sum to an <b>upper bound</b> on that turn’s prompt rather than to a figure any
+          single request was sent.
+        </p>
+      )}
+      {c.exact === null && (
+        <p class="sessions-stat-note">
+          Rebuilt from a stored analysis. The per-turn token counts are the real ones; the check for
+          whether a response reported its prompt consistently wasn’t saved, so it is unknown here
+          rather than assumed either way.
+        </p>
+      )}
     </div>
   );
 }
@@ -718,14 +1112,7 @@ function shortModel(m: string): string {
     .replace(/-(\d)$/, ".$1");
 }
 
-function Stat(props: { label: string; value: string }) {
-  return (
-    <div class="sessions-stat">
-      <span class="sessions-stat-v">{props.value}</span>
-      <span class="sessions-stat-l">{props.label}</span>
-    </div>
-  );
-}
+/* `Stat` now lives in ./StatStrip — the interp charts needed the same tile. */
 
 // ── helpers ────────────────────────────────────────────────────────────────
 

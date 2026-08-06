@@ -47,6 +47,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     id: "fourier-atlas",
     n: 1,
     label: "Fourier Atlas",
+    subtitle: "Frequency spectrum of the positional embeddings",
     group: "weights",
     blurb:
       "DFT of GPT-2's learned positional embeddings W_pos along the position axis. " +
@@ -70,6 +71,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     id: "weight-spectrum",
     n: 21,
     label: "Weight Spectrum",
+    subtitle: "Singular values of every weight matrix",
     group: "weights",
     blurb:
       "Singular-value spectra of every weight matrix (float64 SVD). x = index, " +
@@ -95,6 +97,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     id: "embedding-constellation",
     n: 15,
     label: "Embedding Constellation",
+    subtitle: "Token embeddings on their two leading PCA axes",
     group: "weights",
     blurb:
       "Every one of GPT-2's 50,257 token embeddings W_E[i], placed at its exact " +
@@ -128,6 +131,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     id: "neuron-field",
     n: 6,
     label: "Neuron Write-Direction Field",
+    subtitle: "MLP neuron write directions on their leading PCA axes",
     group: "weights",
     blurb:
       "All 36,864 MLP neurons (12 layers × 3072), each placed at the exact PCA " +
@@ -164,6 +168,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     id: "head-fingerprints",
     n: 2,
     label: "Head Fingerprints",
+    subtitle: "Head copying score vs measured attention to the prior token",
     group: "weights",
     blurb:
       "All 144 attention heads (12 layers × 12 heads) on two honest, bounded " +
@@ -203,6 +208,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     linksTo: ["head"],
     n: 2,
     label: "OV Eigenvalue Constellation",
+    subtitle: "Complex eigenvalues of every head's OV map",
     group: "weights",
     blurb:
       "Every complex eigenvalue of every head's residual-space OV map — all " +
@@ -242,6 +248,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     linksTo: ["head"],
     n: 2,
     label: "Composition Web",
+    subtitle: "Weight-only composition scores between attention head pairs",
     group: "weights",
     blurb:
       "Which heads feed which heads — measured from the weights alone, no " +
@@ -283,6 +290,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     linksTo: ["head"],
     n: 2,
     label: "Induction Microscope",
+    subtitle: "Measured induction attention on a repeated random sequence",
     group: "forward",
     blurb:
       "Behavioral proof of the induction circuit the Composition Web predicted " +
@@ -326,6 +334,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     linksTo: ["head"],
     n: 17,
     label: "Ablation Ghosts",
+    subtitle: "Loss increase from ablating each attention head",
     group: "forward",
     blurb:
       "The causal closer for the induction arc: every head knocked out, one " +
@@ -369,6 +378,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     id: "occlusion-vignette",
     n: 19,
     label: "Occlusion Vignette",
+    subtitle: "Prediction drop from occluding each prompt token",
     group: "forward",
     blurb:
       "Leave-one-token-out: each prompt position is occluded — substituted " +
@@ -414,6 +424,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     id: "logit-lens-tunnel",
     n: 3,
     label: "Logit-Lens Tunnel",
+    subtitle: "Next-token prediction decoded at every layer",
     group: "forward",
     blurb:
       "The logit lens: decode the last-position residual stream through the " +
@@ -440,6 +451,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     id: "attention-flow",
     n: 7,
     label: "Attention-Head Flow",
+    subtitle: "Real attention weights from query to key tokens",
     group: "forward",
     blurb:
       "Post-softmax attention of one head from a real forward pass. Left = query " +
@@ -465,6 +477,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     id: "attention-rollout",
     n: 23,
     label: "Attention-Rollout Waterfall",
+    subtitle: "Cumulative head-averaged attention flow through layers",
     group: "forward",
     blurb:
       "Attention rollout (Abnar & Zuidema 2020): the cumulative product of the " +
@@ -472,7 +485,10 @@ export const INTERP_FEATURES: InterpFeature[] = [
       "R_d = Ã_d···Ã_0. Cell (i,j) = how much source token j reaches destination " +
       "token i after layers 0..d — each row is a distribution (sums to 1), strictly " +
       "causal (j ≤ i). Scrub or play the depth to watch mixing cascade onto the " +
-      "first-token sink. Color is log₁₀ (values span orders of magnitude).",
+      "first-token sink. One extruded column per causal pair: height and color " +
+      "carry the SAME log₁₀ normalization (values span orders of magnitude), so " +
+      "the height axis is ticked in decades. The empty half of the lattice is the " +
+      "acausal half — excluded, not measured as zero.",
     math:
       "A_l = mean_h attn[l]; Ã_l = row_normalize(½·A_l + ½·I); R_d = Ã_d·Ã_{d−1}···Ã_0. " +
       "Each R_d row sums to 1 and is causal; R_d[i,j] = j's contribution to i thru layer d.",
@@ -483,7 +499,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
       { label: "high rollout weight (log₁₀ color)", rgb: "245,205,90" },
       { label: "low / zero", rgb: "46,52,96" },
     ],
-    note: "click a row to isolate one token's provenance · hover for exact value",
+    note: "drag to orbit · scroll to zoom · click a row to isolate one token's provenance",
     legendCorner: "br",
     create: () => new AttentionRolloutDriver(),
   },
@@ -491,14 +507,18 @@ export const INTERP_FEATURES: InterpFeature[] = [
     id: "residual-ribbon",
     n: 8,
     label: "Residual-Stream Ribbon",
+    subtitle: "L2 norm of each token's residual stream",
     group: "forward",
     blurb:
       "The L2 norm ‖x‖₂ of every token's residual-stream vector at each layer of a " +
       "real forward pass (resid_norm[layer][token]; layer 0 = token+position " +
-      "embedding, 1..12 = after each block). One ribbon per token, left→right " +
-      "across depth. y is log₁₀‖x‖₂ — the norm grows geometrically with depth and " +
-      "one token usually balloons into a massive activation that dwarfs the rest, " +
-      "so log-y keeps every trajectory legible while preserving order.",
+      "embedding, 1..12 = after each block). One extruded column per (layer, " +
+      "token) measurement: depth runs left→right, the sequence runs toward you, " +
+      "and height is log₁₀‖x‖₂ against an absolute base at ‖x‖ = 1, ticked in " +
+      "decades. The norm grows geometrically with depth and one token usually " +
+      "balloons into a massive activation that dwarfs the rest, so a linear " +
+      "height would leave every other token flat on the floor. Hue is the " +
+      "token's position and nothing else — height and glow both carry the norm.",
     math:
       "y = log₁₀‖x_ℓ(t)‖₂ where x_ℓ(t) is token t's residual vector at layer ℓ " +
       "(ℓ=0 embedding, 1..12 after each block). Growth factor = ‖x_final‖/‖x_embed‖.",
@@ -506,10 +526,10 @@ export const INTERP_FEATURES: InterpFeature[] = [
       "trace_*.json → resid_norm ((n_layer+1)×T), the exact Euclidean norm of the " +
       "residual stream captured per token per layer on the forward pass.",
     legend: [
-      { label: "one ribbon per token · hue = position", rgb: "245,195,59" },
-      { label: "decade gridline ‖x‖ = 10ᵏ", rgb: "148,140,165" },
+      { label: "hue = token position in the sequence", rgb: "245,195,59" },
+      { label: "height + glow = log₁₀‖x‖₂, base ‖x‖ = 1", rgb: "148,140,165" },
     ],
-    note: "log₁₀ y · hover a node for the exact norm + embed→final growth",
+    note: "drag to orbit · scroll to zoom · click a row to isolate one token's trajectory",
     legendCorner: "br",
     create: () => new ResidualRibbonDriver(),
   },
@@ -517,6 +537,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     id: "probability-simplex",
     n: 18,
     label: "Probability Simplex",
+    subtitle: "Final next-token probabilities on a 2-simplex",
     group: "forward",
     blurb:
       "The final next-token distribution on a true 2-simplex (ternary plot). " +
@@ -546,6 +567,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     linksTo: ["head"],
     n: 13,
     label: "Logit Attribution",
+    subtitle: "Direct-path contribution of each component to the margin",
     group: "forward",
     blurb:
       "Who wrote the answer? The final residual decomposes exactly into " +
@@ -584,6 +606,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     id: "causal-patching",
     n: 14,
     label: "Causal Patching Map",
+    subtitle: "Logit recovery from patching each residual position",
     group: "forward",
     blurb:
       "Where does the answer causally live? Run a matched clean/corrupt " +
@@ -626,6 +649,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     id: "tuned-lens",
     n: 20,
     label: "Tuned-Lens Delta",
+    subtitle: "A least-squares lens approximation compared with the raw lens",
     group: "forward",
     blurb:
       "How unfair is the logit lens to early layers? A per-layer affine " +
@@ -671,6 +695,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     linksTo: ["saeFeature"],
     n: 5,
     label: "SAE Decoder Constellation",
+    subtitle: "SAE feature directions projected onto their PCA axes",
     group: "sae",
     blurb:
       "All 24,576 features of an open sparse autoencoder trained on GPT-2's " +
@@ -707,6 +732,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     linksTo: ["saeFeature"],
     n: 4,
     label: "SAE Firing Piano-Roll",
+    subtitle: "SAE feature activations across prompt tokens",
     group: "sae",
     perTrace: true,
     blurb:
@@ -746,6 +772,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     linksTo: ["saeFeature"],
     n: 12,
     label: "Decoder Cosine Web",
+    subtitle: "How closely each SAE feature's direction resembles others",
     group: "sae",
     blurb:
       "Feature splitting, measured: for every SAE feature, the maximum cosine " +
@@ -788,6 +815,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     linksTo: ["saeFeature"],
     n: 22,
     label: "Direction Compass",
+    subtitle: "SAE decoder alignment with neurons vs tokens",
     group: "sae",
     blurb:
       "Where do SAE feature directions actually point? For every one of the " +
@@ -835,6 +863,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     linksTo: ["saeFeature"],
     n: 24,
     label: "Co-Firing Venn",
+    subtitle: "Co-firing rates for the most significant feature pairs",
     group: "sae",
     blurb:
       "Do SAE features that point alike FIRE alike? The res-jb encoder run " +
@@ -886,6 +915,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     id: "grokking-clock",
     n: 16,
     label: "Grokking Clock",
+    subtitle: "Train vs test accuracy in a toy model",
     group: "trained",
     blurb:
       "Delayed generalization, live from a training run: a toy MLP " +
@@ -931,6 +961,7 @@ export const INTERP_FEATURES: InterpFeature[] = [
     id: "live-nebula",
     n: 25,
     label: "Live Prompt Nebula",
+    subtitle: "Live logit-lens readout for your typed prompt",
     group: "live",
     blurb:
       "Type any prompt and watch a REAL forward pass answer: every edit sends the " +

@@ -11,49 +11,94 @@
  *  representation after layers 0..d — a proper distribution (each row sums to 1)
  *  and strictly causal (j ≤ i). Scrub / play the depth to watch the "waterfall":
  *  local structure at shallow depth cascading onto the first-token attention SINK
- *  by full depth (a known, honest property of rollout — not a bug). Color is
- *  log₁₀ (the values span orders of magnitude); hover reads the exact value.
- *  deck.gl (WebGL2), camera off. */
+ *  by full depth (a known, honest property of rollout — not a bug).
+ *
+ *  DRAWN AS EXTRUDED COLUMNS ON `ChartStage` (three/webgpu + TSL + bloom), one
+ *  column per causal (source, destination) pair. Two things follow from that,
+ *  and neither is decoration:
+ *
+ *  1. The causal half is EMPTY GROUND, not a flat sheet of zeros. The cage still
+ *     spans the full T×T lattice, so the missing half reads as excluded rather
+ *     than as measured-and-tiny.
+ *  2. Height and colour carry the SAME log₁₀ normalization, so the two channels
+ *     cannot disagree about one number. The vertical axis is therefore a log
+ *     axis and is ticked as one — decade labels at 1e-4 … 1. A linear height
+ *     would leave everything but the attention sink flat on the floor, which is
+ *     precisely the structure this view exists to show.
+ *
+ *  No interpolated surface is drawn between columns: every pixel of every bar
+ *  belongs to one measured pair. */
 
-import type { Deck, OrthographicView } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
 import { loadTrace, type TraceBundle } from "../../data/interp";
-import { ACCENT, crosshair, MARKER_HOT, withAlpha } from "./chart-theme";
+import { ChartStage, type BarData, type ChartStageLook } from "./chart-stage";
+import { causalCells, computeRollouts, decadeAt, logNorm, type RollCell } from "./rollout";
 import { InterpTooltip } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
+import type { StatTile } from "../../chrome/StatStrip";
 
-type LayersModule = typeof import("@deck.gl/layers");
-
-const GL = 96; // px left gutter — destination token labels
-const GT = 66; // px top gutter — source token labels
-const GR = 34; // px right gutter
-const GB = 104; // px bottom gutter — depth control + axis caption
-const LOG_FLOOR = 1e-4; // color floor: values below this map to the darkest step
+const LOG_FLOOR = 1e-4; // colour + height floor: values at or below map to 0
 const STEP_MS = 640; // auto-play cadence (one real layer per step — no interpolation)
 
-// perceptual dark → gold ramp, evaluated on the log-normalized weight. The
-// lowest step is deliberately lifted off the page background so faint (but real)
-// cells stay visible as tiles rather than blending into the void.
+/** World layout. One lattice cell is 1 unit; the footprint leaves a gap so
+ *  neighbouring columns read as separate measurements rather than a ridge. */
+const CELL = 0.78;
+/** Cage height, world units, as a fraction of the lattice span — clamped so a
+ *  4-token trace is not a pillar and a 64-token one is not a pancake. */
+const cageHeight = (T: number) => Math.min(12, Math.max(4, T * 0.3));
+
+/** px gutters the fit must keep clear: token labels left and front, the depth
+ *  transport and axis caption below. */
+const INSET = { left: 84, top: 34, right: 44, bottom: 96 };
+
+/** Minimum projected spacing between two adjacent token labels before the axis
+ *  starts skipping them. Measured on the actual projection, so the stride
+ *  adapts to the orbit instead of assuming one. */
+const LABEL_MIN_PX = 11;
+
+/** perceptual dark → gold ramp, evaluated on the log-normalized weight. The
+ *  lowest step is deliberately lifted off the page background so faint (but
+ *  real) columns stay visible as solids rather than blending into the void.
+ *
+ *  The top stop is GOLD, not the near-white the flat version used. At full
+ *  depth the whole j=0 wall sits at t ≈ 0.95, so the top stop is not a rare
+ *  peak — it is most of what you look at. Cream plus bloom drove that entire
+ *  wall to flat white: the hue that IS the encoding, gone, exactly the failure
+ *  the compare field hit. Gold keeps its identity and lets the bloom halo be
+ *  the thing that says "hot". */
 const RAMP: Array<[number, [number, number, number]]> = [
   [0.0, [30, 38, 66]],
   [0.35, [50, 66, 120]],
   [0.6, [70, 150, 214]],
   [0.82, [232, 160, 60]],
-  [1.0, [255, 236, 194]],
+  [1.0, [250, 208, 112]],
 ];
 
-interface Cell {
-  i: number; // destination (row) — token that receives information
-  j: number; // source (col) — token information flows from
-}
+const LOOK: ChartStageLook = {
+  // bright enough to be seen through the bloom haze the sink wall throws: the
+  // acausal half of the lattice has to read as EXCLUDED, and it can only do
+  // that if its floor grid is actually visible
+  frameColor: 0x3d4560,
+  frameOpacity: 0.75,
+  // just past 1.0: the headroom is what the bloom threshold keys on, and the
+  // threshold is raised to match, so only the sink and its neighbours glow
+  emissiveMin: 0.62,
+  emissiveMax: 1.2,
+  dimLevel: 0.22,
+  azimuth: -0.72,
+  elevation: 0.62,
+  fov: 38,
+  // Tight radius on purpose. At full depth the ENTIRE j=0 wall clears the
+  // threshold, and a wide blur over an area that large stops reading as a glow
+  // on the wall and becomes a wash over the whole stage — which then hides the
+  // cage the acausal half needs to be legible.
+  bloom: { strength: 0.45, radius: 0.25, threshold: 0.88 },
+};
 
 export class AttentionRolloutDriver implements InterpDriver {
-  readonly animated = false; // static per depth; the play timer re-pushes on step
-  private deck: Deck<OrthographicView[]> | null = null;
-  private layersMod!: LayersModule;
-  private makeView!: () => OrthographicView;
+  readonly animated = false; // static per depth; the play timer re-renders on step
+  private stage = new ChartStage(LOOK);
   private canvas!: HTMLCanvasElement;
-  private overlay!: HTMLElement;
   private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
   private ctrlRoot!: HTMLElement;
@@ -62,34 +107,31 @@ export class AttentionRolloutDriver implements InterpDriver {
   private T = 0;
   private nLayer = 0;
   private rollouts: Float64Array[][] = []; // rollouts[d] = R_d (T rows of length T)
-  private cells: Cell[] = [];
+  private cells: RollCell[] = [];
   private depth = 0; // current cumulative depth d (0..nLayer-1)
-  private selRow = -1; // highlighted destination row (default: last token)
-  private hover: Cell | null = null;
+  private selRow = -1; // isolated destination row, or -1 for the whole matrix
+  private hover: RollCell | null = null;
   private playing = false;
   private timer = 0;
 
+  // reused per-instance buffers — a depth step rewrites every value but never
+  // the cell set, so these are allocated once per bundle
+  private bufPos = new Float32Array(0);
+  private bufH = new Float32Array(0);
+  private bufC = new Float32Array(0);
+  private bufG = new Float32Array(0);
+  private bufA = new Float32Array(0);
+
   private cssW = 1;
   private cssH = 1;
-  private dpr = 1;
   private disposers: Array<() => void> = [];
+  private labels: HTMLElement[] = [];
 
-  async init(canvas: HTMLCanvasElement, _tier: GpuTier, overlay: HTMLElement): Promise<void> {
+  async init(canvas: HTMLCanvasElement, tier: GpuTier, overlay: HTMLElement): Promise<void> {
     this.canvas = canvas;
-    this.overlay = overlay;
-    const [core, layers] = await Promise.all([import("@deck.gl/core"), import("@deck.gl/layers")]);
-    this.layersMod = layers;
-    this.makeView = () => new core.OrthographicView({ id: "ortho", flipY: false });
-    this.deck = new core.Deck({
-      canvas,
-      views: [this.makeView()],
-      viewState: this.viewState(),
-      controller: false,
-      useDevicePixels: Math.min(this.dpr, 2),
-      layers: [],
-      width: this.cssW,
-      height: this.cssH,
-    }) as unknown as Deck<OrthographicView[]>;
+    await this.stage.init(canvas, tier);
+    this.stage.onCamera = () => this.positionLabels();
+    this.stage.onClick = (sx, sy) => this.onClick(sx, sy);
 
     this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
@@ -101,14 +143,11 @@ export class AttentionRolloutDriver implements InterpDriver {
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onLeave = () => this.hideTip();
-    const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
-    canvas.addEventListener("pointerdown", onClick);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
-      canvas.removeEventListener("pointerdown", onClick);
     });
   }
 
@@ -118,216 +157,208 @@ export class AttentionRolloutDriver implements InterpDriver {
     this.bundle = b;
     this.T = b.meta.T;
     this.nLayer = b.meta.n_layer;
-    this.computeRollouts();
+    this.rollouts = computeRollouts(b.attn, this.T, b.meta.n_head, this.nLayer);
     this.selRow = -1; // no row isolated by default — show the whole matrix
     this.hover = null;
     this.stopPlay();
     this.depth = 0; // start at the top of the cascade and auto-play down the stack
-    // draw the lower-triangular cells once (rollout is causal → j ≤ i)
-    this.cells = [];
-    for (let i = 0; i < this.T; i++) for (let j = 0; j <= i; j++) this.cells.push({ i, j });
+
+    // the causal lower triangle: rollout only ever flows from j ≤ i
+    this.cells = causalCells(this.T);
+
+    const n = this.cells.length;
+    this.bufPos = new Float32Array(n * 2);
+    this.bufH = new Float32Array(n);
+    this.bufC = new Float32Array(n * 3);
+    this.bufG = new Float32Array(n);
+    this.bufA = new Float32Array(n);
+    const half = this.T / 2;
+    for (let k = 0; k < n; k++) {
+      const c = this.cells[k]!;
+      // x = source, z = destination. Row 0 sits at the FAR edge, so the causal
+      // staircase descends toward the viewer in the same direction the sequence
+      // reads — the 2-D version put row 0 at the top for the same reason.
+      this.bufPos[k * 2] = c.j + 0.5 - half;
+      this.bufPos[k * 2 + 1] = c.i + 0.5 - half;
+    }
+
+    this.stage.setLattice({
+      halfX: half,
+      halfZ: half,
+      cageY: cageHeight(this.T),
+      divX: this.T,
+      divZ: this.T,
+    });
+    this.stage.fitInset(INSET);
     this.buildControls();
-    this.pushLayers();
+    this.pushBars();
     this.positionLabels();
     this.startPlay(); // the waterfall: R_0 → R_{L-1}, resting at the full rollout
-  }
-
-  /** Precompute R_0 … R_{L-1}. Each is head-averaged, residual-augmented, and
-   *  cumulatively multiplied — so scrubbing depth is instant and exact. */
-  private computeRollouts(): void {
-    const b = this.bundle!;
-    const T = this.T;
-    const H = b.meta.n_head;
-    this.rollouts = [];
-    // running product R (starts at identity)
-    let R = Array.from({ length: T }, (_, i) => {
-      const r = new Float64Array(T);
-      r[i] = 1;
-      return r;
-    });
-    for (let l = 0; l < this.nLayer; l++) {
-      // Ã_l = 0.5·mean_h(attn) + 0.5·I, row-normalized
-      const Atil = Array.from({ length: T }, () => new Float64Array(T));
-      for (let i = 0; i < T; i++) {
-        let s = 0;
-        for (let j = 0; j < T; j++) {
-          let a = 0;
-          for (let h = 0; h < H; h++) a += b.attn[l]![h]![i]![j]!;
-          a /= H;
-          const v = 0.5 * a + (i === j ? 0.5 : 0);
-          Atil[i]![j] = v;
-          s += v;
-        }
-        if (s > 0) for (let j = 0; j < T; j++) Atil[i]![j]! /= s;
-      }
-      // R ← Ã_l · R
-      const next = Array.from({ length: T }, () => new Float64Array(T));
-      for (let i = 0; i < T; i++) {
-        for (let k = 0; k < T; k++) {
-          const a = Atil[i]![k]!;
-          if (a === 0) continue;
-          const Rk = R[k]!;
-          const ni = next[i]!;
-          for (let j = 0; j < T; j++) ni[j]! += a * Rk[j]!;
-        }
-      }
-      R = next;
-      this.rollouts.push(R.map((row) => Float64Array.from(row)));
-    }
   }
 
   private valOf(i: number, j: number): number {
     return this.rollouts[this.depth]?.[i]?.[j] ?? 0;
   }
 
-  private colorOf = (d: Cell): [number, number, number, number] => {
-    const v = this.valOf(d.i, d.j);
-    // log-normalize: values span orders of magnitude (a real sink forms at j=0)
-    const t = v <= LOG_FLOOR ? 0 : Math.min(1, (Math.log10(v) - Math.log10(LOG_FLOOR)) / -Math.log10(LOG_FLOOR));
-    const [r, g, b] = ramp(t);
-    let a = 255;
-    if (this.selRow >= 0 && d.i !== this.selRow) a = 70; // isolate the selected row
-    if (this.hover && this.hover.i === d.i && this.hover.j === d.j) a = 255;
-    return [r, g, b, a];
-  };
+  /** The one normalization in this view. Colour AND height both read it, so a
+   *  tall column is a bright column by construction — they can never tell two
+   *  different stories about the same weight. */
+  private norm(v: number): number {
+    return logNorm(v, LOG_FLOOR);
+  }
 
-  private pushLayers(): void {
-    if (!this.deck) return;
-    const { PolygonLayer, PathLayer } = this.layersMod;
-    const T = this.T;
-    // hovered cell: a crisp MARKER_HOT reticle around the tile plus an ACCENT
-    // crosshair through its centre (req 4). Dashes are authored in pixels and
-    // scaled into this driver's world space (1 world unit = 1 cell).
-    const hover = this.hover;
-    const wpp = 1 / this.zoomPx();
-    const hoverPath: { path: [number, number][] }[] = [];
-    const cross: { path: [number, number][] }[] = [];
-    if (hover) {
-      const x = hover.j;
-      const y = T - hover.i - 1;
-      hoverPath.push({
-        path: [
-          [x, y],
-          [x + 1, y],
-          [x + 1, y + 1],
-          [x, y + 1],
-          [x, y],
-        ],
-      });
-      for (const s of crosshair(x + 0.5, y + 0.5, { x0: 0, y0: 0, x1: T, y1: T }, 4 * wpp, 5 * wpp)) {
-        cross.push({ path: [s.source, s.target] });
-      }
+  private pushBars(): void {
+    const n = this.cells.length;
+    if (n === 0) return;
+    const cage = cageHeight(this.T);
+    for (let k = 0; k < n; k++) {
+      const c = this.cells[k]!;
+      const t = this.norm(this.valOf(c.i, c.j));
+      this.bufH[k] = t * cage;
+      this.bufG[k] = t;
+      const [r, g, b] = ramp(t);
+      this.bufC[k * 3] = r / 255;
+      this.bufC[k * 3 + 1] = g / 255;
+      this.bufC[k * 3 + 2] = b / 255;
+      const isSel = this.selRow < 0 || c.i === this.selRow;
+      const isHover = this.hover !== null && this.hover.i === c.i && this.hover.j === c.j;
+      this.bufA[k] = isSel || isHover ? 1 : 0;
     }
-    this.deck.setProps({
-      layers: [
-        new PolygonLayer<Cell>({
-          id: "roll-cells",
-          data: this.cells,
-          getPolygon: (d) => {
-            const x = d.j;
-            const y = T - d.i - 1; // row 0 (dest) at the TOP
-            return [
-              [x, y],
-              [x + 1, y],
-              [x + 1, y + 1],
-              [x, y + 1],
-            ];
-          },
-          getFillColor: this.colorOf,
-          stroked: true,
-          filled: true,
-          getLineColor: [8, 10, 18, 160],
-          lineWidthUnits: "pixels",
-          getLineWidth: 1,
-          lineWidthMinPixels: 0.5,
-          pickable: true,
-          updateTriggers: {
-            getFillColor: `${this.depth}|${this.selRow}|${this.hover ? `${this.hover.i},${this.hover.j}` : "x"}`,
-          },
-        }),
-        new PathLayer<{ path: [number, number][] }>({
-          id: "roll-crosshair",
-          data: cross,
-          getPath: (d) => d.path,
-          getColor: withAlpha(ACCENT, 0.5),
-          getWidth: 1,
-          widthUnits: "pixels",
-          pickable: false,
-        }),
-        new PathLayer<{ path: [number, number][] }>({
-          id: "roll-hover",
-          data: hoverPath,
-          getPath: (d) => d.path,
-          getColor: withAlpha(MARKER_HOT, 0.86),
-          getWidth: 1.4,
-          widthUnits: "pixels",
-          pickable: false,
-        }),
-      ],
-    });
-  }
-
-  // ---- layout ---------------------------------------------------------------
-  private zoomPx(): number {
-    const availW = this.cssW - GL - GR;
-    const availH = this.cssH - GT - GB;
-    return Math.max(6, Math.min(availW / this.T, availH / this.T));
-  }
-  private targetX(): number {
-    const centerScreenX = GL + (this.cssW - GL - GR) / 2;
-    return this.T / 2 - (centerScreenX - this.cssW / 2) / this.zoomPx();
-  }
-  private targetY(): number {
-    const centerScreenY = GT + (this.cssH - GT - GB) / 2;
-    return this.T / 2 - (this.cssH / 2 - centerScreenY) / this.zoomPx();
-  }
-  private worldToScreen(wx: number, wy: number): [number, number] {
-    const z = this.zoomPx();
-    return [
-      this.cssW / 2 + (wx - this.targetX()) * z,
-      this.cssH / 2 - (wy - this.targetY()) * z,
-    ];
-  }
-  private viewState() {
-    return {
-      ortho: {
-        target: [this.targetX(), this.targetY(), 0] as [number, number, number],
-        zoom: Math.log2(this.zoomPx()),
-      },
+    const d: BarData = {
+      count: n,
+      pos: this.bufPos,
+      height: this.bufH,
+      color: this.bufC,
+      glow: this.bufG,
+      active: this.bufA,
+      cellX: CELL,
+      cellZ: CELL,
     };
+    this.stage.setBars(d);
+    this.syncProbe();
+    this.stage.render();
   }
 
+  /** Rails from the hovered column's top down to the floor and out to both
+   *  axis walls — how a height is read off the cage once the camera can turn. */
+  private syncProbe(): void {
+    const h = this.hover;
+    if (!h) {
+      this.stage.setProbe(null);
+      return;
+    }
+    const half = this.T / 2;
+    const t = this.norm(this.valOf(h.i, h.j));
+    this.stage.setProbe(h.j + 0.5 - half, t * cageHeight(this.T), h.i + 0.5 - half);
+  }
+
+  // ---- labels ---------------------------------------------------------------
+
+  private ensureLabels(n: number): void {
+    while (this.labels.length < n) {
+      const el = document.createElement("div");
+      el.className = "interp-stage-lab";
+      this.labelRoot.appendChild(el);
+      this.labels.push(el);
+    }
+  }
+
+  /** Token axes on the two near cage edges, decade ticks up the height post,
+   *  and three captions. Every anchor is a real world point run through the
+   *  stage's projector, so a label cannot drift from the column it names. */
   private positionLabels(): void {
     const b = this.bundle;
-    if (!b) return;
-    this.labelRoot.textContent = "";
+    if (!b || !this.labelRoot) return;
     const T = this.T;
-    for (let i = 0; i < T; i++) {
-      // destination labels (left), one per row
-      const dl = document.createElement("div");
-      dl.className = `interp-roll-dst${i === this.selRow ? " is-sel" : ""}`;
-      dl.textContent = fmtTok(b.token_strs[i] ?? "");
-      const [lx, ly] = this.worldToScreen(0, T - i - 0.5);
-      dl.style.transform = `translate(${(lx - 8).toFixed(1)}px, ${ly.toFixed(1)}px)`;
-      this.labelRoot.appendChild(dl);
-      // source labels (top), one per column, rotated
-      const sl = document.createElement("div");
-      sl.className = "interp-roll-src";
-      sl.textContent = fmtTok(b.token_strs[i] ?? "");
-      const [sx, sy] = this.worldToScreen(i + 0.5, T);
-      sl.style.transform = `translate(${sx.toFixed(1)}px, ${(sy - 8).toFixed(1)}px) rotate(-52deg)`;
-      this.labelRoot.appendChild(sl);
+    const half = T / 2;
+    const cage = cageHeight(T);
+
+    // Stride is MEASURED, not assumed: project two adjacent anchors and see how
+    // far apart they actually land at this orbit. A fixed stride would either
+    // waste the axis when the camera is close or overlap when it is not.
+    const stride = (a: [number, number] | null, c: [number, number] | null) => {
+      if (!a || !c) return 1;
+      const gap = Math.hypot(c[0] - a[0], c[1] - a[1]);
+      return gap < 0.01 ? T : Math.max(1, Math.ceil(LABEL_MIN_PX / gap));
+    };
+    const srcStride = stride(
+      this.stage.project(0.5 - half, 0, half),
+      this.stage.project(1.5 - half, 0, half),
+    );
+    const dstStride = stride(
+      this.stage.project(-half, 0, 0.5 - half),
+      this.stage.project(-half, 0, 1.5 - half),
+    );
+
+    type Spec = { p: [number, number] | null; text: string; cls: string };
+    const specs: Spec[] = [];
+    for (let j = 0; j < T; j += srcStride) {
+      specs.push({
+        p: this.stage.project(j + 0.5 - half, 0, half + 0.5),
+        text: fmtTok(b.token_strs[j] ?? ""),
+        cls: "interp-stage-lab is-col",
+      });
     }
-    // Left caption only: "row = destination, col = source" is fully disambiguated
-    // by the two token axes, the hover ("dst ← src"), and the blurb. A top caption
-    // would collide with the prompt tracebar, so we dock this one in the far-left
-    // gutter, clear of the right-aligned destination token labels.
-    const dcap = document.createElement("div");
-    dcap.className = "interp-roll-axis is-dst";
-    dcap.textContent = "destination ← source";
-    const [, dcy] = this.worldToScreen(0, T / 2);
-    dcap.style.transform = `translate(20px, ${dcy.toFixed(1)}px) rotate(-90deg)`;
-    this.labelRoot.appendChild(dcap);
+    for (let i = 0; i < T; i += dstStride) {
+      specs.push({
+        p: this.stage.project(-half - 0.5, 0, i + 0.5 - half),
+        text: fmtTok(b.token_strs[i] ?? ""),
+        cls: `interp-stage-lab is-row${i === this.selRow ? " is-sel" : ""}`,
+      });
+    }
+    // Decade ticks — the height axis is log₁₀, and saying so with the tick
+    // VALUES is the only way the extrusion is readable as a measurement.
+    //
+    // They hang off a post the stage places: destination owns the whole
+    // x = -half edge and source the whole z = +half edge, and which of the
+    // remaining corners actually lands outside the silhouette depends on the
+    // lattice aspect and the orbit — see `ChartStage.heightPost`.
+    const post = this.stage.heightPost(-1, 1);
+    if (post) {
+      const cls = `interp-stage-lab ${post.side === "left" ? "is-h" : "is-hl"}`;
+      for (let e = -4; e <= 0; e++) {
+        specs.push({
+          p: this.stage.project(post.x, decadeAt(e, LOG_FLOOR) * cage, post.z),
+          text: e === 0 ? "1" : `1e${e}`,
+          cls,
+        });
+      }
+      specs.push({
+        p: this.stage.project(post.x, cage + 0.9, post.z),
+        text: "rollout ↑",
+        cls: "interp-stage-cap",
+      });
+    }
+    specs.push({
+      p: this.stage.project(0, 0, half + 1.6),
+      text: "source →",
+      cls: "interp-stage-cap",
+    });
+    specs.push({
+      p: this.stage.project(-half - 1.9, 0, 0),
+      text: "destination →",
+      cls: "interp-stage-cap",
+    });
+
+    this.ensureLabels(specs.length);
+    for (let k = 0; k < this.labels.length; k++) {
+      const el = this.labels[k]!;
+      const s = specs[k];
+      // Off the canvas, hide it. Every anchor here sits OUTSIDE the cage by
+      // design, so at some orbits one slides past the edge — and an axis label
+      // clipped by the stat strip or clamped back inside would be pointing at
+      // something other than what it names.
+      if (!s || !s.p || s.p[0] < 2 || s.p[1] < 2 || s.p[0] > this.cssW - 2 || s.p[1] > this.cssH - 2) {
+        el.style.display = "none";
+        continue;
+      }
+      el.className = s.cls;
+      el.textContent = s.text;
+      el.style.display = "";
+      // `translate`, never `transform` — the anchoring offset lives in CSS
+      // `transform`, and writing both here would clobber it
+      el.style.translate = `${Math.round(s.p[0])}px ${Math.round(s.p[1])}px`;
+    }
   }
 
   /** The depth transport. Built imperatively because that is this page's
@@ -429,7 +460,7 @@ export class AttentionRolloutDriver implements InterpDriver {
   private setDepth(d: number): void {
     this.depth = Math.max(0, Math.min(this.nLayer - 1, d | 0));
     this.syncControls();
-    this.pushLayers();
+    this.pushBars();
   }
 
   private togglePlay(): void {
@@ -458,33 +489,35 @@ export class AttentionRolloutDriver implements InterpDriver {
     this.syncControls();
   }
 
-  private pick(e: PointerEvent): Cell | null {
-    if (!this.deck) return null;
-    const rect = this.canvas.getBoundingClientRect();
-    const info = this.deck.pickObject({
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-      radius: 1,
-      layerIds: ["roll-cells"],
-    });
-    return (info?.object as Cell | undefined) ?? null;
+  private pick(sx: number, sy: number): RollCell | null {
+    const idx = this.stage.pickAt(sx, sy);
+    return idx < 0 ? null : (this.cells[idx] ?? null);
   }
 
-  private onClick(e: PointerEvent): void {
-    const cell = this.pick(e);
+  private onClick(sx: number, sy: number): void {
+    const cell = this.pick(sx, sy);
     if (!cell) return;
     this.selRow = this.selRow === cell.i ? -1 : cell.i; // toggle row isolation
-    this.pushLayers();
+    this.pushBars();
     this.positionLabels();
   }
 
   private onPointerMove(e: PointerEvent): void {
     if (!this.bundle) return;
-    const cell = this.pick(e);
+    // mid-orbit the pointer is steering the camera, not reading the data — a
+    // tooltip here would chase the drag across every column it swept
+    if (this.stage.isDragging) {
+      this.hideTip();
+      return;
+    }
+    const rect = this.canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const cell = this.pick(sx, sy);
     const same = cell && this.hover && cell.i === this.hover.i && cell.j === this.hover.j;
     if (!same) {
       this.hover = cell;
-      this.pushLayers();
+      this.pushBars();
     }
     if (!cell) {
       this.hideTip();
@@ -494,20 +527,15 @@ export class AttentionRolloutDriver implements InterpDriver {
     const v = this.valOf(cell.i, cell.j);
     const dst = fmtTok(b.token_strs[cell.i] ?? "");
     const src = fmtTok(b.token_strs[cell.j] ?? "");
-    // swatch = the exact log-normalized ramp color this cell was drawn with
-    const t =
-      v <= LOG_FLOOR
-        ? 0
-        : Math.min(1, (Math.log10(v) - Math.log10(LOG_FLOOR)) / -Math.log10(LOG_FLOOR));
-    const [sr, sg, sb] = ramp(t);
+    // swatch = the exact log-normalized ramp colour this column was drawn with
+    const [sr, sg, sb] = ramp(this.norm(v));
     this.tooltip.show([
       { kind: "label", text: `dst “${dst}” ← src “${src}”`, swatch: [sr, sg, sb] },
       { text: "rollout", value: v.toFixed(4), hot: true },
       { text: "through", value: `L${this.depth}` },
       { text: "pos", value: `${cell.j}→${cell.i}` },
     ]);
-    const rect = this.canvas.getBoundingClientRect();
-    this.tooltip.move(e.clientX - rect.left, e.clientY - rect.top, this.cssW, this.cssH);
+    this.tooltip.move(sx, sy, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
   }
 
@@ -516,25 +544,67 @@ export class AttentionRolloutDriver implements InterpDriver {
     this.canvas.style.cursor = "";
     if (this.hover) {
       this.hover = null;
-      this.pushLayers();
+      this.pushBars();
     }
   }
 
+  /** Footer strip. Every tile is depth-INDEPENDENT: the host reads this once
+   *  when the bundle lands, so a value keyed to the scrub position would go
+   *  stale the moment the user moved it. The peak is taken at full depth over
+   *  exactly the cells that get drawn (lower triangle), not over the padded
+   *  matrix — the strip and the canvas must agree on what "max" means.
+   *
+   *  It also EXCLUDES the diagonal, which is not a detail. R[0][0] is 1.0000 in
+   *  every rollout of every prompt — the first token has nothing else to attend
+   *  to — so a plain max prints a structural constant dressed as a measurement,
+   *  identically for every model the viewer can load. The off-diagonal max is
+   *  the one that actually varies with the prompt. */
+  stats(): StatTile[] {
+    if (!this.bundle) return [];
+    const full = this.rollouts[this.nLayer - 1];
+    let peak = 0;
+    let at = "";
+    if (full) {
+      for (const c of this.cells) {
+        if (c.i === c.j) continue;
+        const v = full[c.i]?.[c.j] ?? 0;
+        if (v > peak) {
+          peak = v;
+          at = `${c.j}→${c.i}`;
+        }
+      }
+    }
+    return [
+      { label: "tokens", value: String(this.T), title: "sequence length T" },
+      { label: "layers", value: String(this.nLayer) },
+      { label: "heads", value: String(this.bundle.meta.n_head) },
+      {
+        label: "columns",
+        value: this.cells.length.toLocaleString("en-US"),
+        title: "lower-triangular (source → destination) pairs extruded",
+      },
+      {
+        label: "peak off-diag",
+        value: full ? peak.toFixed(4) : "—",
+        title: at
+          ? `largest source→destination rollout at full depth (L${this.nLayer}), at pos ${at}. ` +
+            "Self-attention is excluded: R[0][0] is 1.0 by construction."
+          : undefined,
+      },
+    ];
+  }
+
   frame(_dt: number, _t: number): void {
-    // depth is stepped by the play timer, not the RAF — nothing to do here
+    // depth is stepped by the play timer and the camera by the stage's own
+    // pointer handlers — both redraw on demand, so there is no RAF work here
   }
 
   resize(width: number, height: number, dpr: number): void {
     this.cssW = width;
     this.cssH = height;
-    this.dpr = dpr;
-    this.deck?.setProps({
-      width,
-      height,
-      useDevicePixels: Math.min(dpr, 2),
-      viewState: this.viewState(),
-    });
+    this.stage.resize(width, height, dpr);
     this.positionLabels();
+    this.stage.render();
   }
 
   dispose(): void {
@@ -544,8 +614,8 @@ export class AttentionRolloutDriver implements InterpDriver {
     this.tooltip?.dispose();
     this.labelRoot?.remove();
     this.ctrlRoot?.remove();
-    this.deck?.finalize();
-    this.deck = null;
+    this.labels = [];
+    this.stage.dispose();
   }
 }
 

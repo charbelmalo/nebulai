@@ -64,6 +64,80 @@ export interface SessionTurn {
   textPreview?: string | null;
 }
 
+/** One turn's context window, decomposed.
+ *
+ *  `reused + written + fresh` is the whole prompt that turn — three disjoint,
+ *  separately-metered parts of one measured number, not an estimate. */
+export interface ContextSlice {
+  /** Index into `SessionAnalysis.turns`, so the chart and the field agree. */
+  turn: number;
+  tSec: number;
+  reused: number; // cache_read — the conversation already in cache
+  written: number; // cache_creation — content cached for the first time this turn
+  fresh: number; // input_tokens — sent uncached
+  prompt: number; // the three above; the real size of the window this turn
+  output: number; // what the model added, which lands in the NEXT prompt
+
+  /** `prompt` minus the previous turn's `prompt`. null on the first turn:
+   *  there is nothing to difference against, and 0 would read as "no growth". */
+  growth: number | null;
+  /** The previous turn's `output` — what the model wrote just before this
+   *  prompt was assembled. Exactly measured, and deliberately named for what it
+   *  IS rather than for what it did: it is NOT the model's contribution to this
+   *  window. Thinking tokens are billed as output and then dropped from the
+   *  next prompt, so this routinely exceeds what actually carried forward.
+   *  Measured on a real 731-turn transcript: 8 steps where the window grew by
+   *  less than the model had just written. */
+  priorOutput: number | null;
+  /** `growth − priorOutput`. A RESIDUAL, not an attribution — it mixes two
+   *  things that cannot be separated from a transcript: content that entered
+   *  the window without being billed as output (tool results, typed prompts),
+   *  and model output that was billed but never re-fed (thinking). Kept because
+   *  its sign is informative; never labelled as "what the tools contributed". */
+  residual: number | null;
+}
+
+/** How the context window was used across a session.
+ *
+ *  This is the honest form of requested feature #4. The spec asked for a
+ *  system / user / output / retrieved split; a Claude Code transcript meters
+ *  tokens per REQUEST, not per content block, so three of those four cannot be
+ *  separated and "retrieved" does not exist in this repo at all (no RAG — see
+ *  the §2 audit row for #7).
+ *
+ *  What the transcript DOES meter exactly is the cache decomposition of every
+ *  prompt — reused / newly cached / uncached — which is a true partition of a
+ *  real number and is what the columns draw.
+ *
+ *  Alongside it sit two more measured series, `growth` and `priorOutput`, shown
+ *  as two numbers rather than combined into one attribution. Combining them is
+ *  the tempting mistake: `growth − priorOutput` looks like "what the tools
+ *  contributed", and it is not. On a real 731-turn transcript that quantity
+ *  sums to −351k, because five compactions dominate it and because thinking
+ *  tokens are billed as output and then never re-fed. */
+export interface ContextComposition {
+  slices: ContextSlice[]; // main-agent turns, in order
+  peakPrompt: number;
+  /** Turns where the window SHRANK. Compaction, or a context reset. Surfaced
+   *  rather than clamped: a negative growth is a real event, and clamping it to
+   *  zero would silently turn "the window was rebuilt" into "nothing happened". */
+  compactedAt: number[];
+  /** Sub-agent turns left out. Each sub-agent runs in its OWN window, so
+   *  differencing a series that interleaves them measures the gap between two
+   *  unrelated conversations. Reported so the omission is visible. */
+  excludedSidechain: number;
+  /** False when some response reported different prompt usage on different
+   *  lines, so the per-field max mixes them and the three parts sum to an upper
+   *  bound rather than to any one request's prompt.
+   *
+   *  `null` means the check itself wasn't recorded — a composition rebuilt from
+   *  a persisted analysis. The per-turn token counts survive persistence, so
+   *  the decomposition is as real as ever; only the knowledge of whether the
+   *  usage lines agreed is gone, and `false` would assert an inexactness we
+   *  have no evidence for. */
+  exact: boolean | null;
+}
+
 /** Ground-truth session totals, present only in the SDK *audit* format's
  *  terminal `result` line. When present these are AUTHORITATIVE — the streamed
  *  per-assistant-line `usage` is partial (it logs only the first chunk), so the
@@ -106,6 +180,13 @@ export interface SessionAnalysis {
 
   toolHistogram: [string, number][]; // tool name → count, descending
   toolTotal: number;
+  toolOutcomes: ToolOutcome[]; // per-tool outcome split, descending by total
+  /** Failures the transcript reports but cannot charge to any one tool: the
+   *  audit format's top-level `tool_use_result.is_error` carries no
+   *  `tool_use_id`. Counted in `errorCount`, absent from `toolOutcomes`. Any
+   *  view of the outcome split MUST surface this, or it silently under-reports
+   *  failure. */
+  unattributedErrors: number;
   filesTouched: [string, number][]; // path → touch count, descending
   errorCount: number; // tool_result blocks flagged is_error
   sidechainTurns: number; // assistant turns from sub-agents
@@ -113,7 +194,35 @@ export interface SessionAnalysis {
   categoryTotals: Record<ToolCategory, number>; // turns per dominant category
 
   authoritative: SessionAuthoritative | null; // result-line ground truth, if any
+  /** Context window decomposition (#4). `undefined` — not an empty composition —
+   *  on analyses persisted before this existed: the raw transcript is never
+   *  stored, so those genuinely cannot know, and the UI must say so rather than
+   *  draw an empty chart that looks like a session which used no context. */
+  context?: ContextComposition;
   loadedAt: number;
+}
+
+/** How one tool's calls turned out.
+ *
+ *  Three buckets, and the third is the honest one. The spec this came from
+ *  asked for **success / partial / fail**; a Claude Code transcript has no
+ *  notion of a partial tool result. A `tool_result` block either carries
+ *  `is_error` or it does not — there is no third flag, no exit code, no
+ *  severity. Inventing a "partial" bucket would mean inventing a rule for
+ *  which successes are secretly half-failures, and every such rule is a guess
+ *  dressed as a measurement.
+ *
+ *  What IS real, and what "partial" was probably reaching for, is
+ *  `unresolved`: a `tool_use` for which no `tool_result` ever appears. That
+ *  happens when a call was interrupted or the log was truncated mid-flight. It
+ *  is deliberately NOT folded into `ok` — an unanswered call is not a
+ *  successful one, and folding it would overstate the success rate. */
+export interface ToolOutcome {
+  tool: string;
+  ok: number;
+  failed: number;
+  unresolved: number;
+  total: number;
 }
 
 // ── tool → category ──────────────────────────────────────────────────────────
@@ -217,6 +326,14 @@ interface Acc {
   parentToolUseId: string | null; // spawning tool_use id for sub-agent turns
   model: string | null;
   usage: Record<string, number>; // per-field MAX across the group's streamed lines
+  /** True once two lines of this response reported DIFFERENT prompt usage.
+   *
+   *  The per-field max then draws its fields from different lines, so their sum
+   *  is an upper bound on the prompt rather than any one request's prompt. That
+   *  is fine for the peak tiles (a max of maxes is still a max) but it is not a
+   *  decomposition, and the composition view has to say so instead of drawing
+   *  three exact-looking segments over a number no request ever saw. */
+  usageVaried: boolean;
   tools: string[];
   files: string[];
   thinkingBlocks: number;
@@ -289,6 +406,188 @@ function mergeUsageMax(into: Record<string, number>, next: Record<string, number
   }
 }
 
+/** Decompose the context window across a session's main-agent turns.
+ *
+ *  Pure over `SessionTurn[]`, so it is testable without a transcript.
+ *
+ *  Sub-agent turns are dropped, not summed in: each runs in its own window, and
+ *  differencing a series that interleaves two independent conversations
+ *  measures the gap between them, which is not growth of anything.
+ *
+ *  @param exact false when any response reported inconsistent prompt usage
+ *               across its lines; null when rebuilding from a persisted
+ *               analysis, where the check was never stored — see
+ *               `ContextComposition.exact`. */
+export function buildComposition(
+  turns: SessionTurn[],
+  exact: boolean | null,
+): ContextComposition {
+  const main = turns.filter((t) => !t.isSidechain);
+  const slices: ContextSlice[] = [];
+  const compactedAt: number[] = [];
+  let peakPrompt = 0;
+
+  for (let i = 0; i < main.length; i++) {
+    const t = main[i]!;
+    const prev = i > 0 ? main[i - 1]! : null;
+    const prompt = t.cacheRead + t.cacheWrite + t.inputTokens;
+    if (prompt > peakPrompt) peakPrompt = prompt;
+    const growth = prev ? prompt - (prev.cacheRead + prev.cacheWrite + prev.inputTokens) : null;
+    const priorOutput = prev ? prev.outputTokens : null;
+    if (growth !== null && growth < 0) compactedAt.push(t.index);
+    slices.push({
+      turn: t.index,
+      tSec: t.tSec,
+      reused: t.cacheRead,
+      written: t.cacheWrite,
+      fresh: t.inputTokens,
+      prompt,
+      output: t.outputTokens,
+      growth,
+      priorOutput,
+      residual: growth !== null && priorOutput !== null ? growth - priorOutput : null,
+    });
+  }
+
+  return {
+    slices,
+    peakPrompt,
+    compactedAt,
+    excludedSidechain: turns.length - main.length,
+    exact,
+  };
+}
+
+/* ---- the agent path — requested feature #2 ------------------------------ */
+
+/** One step along ONE agent's own path.
+ *
+ *  `step` counts within the agent, not the session, because that is the number
+ *  an agent's own trace is read by: a sub-agent's third step is its third step
+ *  whatever the surrounding session was doing. On a single-agent session the
+ *  two numbers coincide, which is why the view only shows this one when they
+ *  can differ. */
+export interface AgentStep {
+  /** Index into `SessionAnalysis.turns` — the join key with the field. */
+  turn: number;
+  agentId: string;
+  step: number; // 1-based, within this agent
+  ofSteps: number; // how many steps this agent ran in total
+  /** Wall-clock seconds since this agent's PREVIOUS step.
+   *
+   *  Null on an agent's first step (nothing to difference against) and null
+   *  whenever either endpoint lacked a timestamp — `tSec` falls back to 0 when
+   *  a line has no clock, and differencing against that manufactures a gap out
+   *  of a missing measurement. Hence `tMs`, which is null when unknown.
+   *
+   *  This is elapsed time between two responses, NOT how long the step took:
+   *  it contains tool execution, model latency, and — on a turn that followed
+   *  a human prompt — however long the human took. Named for what it measures. */
+  gapSec: number | null;
+}
+
+/** One agent's steps, in transcript order. Not necessarily contiguous in the
+ *  session: a sub-agent runs *inside* one of the parent's tool calls, so the
+ *  parent's steps resume after it. The edge that spans that interruption is
+ *  real — the parent genuinely continued from there. */
+export interface AgentPath {
+  agentId: string;
+  isSidechain: boolean;
+  steps: AgentStep[];
+  spanSec: number | null; // first→last step of this agent; null when untimed
+}
+
+export interface AgentGraph {
+  paths: AgentPath[];
+  /** turn index → its step. */
+  byTurn: Map<number, AgentStep>;
+  /** False when NO step in the session could be timed, so every `gapSec` is
+   *  null for want of a clock rather than for want of a predecessor. Lets the
+   *  view say "not recorded" once instead of printing dashes forever. */
+  timed: boolean;
+}
+
+/** Split a session's turns into one path per agent, numbering and timing each
+ *  step within its own agent.
+ *
+ *  The session field draws the trail from these paths rather than from a single
+ *  walk over `turns`, because a single walk emits an edge across every change
+ *  of agent — parent→sub and sub→parent — and neither is a step either agent
+ *  took. NOTE that on this machine that defect fires on nothing: 0 of 10,391
+ *  turns across 239 real transcripts carry `isSidechain`. The multi-agent path
+ *  below is therefore correct by construction and by unit test, and unexercised
+ *  by any real recording. */
+export function buildAgentGraph(turns: SessionTurn[]): AgentGraph {
+  const order: string[] = [];
+  const groups = new Map<string, SessionTurn[]>();
+  for (const t of turns) {
+    let g = groups.get(t.agentId);
+    if (!g) {
+      g = [];
+      groups.set(t.agentId, g);
+      order.push(t.agentId);
+    }
+    g.push(t);
+  }
+
+  const paths: AgentPath[] = [];
+  const byTurn = new Map<number, AgentStep>();
+  let timed = false;
+
+  for (const agentId of order) {
+    const g = groups.get(agentId)!;
+    const steps: AgentStep[] = [];
+    for (let i = 0; i < g.length; i++) {
+      const t = g[i]!;
+      const prev = i > 0 ? g[i - 1]! : null;
+      const gapSec =
+        prev && prev.tMs !== null && t.tMs !== null ? (t.tMs - prev.tMs) / 1000 : null;
+      if (gapSec !== null) timed = true;
+      const s: AgentStep = { turn: t.index, agentId, step: i + 1, ofSteps: g.length, gapSec };
+      steps.push(s);
+      byTurn.set(t.index, s);
+    }
+    const first = g[0]!;
+    const last = g[g.length - 1]!;
+    paths.push({
+      agentId,
+      isSidechain: first.isSidechain,
+      steps,
+      spanSec: first.tMs !== null && last.tMs !== null ? (last.tMs - first.tMs) / 1000 : null,
+    });
+  }
+
+  return { paths, byTurn, timed };
+}
+
+/** The three prompt fields the composition decomposes. `output_tokens` is
+ *  deliberately absent: it varies line to line by design (the audit format logs
+ *  the first chunk, then the total) and that variation says nothing about
+ *  whether the PROMPT was reported consistently. */
+const PROMPT_FIELDS = [
+  "input_tokens",
+  "cache_read_input_tokens",
+  "cache_creation_input_tokens",
+] as const;
+
+/** Did this line's usage disagree with what we already had about the prompt?
+ *  Called before the merge, so `into` still holds the previous state. A field
+ *  appearing for the first time is not disagreement — only a different value
+ *  for a field we already saw. */
+function usageDisagrees(
+  into: Record<string, number>,
+  next: Record<string, number> | undefined,
+): boolean {
+  if (!next) return false;
+  for (const k of PROMPT_FIELDS) {
+    const a = into[k];
+    const b = next[k];
+    if (a === undefined || typeof b !== "number" || !Number.isFinite(b)) continue;
+    if (a !== b) return true;
+  }
+  return false;
+}
+
 function parseTs(s: string | undefined): number | null {
   if (!s) return null;
   const t = Date.parse(s);
@@ -308,23 +607,41 @@ function num(u: Record<string, number> | undefined, k: string): number {
  *  same failure, so the top-level flag only counts when no block already did —
  *  otherwise every audit-format failure is counted twice. (The result line's
  *  session-level `is_error` is captured separately as authoritative.isError.) */
-function lineErrors(o: RawLine): { total: number; byToolUse: string[] } {
+function lineErrors(o: RawLine): {
+  /** tool_use_ids that failed, so each failure lands on the turn AND the tool
+   *  that made the call. Deduplicated globally by the caller, not here — see
+   *  the replay note in `parseSessionTranscript`. */
+  byToolUse: string[];
+  /** Every tool_use_id this line answers, failed or not. A call that never
+   *  shows up here got no result at all, which is a distinct outcome from
+   *  succeeding — see ToolOutcome. */
+  resolved: string[];
+  /** Failures on this line that no tool can be charged with: the top-level
+   *  audit-format flag carries no tool_use_id, and a malformed `tool_result`
+   *  can be missing one. Real failures, unattributable ones. */
+  unattributed: number;
+} {
   const byToolUse: string[] = [];
-  let total = 0;
+  const resolved: string[] = [];
+  let unattributed = 0;
+  let blockErrors = 0;
   const content = o.message?.content;
   if (Array.isArray(content)) {
     for (const block of content) {
       if (block && typeof block === "object") {
         const b = block as Record<string, unknown>;
-        if (b.type === "tool_result" && b.is_error) {
-          total++;
+        if (b.type !== "tool_result") continue;
+        if (typeof b.tool_use_id === "string") resolved.push(b.tool_use_id);
+        if (b.is_error) {
+          blockErrors++;
           if (typeof b.tool_use_id === "string") byToolUse.push(b.tool_use_id);
+          else unattributed++;
         }
       }
     }
   }
-  if (total === 0 && o.type !== "result" && o.tool_use_result?.is_error) total = 1;
-  return { total, byToolUse };
+  if (blockErrors === 0 && o.type !== "result" && o.tool_use_result?.is_error) unattributed++;
+  return { byToolUse, resolved, unattributed };
 }
 
 /** Parse a Claude Code transcript into an honest session trajectory.
@@ -355,6 +672,13 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
   // reported on a later user line is charged to the turn that caused it
   const toolUseOwner = new Map<string, string>();
   const errorsByReq = new Map<string, number>();
+  // tool_use_id → tool name, so a failure reported on a later user line can be
+  // charged to the TOOL as well as to the turn
+  const toolUseName = new Map<string, string>();
+  const failedToolUses = new Set<string>();
+  const resolvedToolUses = new Set<string>();
+  let unattributedErrors = 0;
+  let idlessCalls = 0;
 
   for (const line of lines) {
     let o: RawLine;
@@ -373,8 +697,13 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
     if (o.cwd && !cwd) cwd = o.cwd;
     if (o.gitBranch && !gitBranch) gitBranch = o.gitBranch;
     const errs = lineErrors(o);
-    errorCount += errs.total;
+    errorCount += errs.unattributed;
+    unattributedErrors += errs.unattributed;
+    for (const id of errs.resolved) resolvedToolUses.add(id);
     for (const id of errs.byToolUse) {
+      if (failedToolUses.has(id)) continue; // replayed line — same failure
+      failedToolUses.add(id);
+      errorCount++;
       const owner = toolUseOwner.get(id);
       if (owner) errorsByReq.set(owner, (errorsByReq.get(owner) ?? 0) + 1);
     }
@@ -403,6 +732,7 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
           parentToolUseId: o.parent_tool_use_id ?? null,
           model: o.message?.model ?? null,
           usage: {},
+          usageVaried: false,
           tools: [],
           files: [],
           thinkingBlocks: 0,
@@ -417,6 +747,7 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
       // usage is streamed as partial snapshots per line — keep the per-field max
       if (acc.tMs === null && ts !== null) acc.tMs = ts;
       else if (ts !== null && ts > (acc.tMs ?? 0)) acc.tMs = ts; // last line = response end
+      if (usageDisagrees(acc.usage, o.message?.usage)) acc.usageVaried = true;
       mergeUsageMax(acc.usage, o.message?.usage);
       if (o.parent_tool_use_id != null) {
         acc.isSidechain = true;
@@ -431,8 +762,22 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
           if (!block || typeof block !== "object") continue;
           const b = block as Record<string, unknown>;
           if (b.type === "tool_use" && typeof b.name === "string") {
+            // A resumed session replays its earlier lines verbatim into the
+            // same file — same uuid, same message.id, same tool_use id, a few
+            // hundred lines later. Measured on a real 36 MB transcript: 102 of
+            // 1392 tool_use blocks were replays of 1290 actual calls. The turn
+            // fold is already immune (replays merge into their original
+            // accumulator by message.id); the tool tallies were not, so a
+            // resumed session read as 8% busier than it was. The tool_use id
+            // is the call's identity, so seeing one twice means one call.
+            if (typeof b.id === "string" && toolUseName.has(b.id)) continue;
             acc.tools.push(b.name);
-            // remember who issued this call so its failure lands on this turn
+            // remember who issued this call so its failure lands on this turn,
+            // and what it was so the failure also lands on the right tool.
+            // A call with no id can never be answered and can never be a
+            // detectable replay, so it gets a private key: it still counts,
+            // and it counts as unresolved, which is exactly what it is.
+            toolUseName.set(typeof b.id === "string" ? b.id : ` noid-${idlessCalls++}`, b.name);
             if (typeof b.id === "string") toolUseOwner.set(b.id, rid);
             const inp = b.input as Record<string, unknown> | undefined;
             const p = (inp?.file_path ?? inp?.path) as string | undefined;
@@ -475,6 +820,7 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
   let contextPeak = 0;
   let cacheWritePeak = 0;
   let sidechainTurns = 0;
+  let promptUsageExact = true;
   const subAgents = new Set<string>();
 
   reqOrder.forEach((rid, i) => {
@@ -491,6 +837,7 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
     if (cr > contextPeak) contextPeak = cr;
     if (cw > cacheWritePeak) cacheWritePeak = cw;
     if (acc.isSidechain) sidechainTurns++;
+    if (acc.usageVaried) promptUsageExact = false;
     if (acc.parentToolUseId) subAgents.add(acc.parentToolUseId);
     const category = dominantCategory(acc.tools);
     categoryTotals[category]++;
@@ -525,6 +872,26 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
   const toolHistogram = [...toolCounts.entries()].sort((a, b) => b[1] - a[1]);
   const filesTouched = [...fileCounts.entries()].sort((a, b) => b[1] - a[1]);
   const toolTotal = toolHistogram.reduce((s, [, n]) => s + n, 0);
+
+  // Per-tool outcome split. Walked over the id→name map rather than over
+  // `toolCounts`, because only the ids can be matched to a result — and it is
+  // the same population either way: every tool_use block records both.
+  const outcomeAcc = new Map<string, ToolOutcome>();
+  for (const [id, name] of toolUseName) {
+    let o = outcomeAcc.get(name);
+    if (!o) {
+      o = { tool: name, ok: 0, failed: 0, unresolved: 0, total: 0 };
+      outcomeAcc.set(name, o);
+    }
+    o.total++;
+    if (failedToolUses.has(id)) o.failed++;
+    else if (resolvedToolUses.has(id)) o.ok++;
+    else o.unresolved++;
+  }
+  const toolOutcomes = [...outcomeAcc.values()].sort(
+    (a, b) => b.total - a.total || a.tool.localeCompare(b.tool),
+  );
+
   const spanSec = minTs !== null && maxTs !== null ? (maxTs - minTs) / 1000 : 0;
 
   // ── reconcile with the authoritative result line (audit format) ────────────
@@ -579,12 +946,15 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
     outputReliable,
     toolHistogram,
     toolTotal,
+    toolOutcomes,
+    unattributedErrors,
     filesTouched,
     errorCount,
     sidechainTurns,
     subAgentCount: subAgents.size,
     categoryTotals,
     authoritative,
+    context: buildComposition(turns, promptUsageExact),
     loadedAt: Date.now(),
   };
 }

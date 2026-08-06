@@ -4,123 +4,135 @@
  *  residual-stream vector for token t at the output of layer ℓ (ℓ=0 is the
  *  token+position embedding, ℓ=1..n_layer is after each transformer block).
  *
- *  One ribbon per token, drawn left→right across depth. y is log₁₀‖x‖₂ — the norm
- *  grows roughly geometrically with depth (≈10 → ≈3000 over 12 layers on GPT-2),
- *  and one token (usually the first) balloons into a "massive activation" that
- *  dwarfs the rest, so a linear axis would flatten every other token onto the
- *  floor. Log-y keeps every trajectory legible AND preserves order; decade
- *  gridlines (‖x‖=10, 100, 1000) are labeled so the magnitude is readable, not
- *  merely relative. The filled area under each curve is decoration toward the
- *  axis floor — the bright top line and the node dots ARE the numbers. Hover any
- *  node for the exact norm at that (token, layer), plus the token's embed→final
- *  growth factor. deck.gl (WebGL2), camera off (framing from canvas size). */
+ *  DRAWN AS EXTRUDED COLUMNS ON `ChartStage` (three/webgpu + TSL + bloom), one
+ *  column per (layer, token) pair. Nothing about that is decoration: the data
+ *  IS a rectangular grid of scalars, and the flat version had to overlay every
+ *  token's polyline in one plane. Eleven trajectories through the same box
+ *  cross constantly, so the chart could only be read by hovering one at a time
+ *  and dimming the other ten. Given the grid its own second axis, every
+ *  measurement has somewhere to stand and the whole surface is legible at once.
+ *
+ *  Three encoding rules, all inherited from #23:
+ *
+ *  1. Height is a LOG₁₀ axis with an absolute base at ‖x‖₂ = 1, ticked in
+ *     decades. The norm grows roughly geometrically with depth (≈10 → ≈3000
+ *     over 12 layers on GPT-2) and one token usually balloons into a "massive
+ *     activation" that dwarfs the rest; on a linear axis every other token lies
+ *     flat on the floor. The base is a real value (log₁₀ 1 = 0), not the
+ *     smallest observed norm — a bar chart whose baseline is the data minimum
+ *     exaggerates every difference on it.
+ *  2. HUE is the token's position in the sequence and NOTHING else; height and
+ *     glow both carry the norm. Two channels never describe one quantity
+ *     differently, and the one channel that describes a different quantity says
+ *     so on its own axis.
+ *  3. No interpolated surface between columns. The 2-D version could fill the
+ *     area under a curve because the curve was a path through measured points;
+ *     a sheet stretched over this grid would put shaded pixels at (layer,
+ *     token) pairs that were never sampled. */
 
-import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import type { GpuTier } from "../../app/capabilities";
 import { loadTrace, type TraceBundle } from "../../data/interp";
-import {
-  GRID_RGBA,
-  MARKER_HOT,
-  markerPoly,
-  type RGB,
-  type Vec2,
-  withAlpha,
-  dashedSegment,
-} from "./chart-theme";
-import { InterpTooltip, type TipRow } from "./chart-tooltip";
+import { ChartStage, type BarData, type ChartStageLook } from "./chart-stage";
+import { decadeOn, logSpan } from "./logscale";
+import { InterpTooltip } from "./chart-tooltip";
+import type { RGB } from "./chart-theme";
 import type { InterpDriver } from "./InterpDriver";
+import type { StatTile } from "../../chrome/StatStrip";
 
-type LayersModule = typeof import("@deck.gl/layers");
+/** World layout: one lattice cell is 1 unit, the footprint leaves a gap so
+ *  neighbouring columns read as separate measurements rather than a ridge. */
+const CELL = 0.74;
+/** Cage height, world units, scaled off the larger lattice axis and clamped so
+ *  a 4-token trace is not a pillar and a 64-token one is not a pancake. */
+const cageHeight = (n: number) => Math.min(13, Math.max(5, n * 0.4));
 
-const SPAN_X = 2.6; // world width of the plot box
-const SPAN_Y = 1.5; // world height
-const GL = 76; // px left gutter — log₁₀ norm decade labels
-const GR = 132; // px right gutter — per-token end labels
-const GT = 44; // px top gutter
-const GB = 74; // px bottom gutter — layer ticks + x caption
-const LOG_PAD = 0.06; // decade padding above/below the data so lines clear the edges
+/** px gutters the fit must keep clear: token labels left, layer ticks and the
+ *  axis caption below. No transport strip — every layer is on screen at once,
+ *  which is the whole point of giving depth its own axis.
+ *
+ *  The right gutter is wide because the key card docks there and this lattice
+ *  is wider than it is deep, which pushes the height axis out to the FRONT-right
+ *  corner rather than the back one (see `ChartStage.heightPost`). It costs less
+ *  than it looks: the fit on this aspect is bound by height, not width, so the
+ *  gutter mostly eats margin the chart was not using. */
+const INSET = { left: 72, top: 34, right: 316, bottom: 66 };
 
-// token-position hue: a cool→warm ramp on t = pos/(T-1). Encodes sequence order
-// (a real attribute), nothing more; magnitude lives entirely on the y-axis.
+/** Minimum projected spacing between two adjacent axis labels before the axis
+ *  starts skipping them. Measured against the real projection, so the stride
+ *  adapts to the orbit instead of assuming one. */
+const LABEL_MIN_PX = 11;
+
+/** token-position hue: a cool→warm ramp on t = pos/(T-1). Encodes sequence
+ *  order — a real ordered attribute — and nothing else. Magnitude lives
+ *  entirely on the height axis and its glow. */
 const POS_RAMP: Array<[number, [number, number, number]]> = [
   [0.0, [70, 200, 235]], // cyan — earliest token
   [0.5, [245, 195, 59]], // gold — middle
   [1.0, [234, 79, 134]], // magenta — latest token
 ];
 
-interface Ribbon {
-  token: number;
-  tokenStr: string;
-  rgb: [number, number, number];
-  line: [number, number][];
-  area: [number, number][];
-  embedNorm: number;
-  finalNorm: number;
-  peakNorm: number;
-  peakLayer: number;
-}
-interface RNode {
-  token: number;
-  layer: number;
-  norm: number;
-  x: number;
-  y: number;
-  rgb: [number, number, number];
-}
+const LOOK: ChartStageLook = {
+  frameColor: 0x3d4560,
+  frameOpacity: 0.75,
+  // The glow range here is NARROW and measured, not guessed: on a GPT-2 trace
+  // the norms are 4.7 … 3112, which on the 1 … 10000 axis is glow 0.17 … 0.87
+  // with the interquartile band only 0.45 … 0.55. Most (layer, token) pairs
+  // genuinely do sit at the same magnitude — that IS the finding, and the
+  // outlier is the story. A high emissive floor compresses that already-narrow
+  // band into one pastel wash where nothing recedes; the floor is therefore low
+  // and the ceiling high, so the ridge separates from the plateau.
+  emissiveMin: 0.22,
+  emissiveMax: 1.35,
+  dimLevel: 0.2,
+  azimuth: -0.72,
+  elevation: 0.58,
+  fov: 38,
+  bloom: { strength: 0.45, radius: 0.3, threshold: 0.86 },
+};
 
 export class ResidualRibbonDriver implements InterpDriver {
-  readonly animated = false; // static per trace — deck redraws only on hover/resize
-  private deck: Deck<OrthographicView[]> | null = null;
-  private layersMod!: LayersModule;
-  private makeView!: () => OrthographicView;
+  readonly animated = false; // static per trace — redraws on hover, click, orbit
+  private stage = new ChartStage(LOOK);
   private canvas!: HTMLCanvasElement;
-  private overlay!: HTMLElement;
   private tooltip!: InterpTooltip;
   private labelRoot!: HTMLElement;
-  private axisRoot!: HTMLElement;
 
   private bundle: TraceBundle | null = null;
   private T = 0;
-  private nLayer = 0; // number of blocks; resid_norm has nLayer+1 rows (0..nLayer)
-  private ribbons: Ribbon[] = [];
-  private nodes: RNode[] = [];
-  private logMin = 0;
-  private logMax = 1;
-  private hoverTok = -1;
-  private hoverMark: Vec2 | null = null; // world point of the hovered (token,layer) node
+  private nLayer = 0; // blocks; resid_norm has nLayer + 1 rows (0..nLayer)
+  private nStage = 0; // plotted stages along x = nLayer + 1
+  private baseExp = 0; // log₁₀ decade at the cage floor
+  private topExp = 1; // log₁₀ decade at the cage top
+  private selTok = -1; // isolated token row, or -1 for the whole grid
+  private hover: { layer: number; tok: number } | null = null;
+  private tokRGB: Array<[number, number, number]> = [];
+
+  // reused per-instance buffers — hover and selection rewrite appearance but
+  // never the cell set, so these are allocated once per bundle
+  private bufPos = new Float32Array(0);
+  private bufH = new Float32Array(0);
+  private bufC = new Float32Array(0);
+  private bufG = new Float32Array(0);
+  private bufA = new Float32Array(0);
 
   private cssW = 1;
   private cssH = 1;
-  private dpr = 1;
   private disposers: Array<() => void> = [];
+  private labels: HTMLElement[] = [];
 
-  async init(canvas: HTMLCanvasElement, _tier: GpuTier, overlay: HTMLElement): Promise<void> {
+  async init(canvas: HTMLCanvasElement, tier: GpuTier, overlay: HTMLElement): Promise<void> {
     this.canvas = canvas;
-    this.overlay = overlay;
-    const [core, layers] = await Promise.all([import("@deck.gl/core"), import("@deck.gl/layers")]);
-    this.layersMod = layers;
-    this.makeView = () => new core.OrthographicView({ id: "ortho", flipY: false });
-    this.deck = new core.Deck({
-      canvas,
-      views: [this.makeView()],
-      viewState: this.viewState(),
-      controller: false,
-      useDevicePixels: Math.min(this.dpr, 2),
-      layers: [],
-      width: this.cssW,
-      height: this.cssH,
-    }) as unknown as Deck<OrthographicView[]>;
+    await this.stage.init(canvas, tier);
+    this.stage.onCamera = () => this.positionLabels();
+    this.stage.onClick = (sx, sy) => this.onClick(sx, sy);
 
     this.tooltip = new InterpTooltip(overlay);
     this.labelRoot = document.createElement("div");
     this.labelRoot.className = "interp-rs-labels";
     overlay.appendChild(this.labelRoot);
-    this.axisRoot = document.createElement("div");
-    this.axisRoot.className = "interp-axis";
-    overlay.appendChild(this.axisRoot);
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
-    const onLeave = () => this.onLeave();
+    const onLeave = () => this.hideTip();
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
     this.disposers.push(() => {
@@ -134,382 +146,358 @@ export class ResidualRibbonDriver implements InterpDriver {
     const b = await loadTrace(model, trace);
     this.bundle = b;
     this.T = b.meta.T;
-    this.nLayer = b.meta.n_layer; // resid_norm rows = nLayer + 1
-    this.hoverTok = -1;
+    this.nLayer = b.meta.n_layer;
+    this.nStage = b.resid_norm.length; // nLayer + 1 in every bundle we ship
+    this.selTok = -1;
+    this.hover = null;
 
-    // global log₁₀ range over all positive norms → shared, honest y-axis
+    // Axis bounds snap OUTWARD to whole decades. The ticks are then at real
+    // round numbers (‖x‖ = 10, 100, 1000) instead of at whatever the extremes
+    // of this particular prompt happened to be, and the same axis serves every
+    // prompt in the selector — so switching prompts moves the columns, not the
+    // ruler they are measured against.
     let hi = -Infinity;
-    let lo = Infinity;
-    for (const row of b.resid_norm) {
-      for (const v of row) {
-        if (v <= 0) continue;
-        const l = Math.log10(v);
-        if (l > hi) hi = l;
-        if (l < lo) lo = l;
-      }
-    }
-    this.logMin = lo - LOG_PAD;
-    this.logMax = hi + LOG_PAD;
+    for (const row of b.resid_norm) for (const v of row) if (v > 0 && Math.log10(v) > hi) hi = Math.log10(v);
+    this.baseExp = 0; // ‖x‖₂ = 1. A real reference, not the data minimum.
+    this.topExp = Number.isFinite(hi) ? Math.max(1, Math.ceil(hi)) : 1;
 
-    const nAxis = b.resid_norm.length - 1; // 0..nLayer along x
-    this.ribbons = [];
-    this.nodes = [];
+    this.tokRGB = [];
     for (let t = 0; t < this.T; t++) {
-      const rgb = ramp(POS_RAMP, this.T > 1 ? t / (this.T - 1) : 0);
-      const line: [number, number][] = [];
-      let peak = -Infinity;
-      let peakLayer = 0;
-      for (let l = 0; l <= nAxis; l++) {
-        const norm = b.resid_norm[l]![t]!;
-        const x = this.xAt(l, nAxis);
-        const y = this.yAt(norm);
-        line.push([x, y]);
-        this.nodes.push({ token: t, layer: l, norm, x, y, rgb });
-        if (norm > peak) {
-          peak = norm;
-          peakLayer = l;
-        }
-      }
-      // area: the curve, then closed down to the axis floor (world y = 0)
-      const area: [number, number][] = [
-        [line[0]![0], 0],
-        ...line,
-        [line[line.length - 1]![0], 0],
-      ];
-      this.ribbons.push({
-        token: t,
-        tokenStr: fmtTok(b.token_strs[t] ?? ""),
-        rgb,
-        line,
-        area,
-        embedNorm: b.resid_norm[0]![t]!,
-        finalNorm: b.resid_norm[nAxis]![t]!,
-        peakNorm: peak,
-        peakLayer,
-      });
+      this.tokRGB.push(ramp(POS_RAMP, this.T > 1 ? t / (this.T - 1) : 0));
     }
-    this.buildAxis();
-    this.pushLayers();
+
+    const n = this.nStage * this.T;
+    this.bufPos = new Float32Array(n * 2);
+    this.bufH = new Float32Array(n);
+    this.bufC = new Float32Array(n * 3);
+    this.bufG = new Float32Array(n);
+    this.bufA = new Float32Array(n);
+    const halfX = this.nStage / 2;
+    const halfZ = this.T / 2;
+    for (let k = 0; k < n; k++) {
+      const l = (k / this.T) | 0;
+      const t = k % this.T;
+      // x = depth, increasing away from the embedding — the same left-to-right
+      // reading the flat version had. z = token, position 0 at the far edge so
+      // the sequence runs toward the viewer.
+      this.bufPos[k * 2] = l + 0.5 - halfX;
+      this.bufPos[k * 2 + 1] = t + 0.5 - halfZ;
+    }
+
+    this.stage.setLattice({
+      halfX,
+      halfZ,
+      cageY: cageHeight(Math.max(this.nStage, this.T)),
+      divX: this.nStage,
+      divZ: this.T,
+    });
+    this.stage.fitInset(INSET);
+    this.pushBars();
     this.positionLabels();
   }
 
-  private xAt(layer: number, nAxis: number): number {
-    return (layer / Math.max(nAxis, 1)) * SPAN_X;
-  }
-  private yAt(norm: number): number {
-    const l = norm > 0 ? Math.log10(norm) : this.logMin;
-    const t = (l - this.logMin) / Math.max(this.logMax - this.logMin, 1e-6);
-    return t * SPAN_Y;
+  private normAt(layer: number, tok: number): number {
+    return this.bundle?.resid_norm[layer]?.[tok] ?? 0;
   }
 
-  private pushLayers(): void {
-    if (!this.deck) return;
-    const { PathLayer, PolygonLayer, ScatterplotLayer, SolidPolygonLayer } = this.layersMod;
-    const hv = this.hoverTok;
-    const wpp = this.worldPerPx();
-    // decade gridlines at norm = 10^k inside the data range — subtle DASHED
-    // hairlines now (req 5); dash geometry authored in px, scaled to world.
-    const grid: { path: [number, number][] }[] = [];
-    const kLo = Math.ceil(this.logMin);
-    const kHi = Math.floor(this.logMax);
-    for (let k = kLo; k <= kHi; k++) {
-      const y = this.yAt(10 ** k);
-      for (const s of dashedSegment([0, y], [SPAN_X, y], 3 * wpp, 6 * wpp)) {
-        grid.push({ path: [s.source, s.target] });
-      }
+  /** The one normalization in this view. Height and glow both read it, so a
+   *  tall column is a bright column by construction. */
+  private norm(v: number): number {
+    return logSpan(v, this.baseExp, this.topExp);
+  }
+
+  private pushBars(): void {
+    const n = this.nStage * this.T;
+    if (n === 0) return;
+    const cage = cageHeight(Math.max(this.nStage, this.T));
+    for (let k = 0; k < n; k++) {
+      const l = (k / this.T) | 0;
+      const t = k % this.T;
+      const y = this.norm(this.normAt(l, t));
+      this.bufH[k] = y * cage;
+      this.bufG[k] = y;
+      const [r, g, b] = this.tokRGB[t] ?? [255, 255, 255];
+      this.bufC[k * 3] = r / 255;
+      this.bufC[k * 3 + 1] = g / 255;
+      this.bufC[k * 3 + 2] = b / 255;
+      const isSel = this.selTok < 0 || t === this.selTok;
+      const isHover = this.hover !== null && this.hover.layer === l && this.hover.tok === t;
+      this.bufA[k] = isSel || isHover ? 1 : 0;
     }
-    // per-layer vertical guides, likewise dashed
-    const nAxis = this.nLayer;
-    const vguides: { path: [number, number][] }[] = [];
-    for (let l = 0; l <= nAxis; l++) {
-      const x = this.xAt(l, nAxis);
-      for (const s of dashedSegment([x, 0], [x, SPAN_Y], 3 * wpp, 6 * wpp)) {
-        vguides.push({ path: [s.source, s.target] });
-      }
-    }
-    // sharp LED marker locked onto the hovered (token, layer) node (req 4)
-    const marks = this.hoverMark
-      ? [
-          { poly: markerPoly(this.hoverMark[0], this.hoverMark[1], 8 * wpp), color: withAlpha(MARKER_HOT, 0.22) },
-          { poly: markerPoly(this.hoverMark[0], this.hoverMark[1], 4 * wpp), color: withAlpha(MARKER_HOT, 1) },
-        ]
-      : [];
-
-    // Fill only the hovered ribbon — overlapping translucent areas would merge
-    // into a muddy mass and misrepresent individual values. By default the chart
-    // is clean, hue-coded trajectory lines; the "ribbon" (filled area to the
-    // floor) reveals itself on hover to emphasize the one token being read.
-    const areaAlpha = (d: Ribbon) => (d.token === hv ? 58 : 0);
-    const lineAlpha = (d: Ribbon) => (hv < 0 ? 235 : d.token === hv ? 255 : 45);
-    const lineWidth = (d: Ribbon) => (d.token === hv ? 3 : 1.9);
-
-    this.deck.setProps({
-      layers: [
-        new PathLayer<{ path: [number, number][] }>({
-          id: "rs-vguides",
-          data: vguides,
-          getPath: (d) => d.path,
-          getColor: GRID_RGBA,
-          getWidth: 1,
-          widthUnits: "pixels",
-          pickable: false,
-        }),
-        new PathLayer<{ path: [number, number][] }>({
-          id: "rs-grid",
-          data: grid,
-          getPath: (d) => d.path,
-          getColor: GRID_RGBA,
-          getWidth: 1,
-          widthUnits: "pixels",
-          pickable: false,
-        }),
-        new PolygonLayer<Ribbon>({
-          id: "rs-areas",
-          data: this.ribbons,
-          getPolygon: (d) => d.area,
-          getFillColor: (d) => [d.rgb[0], d.rgb[1], d.rgb[2], areaAlpha(d)],
-          stroked: false,
-          filled: true,
-          pickable: false,
-          updateTriggers: { getFillColor: hv },
-        }),
-        new PathLayer<Ribbon>({
-          id: "rs-lines",
-          data: this.ribbons,
-          getPath: (d) => d.line,
-          getColor: (d) => [d.rgb[0], d.rgb[1], d.rgb[2], lineAlpha(d)],
-          getWidth: lineWidth,
-          widthUnits: "pixels",
-          jointRounded: true,
-          capRounded: true,
-          pickable: true,
-          updateTriggers: { getColor: hv, getWidth: hv },
-        }),
-        new ScatterplotLayer<RNode>({
-          id: "rs-nodes",
-          data: this.nodes,
-          getPosition: (d) => [d.x, d.y, 0],
-          getFillColor: (d) => {
-            const dim = hv >= 0 && d.token !== hv;
-            const a = dim ? 40 : 235;
-            return [d.rgb[0], d.rgb[1], d.rgb[2], a];
-          },
-          getRadius: (d) => (d.token === hv ? 3.2 : 2),
-          radiusUnits: "pixels",
-          stroked: false,
-          pickable: true,
-          updateTriggers: { getFillColor: hv, getRadius: hv },
-        }),
-        new SolidPolygonLayer<{ poly: Vec2[]; color: [number, number, number, number] }>({
-          id: "rs-marker",
-          data: marks,
-          getPolygon: (d) => d.poly,
-          getFillColor: (d) => d.color,
-          pickable: false,
-        }),
-      ],
-    });
-  }
-
-  /** World units per screen pixel — pixel-authored dashes/markers scaled to world. */
-  private worldPerPx(): number {
-    return 1 / this.zoomPx();
-  }
-
-  // ---- layout (asymmetric gutters; world box centered in the plot area) ------
-  private zoomPx(): number {
-    const availW = this.cssW - GL - GR;
-    const availH = this.cssH - GT - GB;
-    return Math.max(4, Math.min(availW / SPAN_X, availH / SPAN_Y));
-  }
-  private centerX(): number {
-    return GL + (this.cssW - GL - GR) / 2;
-  }
-  private centerY(): number {
-    return GT + (this.cssH - GT - GB) / 2;
-  }
-  private worldToScreen(wx: number, wy: number): [number, number] {
-    const z = this.zoomPx();
-    return [this.centerX() + (wx - SPAN_X / 2) * z, this.centerY() - (wy - SPAN_Y / 2) * z];
-  }
-  private viewState() {
-    const z = this.zoomPx();
-    return {
-      ortho: {
-        target: [
-          SPAN_X / 2 + (this.cssW / 2 - this.centerX()) / z,
-          SPAN_Y / 2 + (this.centerY() - this.cssH / 2) / z,
-          0,
-        ] as [number, number, number],
-        zoom: Math.log2(z),
-      },
+    const d: BarData = {
+      count: n,
+      pos: this.bufPos,
+      height: this.bufH,
+      color: this.bufC,
+      glow: this.bufG,
+      active: this.bufA,
+      cellX: CELL,
+      cellZ: CELL,
     };
+    this.stage.setBars(d);
+    this.syncProbe();
+    this.stage.render();
   }
 
-  private buildAxis(): void {
-    this.axisRoot.textContent = "";
-    // y decade labels
-    const kLo = Math.ceil(this.logMin);
-    const kHi = Math.floor(this.logMax);
-    for (let k = kLo; k <= kHi; k++) {
-      const el = document.createElement("div");
-      el.className = "interp-axis-y";
-      el.dataset.norm = String(10 ** k);
-      el.textContent = `‖x‖=${(10 ** k).toLocaleString("en-US")}`;
-      this.axisRoot.appendChild(el);
+  /** Rails from the hovered column's top down to the floor and out to both
+   *  axis walls — how a height is read off the cage once the camera can turn. */
+  private syncProbe(): void {
+    const h = this.hover;
+    if (!h) {
+      this.stage.setProbe(null);
+      return;
     }
-    // x layer ticks (embed, 1..nLayer)
-    for (let l = 0; l <= this.nLayer; l++) {
-      const el = document.createElement("div");
-      el.className = "interp-rs-xtick";
-      el.dataset.layer = String(l);
-      el.textContent = l === 0 ? "emb" : String(l);
-      this.axisRoot.appendChild(el);
-    }
-    const yCap = document.createElement("div");
-    yCap.className = "interp-axis-x interp-rs-ycap";
-    yCap.textContent = "residual-stream L2 norm (log₁₀) →";
-    this.axisRoot.appendChild(yCap);
-    const xCap = document.createElement("div");
-    xCap.className = "interp-axis-x";
-    xCap.textContent = "layer (embedding → block 12) →";
-    this.axisRoot.appendChild(xCap);
-    this.positionAxis();
+    const cage = cageHeight(Math.max(this.nStage, this.T));
+    this.stage.setProbe(
+      h.layer + 0.5 - this.nStage / 2,
+      this.norm(this.normAt(h.layer, h.tok)) * cage,
+      h.tok + 0.5 - this.T / 2,
+    );
   }
 
-  private positionAxis(): void {
-    for (const el of Array.from(this.axisRoot.querySelectorAll<HTMLElement>(".interp-axis-y"))) {
-      const norm = Number(el.dataset.norm);
-      const [sx, sy] = this.worldToScreen(0, this.yAt(norm));
-      el.style.transform = `translate(${(sx - 8).toFixed(1)}px, ${(sy - 8).toFixed(1)}px) translateX(-100%)`;
-    }
-    const nAxis = this.nLayer;
-    for (const el of Array.from(this.axisRoot.querySelectorAll<HTMLElement>(".interp-rs-xtick"))) {
-      const l = Number(el.dataset.layer);
-      const [sx, sy] = this.worldToScreen(this.xAt(l, nAxis), 0);
-      el.style.transform = `translate(${sx.toFixed(1)}px, ${(sy + 8).toFixed(1)}px) translateX(-50%)`;
-    }
-    const yCap = this.axisRoot.querySelector<HTMLElement>(".interp-rs-ycap");
-    if (yCap) {
-      const [, sy] = this.worldToScreen(0, SPAN_Y / 2);
-      yCap.style.transform = `translate(16px, ${sy.toFixed(1)}px) rotate(-90deg) translateX(50%)`;
-    }
-    const xCap = this.axisRoot.querySelector<HTMLElement>(".interp-axis-x:not(.interp-rs-ycap)");
-    if (xCap) {
-      const [sx, sy] = this.worldToScreen(SPAN_X / 2, 0);
-      xCap.style.transform = `translate(${sx.toFixed(1)}px, ${(sy + 30).toFixed(1)}px) translateX(-50%)`;
-    }
-  }
+  // ---- labels ---------------------------------------------------------------
 
-  /** Token end-labels tracking each ribbon's final-layer point, with a vertical
-   *  de-collision pass — many tokens land at near-identical final norms, so a
-   *  naive placement overlaps them into an unreadable stack. */
-  private positionLabels(): void {
-    this.labelRoot.textContent = "";
-    const nAxis = this.nLayer;
-    const sx0 = this.worldToScreen(this.xAt(nAxis, nAxis), 0)[0];
-    const placed = this.ribbons
-      .map((rb) => ({ rb, y: this.worldToScreen(0, this.yAt(rb.finalNorm))[1] }))
-      .sort((a, b) => a.y - b.y);
-    const GAP = 12.5;
-    for (let i = 1; i < placed.length; i++) {
-      if (placed[i]!.y - placed[i - 1]!.y < GAP) placed[i]!.y = placed[i - 1]!.y + GAP;
-    }
-    for (const { rb, y } of placed) {
+  private ensureLabels(n: number): void {
+    while (this.labels.length < n) {
       const el = document.createElement("div");
-      el.className = `interp-rs-tok${rb.token === this.hoverTok ? " is-hot" : ""}`;
-      el.textContent = rb.tokenStr;
-      el.style.color = `rgb(${rb.rgb[0]},${rb.rgb[1]},${rb.rgb[2]})`;
-      el.style.transform = `translate(${(sx0 + 8).toFixed(1)}px, ${(y - 6).toFixed(1)}px)`;
+      el.className = "interp-stage-lab";
       this.labelRoot.appendChild(el);
+      this.labels.push(el);
     }
+  }
+
+  /** Layer ticks on the near cage edge, token names down the left edge, decade
+   *  ticks up the one free corner post, and three captions. Every anchor is a
+   *  real world point run through the stage's projector, so a label cannot
+   *  drift from the column it names. */
+  private positionLabels(): void {
+    const b = this.bundle;
+    if (!b || !this.labelRoot) return;
+    const halfX = this.nStage / 2;
+    const halfZ = this.T / 2;
+    const cage = cageHeight(Math.max(this.nStage, this.T));
+
+    const stride = (a: [number, number] | null, c: [number, number] | null, n: number) => {
+      if (!a || !c) return 1;
+      const gap = Math.hypot(c[0] - a[0], c[1] - a[1]);
+      return gap < 0.01 ? n : Math.max(1, Math.ceil(LABEL_MIN_PX / gap));
+    };
+    const layStride = stride(
+      this.stage.project(0.5 - halfX, 0, halfZ),
+      this.stage.project(1.5 - halfX, 0, halfZ),
+      this.nStage,
+    );
+    const tokStride = stride(
+      this.stage.project(-halfX, 0, 0.5 - halfZ),
+      this.stage.project(-halfX, 0, 1.5 - halfZ),
+      this.T,
+    );
+
+    type Spec = { p: [number, number] | null; text: string; cls: string };
+    const specs: Spec[] = [];
+    for (let l = 0; l < this.nStage; l += layStride) {
+      specs.push({
+        p: this.stage.project(l + 0.5 - halfX, 0, halfZ + 0.5),
+        // "emb" is not layer zero of the stack, it is the token+position
+        // embedding the stack starts from. Numbering it 0 alongside the blocks
+        // would claim the model has a block there.
+        text: l === 0 ? "emb" : String(l),
+        cls: "interp-stage-lab is-col",
+      });
+    }
+    for (let t = 0; t < this.T; t += tokStride) {
+      specs.push({
+        p: this.stage.project(-halfX - 0.5, 0, t + 0.5 - halfZ),
+        text: fmtTok(b.token_strs[t] ?? ""),
+        cls: `interp-stage-lab is-row${t === this.selTok ? " is-sel" : ""}`,
+      });
+    }
+    // Decade ticks up a post the stage places for us: the token axis owns the
+    // whole x = -halfX edge and the layer axis the whole z = +halfZ edge, and
+    // on this 13×11 lattice the corner they leave free projects into the middle
+    // of the chart — see `ChartStage.heightPost`.
+    const post = this.stage.heightPost(-1, 1);
+    if (post) {
+      const cls = `interp-stage-lab ${post.side === "left" ? "is-h" : "is-hl"}`;
+      for (let e = this.baseExp; e <= this.topExp; e++) {
+        specs.push({
+          p: this.stage.project(post.x, decadeOn(e, this.baseExp, this.topExp) * cage, post.z),
+          // exponent form past 100, matching #23's ticks — and, more to the
+          // point, "10,000" is six glyphs hanging off the outermost corner of
+          // the widest chart on the page, where the gutter it needs comes
+          // straight out of the plot
+          text: e <= 2 ? String(10 ** e) : `1e${e}`,
+          cls,
+        });
+      }
+      specs.push({
+        p: this.stage.project(post.x, cage + 0.9, post.z),
+        text: "‖x‖₂ ↑",
+        cls: "interp-stage-cap",
+      });
+    }
+    specs.push({
+      p: this.stage.project(0, 0, halfZ + 1.7),
+      text: `layer: embedding → block ${this.nLayer} →`,
+      cls: "interp-stage-cap",
+    });
+    specs.push({
+      p: this.stage.project(-halfX - 2.1, 0, 0),
+      text: "token →",
+      cls: "interp-stage-cap",
+    });
+
+    this.ensureLabels(specs.length);
+    for (let k = 0; k < this.labels.length; k++) {
+      const el = this.labels[k]!;
+      const s = specs[k];
+      // Off the canvas, hide it. Every anchor sits OUTSIDE the cage by design,
+      // so at some orbits one slides past the edge — and an axis label clamped
+      // back inside would point at something other than what it names.
+      if (!s || !s.p || s.p[0] < 2 || s.p[1] < 2 || s.p[0] > this.cssW - 2 || s.p[1] > this.cssH - 2) {
+        el.style.display = "none";
+        continue;
+      }
+      el.className = s.cls;
+      el.textContent = s.text;
+      el.style.display = "";
+      // `translate`, never `transform` — the anchoring offset lives in CSS
+      // `transform`, and writing both here would clobber it
+      el.style.translate = `${Math.round(s.p[0])}px ${Math.round(s.p[1])}px`;
+    }
+  }
+
+  // ---- interaction ----------------------------------------------------------
+
+  private pick(sx: number, sy: number): { layer: number; tok: number } | null {
+    const idx = this.stage.pickAt(sx, sy);
+    if (idx < 0 || this.T === 0) return null;
+    return { layer: (idx / this.T) | 0, tok: idx % this.T };
+  }
+
+  private onClick(sx: number, sy: number): void {
+    const c = this.pick(sx, sy);
+    if (!c) return;
+    this.selTok = this.selTok === c.tok ? -1 : c.tok; // toggle token isolation
+    this.pushBars();
+    this.positionLabels();
   }
 
   private onPointerMove(e: PointerEvent): void {
-    if (!this.deck || !this.bundle) return;
-    const rect = this.canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const info = this.deck.pickObject({ x, y, radius: 8, layerIds: ["rs-nodes", "rs-lines"] }) as
-      | PickingInfo
-      | null;
-    if (!info?.object) {
-      this.onLeave();
+    if (!this.bundle) return;
+    // mid-orbit the pointer is steering the camera, not reading the data
+    if (this.stage.isDragging) {
+      this.hideTip();
       return;
     }
-    let tok: number;
-    let layer: number;
-    let norm: number;
-    if (info.layer?.id === "rs-nodes") {
-      const n = info.object as RNode;
-      tok = n.token;
-      layer = n.layer;
-      norm = n.norm;
-    } else {
-      const rb = info.object as Ribbon;
-      tok = rb.token;
-      // nearest layer to the cursor's world x
-      const wx = info.coordinate ? info.coordinate[0]! : 0;
-      layer = Math.max(0, Math.min(this.nLayer, Math.round((wx / SPAN_X) * this.nLayer)));
-      norm = this.bundle.resid_norm[layer]![tok]!;
+    const rect = this.canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const c = this.pick(sx, sy);
+    const same = c && this.hover && c.layer === this.hover.layer && c.tok === this.hover.tok;
+    if (!same) {
+      this.hover = c;
+      this.pushBars();
     }
-    const mark: Vec2 = [this.xAt(layer, this.nLayer), this.yAt(norm)];
-    const markChanged =
-      !this.hoverMark || this.hoverMark[0] !== mark[0] || this.hoverMark[1] !== mark[1];
-    if (tok !== this.hoverTok) {
-      this.hoverTok = tok;
-      this.hoverMark = mark;
-      this.pushLayers();
-      this.positionLabels();
-    } else if (markChanged) {
-      this.hoverMark = mark;
-      this.pushLayers();
+    if (!c) {
+      this.hideTip();
+      return;
     }
-    const rb = this.ribbons[tok]!;
-    const growth = rb.embedNorm > 0 ? rb.finalNorm / rb.embedNorm : 0;
-    const swatch: RGB = [rb.rgb[0], rb.rgb[1], rb.rgb[2]];
+    const b = this.bundle;
+    const v = this.normAt(c.layer, c.tok);
+    const embed = this.normAt(0, c.tok);
+    const final = this.normAt(this.nStage - 1, c.tok);
+    let peak = 0;
+    let peakL = 0;
+    for (let l = 0; l < this.nStage; l++) {
+      const q = this.normAt(l, c.tok);
+      if (q > peak) {
+        peak = q;
+        peakL = l;
+      }
+    }
+    const growth = embed > 0 ? final / embed : 0;
+    const rgb = this.tokRGB[c.tok] ?? [255, 255, 255];
+    const swatch: RGB = [rgb[0], rgb[1], rgb[2]];
     this.tooltip.show([
       {
         kind: "label",
-        text: `“${rb.tokenStr}” · ${layer === 0 ? "embedding" : `after block ${layer}`}`,
+        text: `“${fmtTok(b.token_strs[c.tok] ?? "")}” · ${c.layer === 0 ? "embedding" : `after block ${c.layer}`}`,
         swatch,
       },
-      { text: "‖x‖₂", value: norm.toFixed(2), hot: true },
+      { text: "‖x‖₂", value: v.toFixed(2), hot: true },
       {
-        text: `embed ${rb.embedNorm.toFixed(1)} → final ${rb.finalNorm.toFixed(1)} (×${growth.toFixed(1)}) · peak ${rb.peakNorm.toFixed(0)} @ ${rb.peakLayer === 0 ? "emb" : `L${rb.peakLayer}`}`,
+        text: `embed ${embed.toFixed(1)} → final ${final.toFixed(1)} (×${growth.toFixed(1)}) · peak ${peak.toFixed(0)} @ ${peakL === 0 ? "emb" : `L${peakL}`}`,
       },
     ]);
-    this.tooltip.move(x, y, this.cssW, this.cssH);
+    this.tooltip.move(sx, sy, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
   }
 
-  private onLeave(): void {
-    if (this.hoverTok !== -1) {
-      this.hoverTok = -1;
-      this.hoverMark = null;
-      this.pushLayers();
-      this.positionLabels();
-    }
+  private hideTip(): void {
     this.tooltip?.hide();
     this.canvas.style.cursor = "";
+    if (this.hover) {
+      this.hover = null;
+      this.pushBars();
+    }
+  }
+
+  /** Footer strip. Growth and peak are the per-token quantities already spelled
+   *  out in the hover line; the strip reports their maxima over tokens. Layer
+   *  count is stated as blocks, matching the axis caption — the plot has
+   *  nLayer+1 stages because the embedding is one of them, and calling that
+   *  "13 layers" would misdescribe the model. The span tile names the axis that
+   *  is actually drawn, not the extremes of the data, because the two are
+   *  deliberately different: the cage snaps outward to whole decades. */
+  stats(): StatTile[] {
+    if (!this.bundle || this.T === 0) return [];
+    let maxGrowth = 0;
+    let peak = 0;
+    for (let t = 0; t < this.T; t++) {
+      const embed = this.normAt(0, t);
+      const final = this.normAt(this.nStage - 1, t);
+      if (embed > 0) maxGrowth = Math.max(maxGrowth, final / embed);
+      for (let l = 0; l < this.nStage; l++) peak = Math.max(peak, this.normAt(l, t));
+    }
+    return [
+      { label: "tokens", value: String(this.T) },
+      {
+        label: "blocks",
+        value: String(this.nLayer),
+        title: `${this.nStage} plotted stages — embedding, then ${this.nLayer} blocks`,
+      },
+      {
+        label: "columns",
+        value: (this.nStage * this.T).toLocaleString("en-US"),
+        title: "one extruded column per (layer, token) measurement",
+      },
+      {
+        label: "max growth",
+        value: `×${maxGrowth.toFixed(1)}`,
+        title: "largest final ÷ embedding norm ratio over tokens",
+      },
+      {
+        label: "peak ‖x‖₂",
+        value: peak.toLocaleString("en-US", { maximumFractionDigits: 0 }),
+        title: `height axis spans ‖x‖ ${(10 ** this.baseExp).toLocaleString("en-US")} … ${(10 ** this.topExp).toLocaleString("en-US")} (${this.topExp - this.baseExp} decades)`,
+      },
+    ];
   }
 
   frame(_dt: number, _t: number): void {
-    // static per trace — deck redraws on hover/resize, no data-bearing motion
+    // static per trace — the stage renders on demand, no data-bearing motion
   }
 
   resize(width: number, height: number, dpr: number): void {
     this.cssW = width;
     this.cssH = height;
-    this.dpr = dpr;
-    this.deck?.setProps({
-      width,
-      height,
-      useDevicePixels: Math.min(dpr, 2),
-      viewState: this.viewState(),
-    });
-    this.positionAxis();
+    this.stage.resize(width, height, dpr);
     this.positionLabels();
+    // `animated` is false, so the host gives this driver no rAF: a resize that
+    // does not redraw leaves the last frame stretched, or — on the first one,
+    // which arrives after setModel — leaves the stage empty forever.
+    this.stage.render();
   }
 
   dispose(): void {
@@ -517,9 +505,8 @@ export class ResidualRibbonDriver implements InterpDriver {
     this.disposers = [];
     this.tooltip?.dispose();
     this.labelRoot?.remove();
-    this.axisRoot?.remove();
-    this.deck?.finalize();
-    this.deck = null;
+    this.labels = [];
+    this.stage.dispose();
   }
 }
 

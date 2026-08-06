@@ -28,6 +28,7 @@ import {
 } from "./chart-theme";
 import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
+import type { StatTile } from "../../chrome/StatStrip";
 
 type LayersModule = typeof import("@deck.gl/layers");
 
@@ -422,6 +423,50 @@ export class ProbabilitySimplexDriver implements InterpDriver {
     }
     this.tooltip.hide();
     this.canvas.style.cursor = "";
+  }
+
+  /** Footer strip. p1/p2/tail are the exact masses the simplex vertices are
+   *  placed from, so the strip cannot disagree with the plot. The tail is
+   *  labelled by its rank cut rather than as "other", because "other" reads as
+   *  a residual the view measured when it is really everything past the top-k
+   *  the bundle shipped. */
+  stats(): StatTile[] {
+    if (!this.bundle) return [];
+    const pct = (p: number) => `${(p * 100).toFixed(1)}%`;
+    const top1 = this.topk[0]?.[0];
+    return [
+      {
+        label: "top-1",
+        value: pct(this.p1),
+        title: top1 != null ? `most likely next token: ${JSON.stringify(top1)}` : undefined,
+      },
+      { label: "top-2", value: pct(this.p2) },
+      {
+        label: `tail ≥${this.topk.length + 1}`,
+        value: pct(this.tail),
+        title: `mass below the top-${this.topk.length} the bundle ships`,
+      },
+      { label: "candidates", value: String(this.topk.length) },
+      {
+        label: "entropy ≥",
+        value: `${this.entropyBits().toFixed(2)} bits`,
+        title:
+          "Shannon entropy over the shipped top-k with the tail as ONE bucket — " +
+          "a lower bound on true next-token entropy, since the real tail is " +
+          "spread over many tokens this bundle does not ship",
+      },
+    ];
+  }
+
+  /** H over the top-k plus the tail collapsed into a single bucket. Stated that
+   *  way on the tile's hover: it is a LOWER bound on the true next-token
+   *  entropy, since the real tail is spread over many tokens the bundle does
+   *  not ship. Reporting it as "the" entropy would overclaim. */
+  private entropyBits(): number {
+    let h = 0;
+    for (const [, p] of this.topk) if (p > 0) h -= p * Math.log2(p);
+    if (this.tail > 0) h -= this.tail * Math.log2(this.tail);
+    return h;
   }
 
   frame(_dt: number, _t: number): void {

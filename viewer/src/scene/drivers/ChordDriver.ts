@@ -23,7 +23,6 @@ import {
   instancedDynamicBufferAttribute,
   mix,
   positionGeometry,
-  texture,
   uniform,
   uv,
   vec2,
@@ -32,7 +31,7 @@ import {
 import type { GpuTier } from "../../app/capabilities";
 import { appStore, type Selection } from "../../app/store";
 import type { Dataset } from "../../data/loader";
-import { rampTextureData } from "../../styles/tokens";
+import { rampNode } from "../ramp";
 import type { SceneDriver } from "../SceneDriver";
 import { clusterColor } from "../layers/PointsLayer";
 
@@ -94,7 +93,6 @@ export class ChordDriver implements SceneDriver {
   /** world units per CSS px, plain number twin of uWpp for CPU math */
   private wpp = 0.01;
   private disposers: Array<() => void> = [];
-  private rampTex!: THREE.DataTexture;
   private materials: THREE.Material[] = [];
 
   async init(canvas: HTMLCanvasElement, tier: GpuTier): Promise<void> {
@@ -108,9 +106,6 @@ export class ChordDriver implements SceneDriver {
     await this.renderer.init();
     this.renderer.setClearColor(0x000000, 0);
     this.camera.position.z = 10;
-
-    this.rampTex = new THREE.DataTexture(rampTextureData(), 256, 1, THREE.RGBAFormat);
-    this.rampTex.needsUpdate = true;
 
     this.buildChords();
     this.buildNodes();
@@ -198,7 +193,7 @@ export class ChordDriver implements SceneDriver {
     material.positionNode = vec3(pos, 0.02);
 
     // hue travels the shared ramp from cluster A's color slot to cluster B's
-    material.colorNode = texture(this.rampTex, vec2(mix(aRampA, aRampB, t), 0.5)).rgb;
+    material.colorNode = rampNode(mix(aRampA, aRampB, t));
 
     const edgeFade = across.abs().mul(2).smoothstep(0.25, 1).oneMinus();
     const endFade = t.smoothstep(0, 0.04).mul(t.oneMinus().smoothstep(0, 0.04));
@@ -565,7 +560,6 @@ export class ChordDriver implements SceneDriver {
     for (const m of this.materials) m.dispose();
     this.chordMesh?.geometry.dispose();
     this.nodeMesh?.geometry.dispose();
-    this.rampTex?.dispose();
     this.renderer?.dispose();
   }
 }

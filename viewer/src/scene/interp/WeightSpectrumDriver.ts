@@ -25,6 +25,7 @@ import {
 } from "./chart-theme";
 import { InterpTooltip } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
+import type { StatTile } from "../../chrome/StatStrip";
 
 type LayersModule = typeof import("@deck.gl/layers");
 
@@ -341,6 +342,32 @@ export class WeightSpectrumDriver implements InterpDriver {
     return {
       ortho: { target: [SPAN_X / 2, SPAN_Y / 2, 0] as [number, number, number], zoom },
     };
+  }
+
+  /** Footer strip. κ and stable rank are per-matrix quantities shipped in the
+   *  bundle and already surfaced in the hover tooltip; the strip reports their
+   *  extremes across the matrices actually plotted, and names which matrix
+   *  won so the number stays traceable to a row rather than floating free. */
+  stats(): StatTile[] {
+    const b = this.bundle;
+    if (!b) return [];
+    let worst = b.matrices[0];
+    for (const m of b.matrices) if (m.condition > (worst?.condition ?? -1)) worst = m;
+    return [
+      { label: "matrices", value: String(b.matrices.length) },
+      { label: "layers", value: String(b.meta.n_layer) },
+      { label: "width d", value: String(b.meta.d) },
+      {
+        label: "σ span",
+        value: `${(this.logMax - this.logMin).toFixed(1)} dec`,
+        title: "decades of singular value covered by the plotted range",
+      },
+      {
+        label: "max κ",
+        value: worst ? worst.condition.toLocaleString("en-US", { maximumFractionDigits: 0 }) : "—",
+        title: worst ? `worst-conditioned matrix: ${worst.name}` : undefined,
+      },
+    ];
   }
 
   frame(_dt: number, _t: number): void {

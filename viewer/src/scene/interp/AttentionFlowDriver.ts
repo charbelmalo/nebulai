@@ -21,6 +21,7 @@ import { loadTrace, type TraceBundle } from "../../data/interp";
 import { HOT } from "./chart-theme";
 import { InterpTooltip, type TipRow } from "./chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
+import type { StatTile } from "../../chrome/StatStrip";
 
 type LayersModule = typeof import("@deck.gl/layers");
 
@@ -333,6 +334,54 @@ export class AttentionFlowDriver implements InterpDriver {
     return {
       ortho: { target: [0, 0, 0] as [number, number, number], zoom: Math.log2(this.zoomPx()) },
     };
+  }
+
+  /** Footer strip. Deliberately reports NOTHING keyed to the selected head.
+   *  The host reads this once when the bundle lands, but the head picker keeps
+   *  running afterwards — so `lines.length` or the current head's peak weight
+   *  would silently describe a head the user has since navigated away from.
+   *  Every tile here is a whole-bundle quantity: `focus` is computed for all
+   *  layer×head pairs up front, so its extremes stay true whatever is picked. */
+  stats(): StatTile[] {
+    if (!this.bundle) return [];
+    let maxFocus = -1;
+    let minFocus = 2;
+    let hi = "";
+    let lo = "";
+    for (let l = 0; l < this.focus.length; l++) {
+      for (let h = 0; h < (this.focus[l]?.length ?? 0); h++) {
+        const f = this.focus[l]?.[h] ?? 0;
+        if (f > maxFocus) {
+          maxFocus = f;
+          hi = `L${l} H${h}`;
+        }
+        if (f < minFocus) {
+          minFocus = f;
+          lo = `L${l} H${h}`;
+        }
+      }
+    }
+    const ok = maxFocus >= 0;
+    // 3 decimals, not 2, and deliberately. The most focused head in GPT-2 sits
+    // at 0.9993 — at 2dp that prints "1.00", which reads as a saturated or
+    // clamped value rather than a measurement that got close to the ceiling.
+    // Reporting BOTH ends also stops the tile implying focus is uniformly high:
+    // the real story is the spread across the grid, not the maximum.
+    return [
+      { label: "tokens", value: String(this.T) },
+      { label: "layers", value: String(this.nLayer) },
+      { label: "heads/layer", value: String(this.nHead) },
+      {
+        label: "min focus",
+        value: ok ? minFocus.toFixed(3) : "—",
+        title: lo ? `most diffuse head of the ${this.nLayer * this.nHead}: ${lo}` : undefined,
+      },
+      {
+        label: "max focus",
+        value: ok ? maxFocus.toFixed(3) : "—",
+        title: hi ? `most focused head of the ${this.nLayer * this.nHead}: ${hi}` : undefined,
+      },
+    ];
   }
 
   frame(_dt: number, _t: number): void {

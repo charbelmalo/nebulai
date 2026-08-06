@@ -9,6 +9,7 @@
 
 import type { GpuTier } from "../../app/capabilities";
 import type { InterpSelection } from "../../app/store";
+import type { StatTile } from "../../chrome/StatStrip";
 
 export interface InterpDriver {
   /** When false, the host skips the per-frame RAF entirely — the view is static
@@ -29,6 +30,16 @@ export interface InterpDriver {
    *  calls `appStore.getState().setInterpSelection(...)` on click. Views that
    *  opt in declare it in the registry's `linksTo` so the rail can badge them. */
   setSelection?(sel: InterpSelection | null): void;
+  /** Optional: 4–5 summary scalars for the footer stat strip, read by the host
+   *  once `setModel` has resolved (so the numbers describe the bundle actually
+   *  on screen). Return [] when there is nothing honest to say.
+   *
+   *  Every tile MUST be a quantity this view really computed from the bundle —
+   *  the same bar as the on-canvas legend. Do not synthesise a headline number
+   *  to fill the strip, and do not report a total the loader inferred rather
+   *  than measured; pass "—" instead. The driver formats its own values because
+   *  it owns the units. */
+  stats?(): StatTile[];
   /** dt ms, t elapsed seconds (pinned at 0 under ?frozen for goldens). */
   frame(dt: number, t: number): void;
   resize(width: number, height: number, dpr: number): void;
@@ -63,6 +74,11 @@ export interface InterpFeature {
   /** Which bundle field(s) the numbers come from, and how they were computed
    *  offline (the provenance line on /guide). REQUIRED for the same reason. */
   source: string;
+  /** One plain-language line under the title: what real quantity is on screen.
+   *  Orientation, not marketing — it must be supported by this feature's own
+   *  `blurb`/`math`/`source`, and must preserve any hedge those carry (head-
+   *  averaged, one prompt, a lower bound). `blurb` stays the long form. */
+  subtitle?: string;
   legend?: LegendKey[];
   note?: string;
   /** Which corner the legend card docks to. Defaults to top-right; radial views

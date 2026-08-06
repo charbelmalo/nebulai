@@ -52,8 +52,10 @@ import {
 } from "three/tsl";
 import { appStore } from "../../app/store";
 import {
+  buildAgentGraph,
   CATEGORY_ORDER,
   dominantCategory,
+  type AgentStep,
   type SessionAnalysis,
   type SessionTurn,
   type ToolCategory,
@@ -136,6 +138,14 @@ interface FieldNode {
   index: number;
   turn: SessionTurn;
   pos: THREE.Vector3;
+  /** This turn's place in its OWN agent's path — step n of m, and the gap
+   *  since that agent's previous step. Undefined only if the turn somehow
+   *  escaped the graph, which the builder makes impossible. */
+  step?: AgentStep;
+  /** How many distinct agents ran in this turn's session. 1 for every real
+   *  transcript on record; the tooltip suppresses its per-agent row at 1, where
+   *  the agent step and the session turn number are the same number twice. */
+  agentCount: number;
 }
 
 interface Axes {
@@ -570,7 +580,8 @@ export class SessionFieldDriver {
     for (let ai = 0; ai < this.analyses.length; ai++) {
       const a = this.analyses[ai]!;
       const hue = sessionHue(ai);
-      let prev: THREE.Vector3 | null = null;
+      const graph = buildAgentGraph(a.turns);
+      const posOf = new Map<number, THREE.Vector3>();
       for (const raw of a.turns) {
         // a stored analysis can carry a category this build has no colour for
         // (written by another build; the raw transcript is never persisted, so
@@ -583,9 +594,31 @@ export class SessionFieldDriver {
           this.axes.y.toUnit(t.cacheRead) * CUBE - HALF,
           this.axes.z.toUnit(t.cacheWrite) * CUBE - HALF,
         );
-        this.nodes.push({ sessionId: a.id, sessionName: a.name, index: t.index, turn: t, pos });
-        if (prev) trailSegs.push({ a: prev, b: pos, rgb: hue, sessionId: a.id, index: t.index });
-        prev = pos;
+        this.nodes.push({
+          sessionId: a.id,
+          sessionName: a.name,
+          index: t.index,
+          turn: t,
+          pos,
+          step: graph.byTurn.get(t.index),
+          agentCount: graph.paths.length,
+        });
+        posOf.set(t.index, pos);
+      }
+      // One polyline PER AGENT, not one per session. A single walk down
+      // `a.turns` emits an edge wherever the agent changes — parent→sub on the
+      // way in and sub→parent on the way out — and neither is a step either
+      // agent took. Walking each agent's own steps also means the parent's path
+      // closes over the sub-agent that interrupted it, which is the true shape:
+      // the parent was inside that one tool call the whole time.
+      for (const path of graph.paths) {
+        let prev: THREE.Vector3 | null = null;
+        for (const s of path.steps) {
+          const pos = posOf.get(s.turn);
+          if (!pos) continue;
+          if (prev) trailSegs.push({ a: prev, b: pos, rgb: hue, sessionId: a.id, index: s.turn });
+          prev = pos;
+        }
       }
     }
 
@@ -1290,14 +1323,27 @@ export class SessionFieldDriver {
     el.appendChild(cat);
     const grid = document.createElement("dl");
     grid.className = "session-tt-grid";
+    const st = n.step;
     const rows: [string, string][] = [
       ["Time", fmtSecs(t.tSec)],
+      // Elapsed since the PREVIOUS step of this same agent. Em-dash on an
+      // agent's first step and on any pair missing a timestamp — a gap that
+      // could not be measured is not a gap of zero. The x axis already carries
+      // this geometrically; the number is here because that axis is asinh, so
+      // eye-reading a span off it is not the same as knowing it.
+      ["Since prev", st?.gapSec != null ? fmtGap(st.gapSec) : "—"],
       ["Output", t.outputTokens.toLocaleString()],
       ["Context", t.cacheRead.toLocaleString()],
       ["New context", t.cacheWrite.toLocaleString()],
       ["Tools", String(t.tools.length)],
     ];
     if (err !== undefined && err > 0) rows.push(["Failures", String(err)]);
+    // Only when the session actually ran more than one agent. On a single-agent
+    // session `step` equals the `#N` already in the header, and a row that
+    // repeats the header teaches nothing.
+    if (st && n.agentCount > 1) {
+      rows.push([st.agentId === "main" ? "Main step" : "Sub-agent step", `${st.step} of ${st.ofSteps}`]);
+    }
     for (const [k, v] of rows) {
       const dt = document.createElement("dt");
       dt.textContent = k;
@@ -1467,4 +1513,13 @@ function fmtSecs(s: number): string {
   if (s >= 3600) return `${(s / 3600).toFixed(1)}h`;
   if (s >= 60) return `${Math.round(s / 60)}m`;
   return `${Math.round(s)}s`;
+}
+
+/** Like `fmtSecs` but keeps a decimal under 10s. Step gaps live down there —
+ *  rounding a 0.4s gap to "0s" would print a duration that did not happen. */
+function fmtGap(s: number): string {
+  if (s >= 3600) return `${(s / 3600).toFixed(1)}h`;
+  if (s >= 60) return `${Math.round(s / 60)}m`;
+  if (s >= 10) return `${Math.round(s)}s`;
+  return `${s.toFixed(1)}s`;
 }
