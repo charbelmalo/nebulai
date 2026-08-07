@@ -3,12 +3,11 @@
  *  check ("where does the model put ship-words?"). Matching is honest
  *  case-insensitive substring — no fuzzy ranking that would fake semantics. */
 
-import { useSignal } from "@preact/signals";
 import { requestFlyToCluster, requestFlyToPoint } from "../app/actions";
 import { appStore } from "../app/store";
 import { knnDistance, knnDistanceFloor, knnNeighbors } from "../data/edges";
 import { rampRgb } from "../scene/interp/chart-theme";
-import { $dataset, $mapQuery, $selection } from "./state";
+import { $dataset, $mapQuery, $searchCollapsed, $selection, openPanel } from "./state";
 
 /** hard cap on rendered rows across all groups — 50K-token vocabularies can
  *  match thousands of rows and the panel must stay a panel, not a dump */
@@ -16,20 +15,19 @@ const MAX_ROWS = 100;
 const ROWS_PER_GROUP = 8;
 
 export function SearchPanel() {
-  const collapsed = useSignal(false);
   const ds = $dataset.value;
   if (!ds) return null;
 
   const { text, results } = $mapQuery.value;
   const setQuery = (t: string) => appStore.getState().setMapQuery(t);
 
-  if (collapsed.value) {
+  if ($searchCollapsed.value) {
     return (
       <button
         type="button"
         class="search-fab"
         aria-label="Open search"
-        onClick={() => (collapsed.value = false)}
+        onClick={() => openPanel("search")}
       >
         Search
       </button>
@@ -57,7 +55,7 @@ export function SearchPanel() {
           type="button"
           class="legend-collapse"
           aria-label="Collapse search"
-          onClick={() => (collapsed.value = true)}
+          onClick={() => ($searchCollapsed.value = true)}
         >
           ›
         </button>

@@ -97,12 +97,20 @@ export class WeightSpectrumDriver implements InterpDriver {
     overlay.appendChild(this.axisRoot);
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
-    const onLeave = () => this.hideTip();
+    // touch has no hover — pointerleave fires the instant a finger lifts — so a
+    // pinned tooltip must survive it rather than being hidden underneath a tap.
+    const onLeave = () => {
+      if (this.tooltip.pinned) return;
+      this.hideTip();
+    };
+    const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("click", onClick);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("click", onClick);
     });
   }
 
@@ -293,15 +301,37 @@ export class WeightSpectrumDriver implements InterpDriver {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    if (this.tooltip.pinned) return;
     if (!this.deck) return;
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const info = this.deck.pickObject({ x, y, radius: 6 }) as PickingInfo | null;
-    if (!info?.object || info.layer?.id !== "ws-curves") {
+    if (!this.showTooltipFor(x, y)) this.hideTip();
+  }
+
+  /** Touch-only: a tap pins the readout so it survives past the finger lifting
+   *  (touch has no hover, so pointerleave would otherwise hide it instantly).
+   *  A tap on empty space clears the pin and the hover focus rather than
+   *  leaving a stale one stuck. Mouse pointers no-op — the hover path serves them. */
+  private onClick(e: PointerEvent): void {
+    if (e.pointerType !== "touch" || !this.deck) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    if (this.showTooltipFor(x, y)) {
+      this.tooltip.pinned = true;
+    } else {
+      this.tooltip.pinned = false;
       this.hideTip();
-      return;
     }
+  }
+
+  /** Pick the curve at (x, y), update the hover focus + LED marker, and show
+   *  the tooltip there. Returns whether a curve was hit. */
+  private showTooltipFor(x: number, y: number): boolean {
+    if (!this.deck) return false;
+    const info = this.deck.pickObject({ x, y, radius: 6 }) as PickingInfo | null;
+    if (!info?.object || info.layer?.id !== "ws-curves") return false;
     const c = info.object as Curve;
     // exact SV index from the world x under the cursor (info.coordinate)
     const wx = info.coordinate ? info.coordinate[0]! : 0;
@@ -323,6 +353,7 @@ export class WeightSpectrumDriver implements InterpDriver {
     ]);
     this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
+    return true;
   }
 
   private hideTip(): void {

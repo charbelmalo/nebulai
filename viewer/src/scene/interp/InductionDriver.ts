@@ -515,6 +515,8 @@ export class InductionDriver implements InterpDriver {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    // a tap-pinned tooltip (touch has no hover) survives a stray move
+    if (this.tooltip.pinned) return;
     const b = this.bundle;
     if (!b) return;
     const c = this.pick(e);
@@ -527,6 +529,15 @@ export class InductionDriver implements InterpDriver {
       this.canvas.style.cursor = "";
       return;
     }
+    const rect = this.canvas.getBoundingClientRect();
+    this.showTooltipFor(c, e.clientX - rect.left, e.clientY - rect.top);
+    this.canvas.style.cursor = "layer" in c ? "pointer" : "crosshair";
+  }
+
+  /** Row-building + placement, shared by the hover path and a touch tap-to-pin. */
+  private showTooltipFor(c: GridCell | StripeCell, x: number, y: number): void {
+    const b = this.bundle;
+    if (!b) return;
     const rows: TipRow[] = [];
     if ("layer" in c) {
       const v = this.scoreOf(c.layer, c.head, this.metric);
@@ -571,13 +582,24 @@ export class InductionDriver implements InterpDriver {
       rows.push({ text: `post-softmax attention, stored at 4 dp · seed ${b.meta.seed_a}` });
     }
     this.tooltip.show(rows);
-    const rect = this.canvas.getBoundingClientRect();
-    this.tooltip.move(e.clientX - rect.left, e.clientY - rect.top, this.cssW, this.cssH);
-    this.canvas.style.cursor = "layer" in c ? "pointer" : "crosshair";
+    this.tooltip.move(x, y, this.cssW, this.cssH);
   }
 
   private onClick(e: PointerEvent): void {
     const c = this.pick(e);
+    // touch has no hover, so the tap is the only chance to read whatever it
+    // landed on — pin it independent of whether the tap also selects a head
+    // (a stripe-cell tap never selects, but its reading is still worth pinning)
+    if (e.pointerType === "touch") {
+      if (c) {
+        const rect = this.canvas.getBoundingClientRect();
+        this.tooltip.pinned = true;
+        this.showTooltipFor(c, e.clientX - rect.left, e.clientY - rect.top);
+      } else {
+        this.tooltip.pinned = false;
+        this.tooltip.hide();
+      }
+    }
     if (!c || !("layer" in c)) return;
     if (this.sel && this.sel.layer === c.layer && this.sel.head === c.head) return;
     this.selectHead(c.layer, c.head);
@@ -603,6 +625,9 @@ export class InductionDriver implements InterpDriver {
   }
 
   private onLeave(): void {
+    // a tap-pinned tooltip must survive the pointer leaving — touch has no
+    // hover state to "leave" in the first place
+    if (this.tooltip.pinned) return;
     if (this.hover) {
       this.hover = null;
       this.pushLayers();

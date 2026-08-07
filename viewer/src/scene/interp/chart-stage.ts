@@ -41,6 +41,7 @@ import {
 } from "three/tsl";
 import { appStore } from "../../app/store";
 import type { GpuTier } from "../../app/capabilities";
+import { GestureRecognizer } from "../gestures";
 import { createBloomPipeline, type BloomOptions, type BloomPipeline } from "../post/bloom";
 import { BG } from "../../styles/tokens";
 import type { Inset } from "./field2d";
@@ -188,6 +189,10 @@ export class ChartStage {
   private last: { x: number; y: number } | null = null;
   private abort = new AbortController();
   private raycaster = new THREE.Raycaster();
+  /** touch orbit/zoom — see src/scene/gestures.ts; the mouse path is untouched.
+   *  Shared by every ChartStage consumer (AttentionRolloutDriver,
+   *  ResidualRibbonDriver), so wiring it once here gives both touch for free. */
+  private gestures: GestureRecognizer | null = null;
 
   /** Fired after any camera change, so a consumer can relayout its DOM overlay
    *  in the same tick the pixels moved. */
@@ -719,9 +724,31 @@ export class ChartStage {
 
   private attachPointer(el: HTMLCanvasElement): void {
     const sig = this.abort.signal;
+
+    // touch is handled once, by the shared recognizer (see gestures.ts) — the
+    // pointer handlers below early-return on pointerType "touch" so the two
+    // paths never fight over the same drag.
+    this.gestures = new GestureRecognizer({
+      onPan: (dx, dy) => {
+        this.az -= dx * 0.006;
+        this.el = Math.min(EL_MAX, Math.max(EL_MIN, this.el + dy * 0.006));
+        this.recentre(); // pan only — turning the lattice must not rescale it
+        this.render();
+      },
+      onPinch: (e) => {
+        this.zoom = Math.min(2.4, Math.max(0.35, this.zoom / e.scale));
+        this.az -= e.dcx * 0.006;
+        this.el = Math.min(EL_MAX, Math.max(EL_MIN, this.el + e.dcy * 0.006));
+        this.applyFit(); // the pan is distance-dependent, so it re-converges too
+        this.render();
+      },
+    });
+    this.gestures.attach(el, sig);
+
     el.addEventListener(
       "pointerdown",
       (e) => {
+        if (e.pointerType === "touch") return;
         this.dragging = true;
         this.dragMoved = false;
         this.last = { x: e.clientX, y: e.clientY };
@@ -732,6 +759,7 @@ export class ChartStage {
     el.addEventListener(
       "pointermove",
       (e) => {
+        if (e.pointerType === "touch") return;
         if (!this.dragging || !this.last) return;
         const dx = e.clientX - this.last.x;
         const dy = e.clientY - this.last.y;
@@ -745,6 +773,7 @@ export class ChartStage {
       { signal: sig },
     );
     const end = (e: PointerEvent) => {
+      if (e.pointerType === "touch") return;
       const wasClick = this.dragging && !this.dragMoved;
       this.dragging = false;
       this.last = null;
@@ -810,6 +839,7 @@ export class ChartStage {
   dispose(): void {
     this.disposed = true;
     this.abort.abort();
+    this.gestures?.dispose();
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.teardownBars();

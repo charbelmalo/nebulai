@@ -462,6 +462,7 @@ export class SAEWebDriver implements InterpDriver {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    if (this.tooltip.pinned) return;
     const web = this.web;
     const sae = this.sae;
     if (!web || !sae) return;
@@ -475,6 +476,14 @@ export class SAEWebDriver implements InterpDriver {
       this.canvas.style.cursor = "";
       return;
     }
+    const rect = this.canvas.getBoundingClientRect();
+    this.showTooltipFor(i, e.clientX - rect.left, e.clientY - rect.top);
+  }
+
+  private showTooltipFor(i: number, x: number, y: number): void {
+    const web = this.web;
+    const sae = this.sae;
+    if (!web || !sae) return;
     const j = web.nn_idx[i] ?? i;
     const rows: TipRow[] = [
       {
@@ -493,8 +502,7 @@ export class SAEWebDriver implements InterpDriver {
       },
     ];
     this.tooltip.show(rows);
-    const rect = this.canvas.getBoundingClientRect();
-    this.tooltip.move(e.clientX - rect.left, e.clientY - rect.top, this.cssW, this.cssH);
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "pointer";
   }
 
@@ -502,7 +510,20 @@ export class SAEWebDriver implements InterpDriver {
     const web = this.web;
     if (!web) return;
     const i = this.pick(e);
-    if (i == null) return;
+    if (i == null) {
+      // tap/click on empty space used to bare-return, leaving a stale pinned
+      // pair lit — clear it, same as re-clicking the pinned pair would
+      if (this.sel) {
+        this.sel = null;
+        appStore.getState().setInterpSelection(null);
+        this.buildChips();
+        this.pushLayers();
+        this.positionLabels();
+      }
+      this.tooltip.pinned = false;
+      this.tooltip.hide();
+      return;
+    }
     const j = web.nn_idx[i] ?? i;
     const same = this.sel && this.sel[0] === i && this.sel[1] === j;
     this.sel = same ? null : [i, j];
@@ -511,6 +532,12 @@ export class SAEWebDriver implements InterpDriver {
     this.buildChips();
     this.pushLayers();
     this.positionLabels();
+    if (e.pointerType === "touch" && !same) {
+      this.hover = i;
+      this.tooltip.pinned = true;
+      const rect = this.canvas.getBoundingClientRect();
+      this.showTooltipFor(i, e.clientX - rect.left, e.clientY - rect.top);
+    }
   }
 
   /** Cross-view link: follow a global SAE-feature selection by pinning that
@@ -537,6 +564,7 @@ export class SAEWebDriver implements InterpDriver {
   }
 
   private onLeave(): void {
+    if (this.tooltip.pinned) return;
     if (this.hover != null) {
       this.hover = null;
       this.pushLayers();

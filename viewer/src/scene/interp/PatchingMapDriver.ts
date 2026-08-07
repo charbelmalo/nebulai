@@ -96,11 +96,14 @@ export class PatchingMapDriver implements InterpDriver {
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onLeave = () => this.onLeave();
+    const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("click", onClick);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("click", onClick);
     });
   }
 
@@ -376,6 +379,7 @@ export class PatchingMapDriver implements InterpDriver {
 
   // ---- interaction --------------------------------------------------------------
   private onPointerMove(e: PointerEvent): void {
+    if (this.tooltip.pinned) return;
     if (!this.deck) return;
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -388,12 +392,44 @@ export class PatchingMapDriver implements InterpDriver {
       this.hover = c;
       this.pushLayers();
     }
-    const pr = this.pair;
-    if (!c || !pr) {
+    if (!c || !this.pair) {
       this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
+    this.showTooltipFor(c, x, y);
+  }
+
+  /** Touch-only: a tap pins the readout so it survives past the finger lifting
+   *  (touch has no hover, so pointerleave would otherwise hide it instantly).
+   *  A tap on empty space clears the pin and the hover highlight rather than
+   *  leaving a stale one stuck. Mouse pointers no-op — the hover path serves them. */
+  private onClick(e: PointerEvent): void {
+    if (e.pointerType !== "touch" || !this.deck) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const info = this.deck.pickObject({ x, y, radius: 1, layerIds: ["patch-cells"] }) as
+      | PickingInfo
+      | null;
+    const c = (info?.object as Cell | undefined) ?? null;
+    if (c !== this.hover) {
+      this.hover = c;
+      this.pushLayers();
+    }
+    if (!c || !this.pair) {
+      this.tooltip.pinned = false;
+      this.tooltip.hide();
+      this.canvas.style.cursor = "";
+      return;
+    }
+    this.tooltip.pinned = true;
+    this.showTooltipFor(c, x, y);
+  }
+
+  private showTooltipFor(c: Cell, x: number, y: number): void {
+    const pr = this.pair;
+    if (!pr) return;
     const cc = this.colorOf(c.r);
     const swatch: RGB = [cc[0], cc[1], cc[2]];
     const rows: TipRow[] = [
@@ -417,6 +453,7 @@ export class PatchingMapDriver implements InterpDriver {
   }
 
   private onLeave(): void {
+    if (this.tooltip.pinned) return;
     if (this.hover) {
       this.hover = null;
       this.pushLayers();

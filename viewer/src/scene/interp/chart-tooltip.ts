@@ -35,6 +35,13 @@ export interface TipRow {
 export class InterpTooltip {
   private el: HTMLElement;
 
+  /** Set when a tap pinned this tooltip open. Touch has no hover — `pointerleave`
+   *  fires the instant a finger lifts — so without a pin the readout could only
+   *  ever flash mid-drag and these charts were unreadable on a phone. Drivers
+   *  early-return from their hover handler while this is true (so a stray move
+   *  can't overwrite the pinned datum) and clear it on a tap in empty space. */
+  pinned = false;
+
   constructor(overlay: HTMLElement) {
     this.el = document.createElement("div");
     this.el.className = "point-tooltip interp-tooltip";
@@ -98,6 +105,7 @@ export class InterpTooltip {
 
   hide(): void {
     this.el.style.visibility = "hidden";
+    this.pinned = false;
   }
 
   get visible(): boolean {

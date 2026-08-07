@@ -100,11 +100,14 @@ export class OcclusionDriver implements InterpDriver {
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onLeave = () => this.onLeave();
+    const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("click", onClick);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("click", onClick);
     });
   }
 
@@ -512,6 +515,7 @@ export class OcclusionDriver implements InterpDriver {
   }
 
   private onPointerMove(ev: PointerEvent): void {
+    if (this.tooltip.pinned) return;
     const e = this.entry;
     if (!e) return;
     const bar = this.pick(ev);
@@ -524,6 +528,35 @@ export class OcclusionDriver implements InterpDriver {
       this.canvas.style.cursor = "";
       return;
     }
+    this.showTooltipFor(bar, ev);
+  }
+
+  /** Touch-only: a tap pins the readout so it survives past the finger lifting
+   *  (touch has no hover, so pointerleave would otherwise hide it instantly).
+   *  A tap on empty space clears the pin and the hover highlight rather than
+   *  leaving a stale one stuck. Mouse pointers no-op — the hover path serves them. */
+  private onClick(ev: PointerEvent): void {
+    if (ev.pointerType !== "touch") return;
+    const e = this.entry;
+    if (!e) return;
+    const bar = this.pick(ev);
+    if (bar !== this.hover) {
+      this.hover = bar;
+      this.pushLayers();
+    }
+    if (!bar) {
+      this.tooltip.pinned = false;
+      this.tooltip.hide();
+      this.canvas.style.cursor = "";
+      return;
+    }
+    this.tooltip.pinned = true;
+    this.showTooltipFor(bar, ev);
+  }
+
+  private showTooltipFor(bar: Bar, ev: PointerEvent): void {
+    const e = this.entry;
+    if (!e) return;
     const signed = (v: number, dp = 4) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(dp)}`;
     const i = bar.i;
     const dLp = e[this.mode].drop_lp[i] ?? 0;
@@ -554,6 +587,7 @@ export class OcclusionDriver implements InterpDriver {
   }
 
   private onLeave(): void {
+    if (this.tooltip.pinned) return;
     if (this.hover) {
       this.hover = null;
       this.pushLayers();

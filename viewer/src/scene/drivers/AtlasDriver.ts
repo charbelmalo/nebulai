@@ -56,6 +56,7 @@ const WHEEL_ZOOM_MAX = 0.22; // max log-factor a single event may contribute
 // camera before the user has actually committed to a twist.
 const TOUCH_TWIST_DEADZONE = 0.06; // rad — twist ignored below this
 const TOUCH_TILT_SPEED = 0.005; // rad per px of two-finger vertical drag
+const TOUCH_ORBIT_AZ_SPEED = 0.005; // rad per px of two-finger horizontal drag
 
 // navigation smoothing: raw input moves *targets*; the rendered angles ease
 // toward them, and a released drag coasts on its exponentially-decaying
@@ -132,6 +133,10 @@ export class AtlasDriver implements SceneDriver {
   private zoomPending = 0;
   private zoomAnchor = { x: 0, y: 0 };
 
+  // This driver's touch handling is intentionally private rather than adopting
+  // the shared src/scene/gestures.ts recognizer — its pinch is entangled with
+  // morph state and the id-picker — but it mirrors that recognizer's gesture
+  // model (1 finger pan, 2 finger pinch+twist+drag, tap-vs-drag threshold).
   /** live touch points, in order of contact — 2+ entries switch to the pinch
    *  gesture. Mouse/pen pointers are never tracked here. */
   private touches = new Map<number, { x: number; y: number }>();
@@ -1137,7 +1142,11 @@ export class AtlasDriver implements SceneDriver {
     const cx = (a.x + b.x) / 2;
     const cy = (a.y + b.y) / 2;
 
-    // spreading the fingers must zoom *in*, i.e. shrink world-units-per-pixel
+    // spreading the fingers must zoom *in*, i.e. shrink world-units-per-pixel.
+    // Deliberately NOT morph-gated: the camera stays orthographic even in the
+    // flythrough (see the OrthographicCamera at ~line 81), so frustum scaling
+    // is the only meaningful zoom at any tilt — wheel zoom (~line 1060) is
+    // already ungated the same way.
     if (Math.abs(dist - prev.dist) > 0.5) {
       this.cam.zoomAt(cx, cy, prev.dist / dist);
       this.userDroveCamera = true;
@@ -1157,7 +1166,11 @@ export class AtlasDriver implements SceneDriver {
     const engaged = prev.twistOn || Math.abs(twist) > TOUCH_TWIST_DEADZONE;
 
     if (this.morph > 0.02) {
-      this.orbitBy(engaged ? dAngle : 0, dMid.y * TOUCH_TILT_SPEED);
+      // twist drives azimuth once engaged; a two-finger horizontal drag also
+      // orbits azimuth directly (undiscoverable twist shouldn't be the only
+      // way in), and both contributions sum onto the same target.
+      const dAz = (engaged ? dAngle : 0) + dMid.x * TOUCH_ORBIT_AZ_SPEED;
+      this.orbitBy(dAz, dMid.y * TOUCH_TILT_SPEED);
     } else if (dMid.x !== 0 || dMid.y !== 0) {
       this.panScreen(dMid.x, dMid.y);
     }

@@ -426,25 +426,39 @@ export class LogitAttribDriver implements InterpDriver {
     }
   }
 
+  private pick(x: number, y: number): Cell | null {
+    if (!this.deck) return null;
+    const info = this.deck.pickObject({ x, y, radius: 1, layerIds: ["attr-cells"] }) as
+      | PickingInfo
+      | null;
+    return (info?.object as Cell | undefined) ?? null;
+  }
+
   private onPointerMove(e: PointerEvent): void {
+    // a tap-pinned tooltip (touch has no hover) survives a stray move
+    if (this.tooltip.pinned) return;
     if (!this.deck) return;
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const info = this.deck.pickObject({ x, y, radius: 1, layerIds: ["attr-cells"] }) as
-      | PickingInfo
-      | null;
-    const c = (info?.object as Cell | undefined) ?? null;
+    const c = this.pick(x, y);
     if (c !== this.hover) {
       this.hover = c;
       this.pushLayers();
     }
-    const tr = this.tr;
-    if (!c || !tr) {
+    if (!c || !this.tr) {
       this.tooltip.hide();
       this.canvas.style.cursor = "";
       return;
     }
+    this.showTooltipFor(c, x, y);
+    this.canvas.style.cursor = "crosshair";
+  }
+
+  /** Row-building + placement, shared by the hover path and a touch tap-to-pin. */
+  private showTooltipFor(c: Cell, x: number, y: number): void {
+    const tr = this.tr;
+    if (!tr) return;
     const kind =
       c.col < this.nH ? `head ${c.col}` : c.col === this.nH ? "MLP block" : "attn out-proj bias b_o";
     const cc = this.colorOf(c.v);
@@ -468,19 +482,26 @@ export class LogitAttribDriver implements InterpDriver {
     }
     this.tooltip.show(rows);
     this.tooltip.move(x, y, this.cssW, this.cssH);
-    this.canvas.style.cursor = "crosshair";
   }
 
   private onClick(e: PointerEvent): void {
     if (!this.deck) return;
     const rect = this.canvas.getBoundingClientRect();
-    const info = this.deck.pickObject({
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-      radius: 1,
-      layerIds: ["attr-cells"],
-    }) as PickingInfo | null;
-    const c = (info?.object as Cell | undefined) ?? null;
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const c = this.pick(x, y);
+    // touch has no hover, so a tap is the only chance to read a cell's
+    // tooltip — pin it independent of whether the tap also selects a head
+    // (an MLP/b_o cell tap never selects, but its reading is still worth pinning)
+    if (e.pointerType === "touch") {
+      if (c) {
+        this.tooltip.pinned = true;
+        this.showTooltipFor(c, x, y);
+      } else {
+        this.tooltip.pinned = false;
+        this.tooltip.hide();
+      }
+    }
     if (!c || c.col >= this.nH) return; // MLP/b_o cells aren't heads
     // toggle publish as the global cross-view head selection
     const same = this.linked?.layer === c.layer && this.linked.head === c.col;
@@ -499,6 +520,9 @@ export class LogitAttribDriver implements InterpDriver {
   }
 
   private onLeave(): void {
+    // a tap-pinned tooltip must survive the pointer leaving — touch has no
+    // hover state to "leave" in the first place
+    if (this.tooltip.pinned) return;
     if (this.hover) {
       this.hover = null;
       this.pushLayers();

@@ -105,12 +105,20 @@ export class LogitLensTunnelDriver implements InterpDriver {
     overlay.appendChild(this.labelRoot);
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
-    const onLeave = () => this.hideTip();
+    // touch has no hover — pointerleave fires the instant a finger lifts — so a
+    // pinned tooltip must survive it rather than being hidden underneath a tap.
+    const onLeave = () => {
+      if (this.tooltip.pinned) return;
+      this.hideTip();
+    };
+    const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("click", onClick);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("click", onClick);
     });
   }
 
@@ -390,6 +398,7 @@ export class LogitLensTunnelDriver implements InterpDriver {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    if (this.tooltip.pinned) return;
     if (!this.deck || !this.bundle) return;
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -405,6 +414,35 @@ export class LogitLensTunnelDriver implements InterpDriver {
       this.hideTip();
       return;
     }
+    this.showTooltipFor(seg, x, y);
+  }
+
+  /** Touch-only: a tap pins the readout so it can be read instead of flashing
+   *  for one frame under the finger. A tap on empty space clears the pin and
+   *  the hover highlight rather than leaving a stale one stuck. Mouse pointers
+   *  no-op here — the hover path above already serves them. */
+  private onClick(e: PointerEvent): void {
+    if (e.pointerType !== "touch" || !this.deck || !this.bundle) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const info = this.deck.pickObject({ x, y, radius: 2, layerIds: ["ll-cells"] });
+    const seg = info?.object as Seg | undefined;
+    const key = seg ? `${seg.r}:${seg.rank}` : null;
+    if (key !== this.hoverKey) {
+      this.hoverKey = key;
+      this.pushLayers();
+    }
+    if (!seg) {
+      this.tooltip.pinned = false;
+      this.hideTip();
+      return;
+    }
+    this.tooltip.pinned = true;
+    this.showTooltipFor(seg, x, y);
+  }
+
+  private showTooltipFor(seg: Seg, x: number, y: number): void {
     const rows: TipRow[] = [
       {
         kind: "label",

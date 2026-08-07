@@ -106,6 +106,12 @@ export class ResidualRibbonDriver implements InterpDriver {
   private selTok = -1; // isolated token row, or -1 for the whole grid
   private hover: { layer: number; tok: number } | null = null;
   private tokRGB: Array<[number, number, number]> = [];
+  /** `ChartStage.onClick` reports only a screen point, not the originating
+   *  PointerEvent, so a touch tap can't be told apart from a mouse click there.
+   *  A second, independent pointerdown listener (below) just records the type
+   *  — it never calls preventDefault/setPointerCapture, so the stage's own
+   *  click-vs-drag handling is untouched. */
+  private lastPointerType = "mouse";
 
   // reused per-instance buffers — hover and selection rewrite appearance but
   // never the cell set, so these are allocated once per bundle
@@ -133,11 +139,16 @@ export class ResidualRibbonDriver implements InterpDriver {
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onLeave = () => this.hideTip();
+    const onPointerDown = (e: PointerEvent) => {
+      this.lastPointerType = e.pointerType;
+    };
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("pointerdown", onPointerDown);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("pointerdown", onPointerDown);
     });
   }
 
@@ -377,13 +388,33 @@ export class ResidualRibbonDriver implements InterpDriver {
 
   private onClick(sx: number, sy: number): void {
     const c = this.pick(sx, sy);
-    if (!c) return;
-    this.selTok = this.selTok === c.tok ? -1 : c.tok; // toggle token isolation
+    if (!c) {
+      // tap/click on empty space used to bare-return, leaving a stale token
+      // isolation stuck — clear it, same as clicking the isolated column again would
+      if (this.selTok >= 0) {
+        this.selTok = -1;
+        this.pushBars();
+        this.positionLabels();
+      }
+      this.tooltip.pinned = false;
+      this.hideTip();
+      return;
+    }
+    const wasSel = this.selTok === c.tok;
+    this.selTok = wasSel ? -1 : c.tok; // toggle token isolation
     this.pushBars();
     this.positionLabels();
+    // touch has no hover to read the isolated column from — pin the readout open
+    if (this.lastPointerType === "touch" && !wasSel) {
+      this.hover = c;
+      this.pushBars();
+      this.tooltip.pinned = true;
+      this.showTooltipFor(c, sx, sy);
+    }
   }
 
   private onPointerMove(e: PointerEvent): void {
+    if (this.tooltip.pinned) return;
     if (!this.bundle) return;
     // mid-orbit the pointer is steering the camera, not reading the data
     if (this.stage.isDragging) {
@@ -403,7 +434,12 @@ export class ResidualRibbonDriver implements InterpDriver {
       this.hideTip();
       return;
     }
+    this.showTooltipFor(c, sx, sy);
+  }
+
+  private showTooltipFor(c: { layer: number; tok: number }, sx: number, sy: number): void {
     const b = this.bundle;
+    if (!b) return;
     const v = this.normAt(c.layer, c.tok);
     const embed = this.normAt(0, c.tok);
     const final = this.normAt(this.nStage - 1, c.tok);
@@ -435,6 +471,9 @@ export class ResidualRibbonDriver implements InterpDriver {
   }
 
   private hideTip(): void {
+    // pointerleave fires the instant a touch finger lifts — must not clobber
+    // a tap-pinned readout (the whole reason a pin exists)
+    if (this.tooltip?.pinned) return;
     this.tooltip?.hide();
     this.canvas.style.cursor = "";
     if (this.hover) {

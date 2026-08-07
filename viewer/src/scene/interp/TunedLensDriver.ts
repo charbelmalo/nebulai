@@ -117,11 +117,14 @@ export class TunedLensDriver implements InterpDriver {
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onLeave = () => this.onLeave();
+    const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("click", onClick);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("click", onClick);
     });
   }
 
@@ -613,10 +616,40 @@ export class TunedLensDriver implements InterpDriver {
 
   // ---- hover ------------------------------------------------------------------
   private onPointerMove(e: PointerEvent): void {
+    if (this.tooltip.pinned) return;
     if (!this.deck) return;
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+    if (!this.showTooltipFor(x, y)) {
+      this.tooltip.hide();
+      this.canvas.style.cursor = "";
+    }
+  }
+
+  /** Touch-only: a tap pins the readout so it survives past the finger lifting
+   *  (touch has no hover, so pointerleave would otherwise hide it instantly).
+   *  A tap on empty space clears the pin and the hover highlight rather than
+   *  leaving a stale one stuck. Mouse pointers no-op — the hover path serves them. */
+  private onClick(e: PointerEvent): void {
+    if (e.pointerType !== "touch" || !this.deck) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    if (this.showTooltipFor(x, y)) {
+      this.tooltip.pinned = true;
+    } else {
+      this.tooltip.pinned = false;
+      this.tooltip.hide();
+      this.canvas.style.cursor = "";
+    }
+  }
+
+  /** Hit-test the curve panels (manual — cells own deck picking) or the grid
+   *  cells (deck.pickObject) at (x, y), update the hover highlight, and show
+   *  the tooltip there. Returns whether either surface was hit. */
+  private showTooltipFor(x: number, y: number): boolean {
+    if (!this.deck) return false;
 
     // curve panels: nearest-layer hover (manual hit test — cells own deck picking)
     const kr = this.klRect();
@@ -639,11 +672,7 @@ export class TunedLensDriver implements InterpDriver {
     }
     const b = this.bundle;
     const g = this.grid;
-    if ((!c && curveL < 0) || !b || !g) {
-      this.tooltip.hide();
-      this.canvas.style.cursor = "";
-      return;
-    }
+    if ((!c && curveL < 0) || !b || !g) return false;
     const lo0 = curveL >= 0 ? b.logit[curveL] : undefined;
     const tu0 = curveL >= 0 ? b.tuned[curveL] : undefined;
     const tuc = c ? g.tuned[c.layer]?.[c.t] : undefined;
@@ -686,15 +715,16 @@ export class TunedLensDriver implements InterpDriver {
         { text: `final → “${vis(b.tok_strs[fin[0]] ?? "")}” p ${fin[1].toFixed(3)}` },
       ];
     } else {
-      this.tooltip.hide();
-      return;
+      return false;
     }
     this.tooltip.show(rows);
     this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
+    return true;
   }
 
   private onLeave(): void {
+    if (this.tooltip.pinned) return;
     if (this.hoverCell || this.hoverLayer >= 0) {
       this.hoverCell = null;
       this.hoverLayer = -1;

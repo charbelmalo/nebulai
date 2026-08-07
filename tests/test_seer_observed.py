@@ -22,6 +22,7 @@ actively harmful:
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -34,6 +35,7 @@ import pytest
 
 from nebulai.seer import install as inst
 from nebulai.seer.adapters.observed import HOOK_ADAPTERS, ClaudeHookAdapter, hook_events
+from nebulai.seer.cli import add_parser
 from nebulai.seer.collector import SpoolCollector, import_spool
 from nebulai.seer.compare import compare
 from nebulai.seer.contract import CaptureMode, EventType, Fidelity, Outcome
@@ -569,13 +571,39 @@ def _driven_events() -> list:
 LIVE_CLAUDE = Path.home() / ".claude" / "settings.json"
 
 
+def _without_our_entries(cfg: dict) -> dict:
+    """The live config minus anything we installed into it.
+
+    These tests install and then uninstall, and uninstall removes every tagged
+    entry — so a live config that *already* has our hooks (the author dogfoods
+    the installer) makes the round trip end with fewer entries than it started
+    with, failing a test about clobbering that clobbered nothing. Stripping our
+    own tag is what keeps the fixture "the messy real config" rather than "the
+    real config plus whatever this machine last ran".
+    """
+    hooks = cfg.get("hooks")
+    if not isinstance(hooks, dict):
+        return cfg
+    cleaned: dict = {}
+    for event, groups in hooks.items():
+        kept_groups = []
+        for g in groups:
+            kept = [h for h in g.get("hooks", []) if h.get("_source") != inst.TAG]
+            if kept:
+                kept_groups.append({**g, "hooks": kept})
+        if kept_groups:
+            cleaned[event] = kept_groups
+    return {**cfg, "hooks": cleaned}
+
+
 @pytest.fixture
 def settings(tmp_path: Path) -> Path:
     """A copy of the real settings.json when there is one — the merge has to
-    survive the config it will actually meet, not a tidy fixture."""
+    survive the config it will actually meet, not a tidy fixture — with our own
+    hooks stripped, so the fixture is a config we have not installed into."""
     p = tmp_path / "settings.json"
     if LIVE_CLAUDE.exists():
-        p.write_bytes(LIVE_CLAUDE.read_bytes())
+        p.write_text(json.dumps(_without_our_entries(json.loads(LIVE_CLAUDE.read_text()))))
     else:
         p.write_text(json.dumps({
             "hooks": {"PreToolUse": [{"matcher": "Bash",
@@ -833,6 +861,45 @@ class TestRestore:
 
         assert plan.changes == []
         assert cfg.read_text() == original
+
+
+class TestInstallerArgumentParsing:
+    """`install` with no agent named means every agent, and must parse.
+
+    argparse runs a `nargs="*"` positional's *default* through its own choices
+    check, so a `default=[]` made the bare `nebulai seer install --apply` die
+    with `invalid choice: '[]'` — the one invocation the help text implies is
+    normal. The command bodies always read "no agents" as "all of them"; only
+    the parser stood in the way.
+    """
+
+    def _parse(self, argv: list[str]) -> argparse.Namespace:
+        p = argparse.ArgumentParser(prog="nebulai")
+        add_parser(p.add_subparsers(dest="cmd", required=True))
+        return p.parse_args(argv)
+
+    @pytest.mark.parametrize("cmd", ["install", "uninstall"])
+    def test_no_agent_named_parses_and_means_all_of_them(self, cmd: str) -> None:
+        args = self._parse(["seer", cmd])
+
+        assert not args.agents
+        assert (args.agents or list(inst.CONFIGS)) == list(inst.CONFIGS)
+
+    def test_no_agent_named_still_parses_with_apply(self) -> None:
+        args = self._parse(["seer", "install", "--apply"])
+
+        assert not args.agents
+        assert args.dry_run is False
+
+    @pytest.mark.parametrize("cmd", ["install", "uninstall"])
+    def test_named_agents_are_kept_verbatim(self, cmd: str) -> None:
+        assert self._parse(["seer", cmd, "claude"]).agents == ["claude"]
+        assert self._parse(["seer", cmd, "codex", "hermes"]).agents == ["codex", "hermes"]
+
+    @pytest.mark.parametrize("cmd", ["install", "uninstall"])
+    def test_an_unknown_agent_is_still_rejected(self, cmd: str) -> None:
+        with pytest.raises(SystemExit):
+            self._parse(["seer", cmd, "not-an-agent"])
 
 
 def _tagged_entries(cfg: dict) -> list[dict]:

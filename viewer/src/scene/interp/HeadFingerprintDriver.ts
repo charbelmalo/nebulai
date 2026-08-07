@@ -153,13 +153,21 @@ export class HeadFingerprintDriver implements InterpDriver {
   private onClick(e: PointerEvent): void {
     if (!this.deck) return;
     const rect = this.canvas.getBoundingClientRect();
-    const info = this.deck.pickObject({
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-      radius: 6,
-      layerIds: ["head-active"],
-    }) as PickingInfo | null;
-    const p = (info?.object as HeadPt | undefined) ?? null;
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const p = this.pick(x, y);
+    // touch has no hover, so a tap is the only chance to read a head's
+    // tooltip — pin it here whether or not the tap also toggles the
+    // cross-view selection below
+    if (e.pointerType === "touch") {
+      if (p) {
+        this.tooltip.pinned = true;
+        this.showTooltipFor(p, x, y);
+      } else {
+        this.tooltip.pinned = false;
+        this.tooltip.hide();
+      }
+    }
     if (!p) return;
     const same = this.linked?.layer === p.layer && this.linked?.head === p.head;
     appStore
@@ -465,15 +473,22 @@ export class HeadFingerprintDriver implements InterpDriver {
     }
   }
 
+  private pick(x: number, y: number): HeadPt | null {
+    if (!this.deck) return null;
+    const info = this.deck.pickObject({ x, y, radius: 6, layerIds: ["head-active"] }) as
+      | PickingInfo
+      | null;
+    return (info?.object as HeadPt | undefined) ?? null;
+  }
+
   private onPointerMove(e: PointerEvent): void {
+    // a tap-pinned tooltip (touch has no hover) survives a stray move
+    if (this.tooltip.pinned) return;
     if (!this.deck) return;
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const info = this.deck.pickObject({ x, y, radius: 6, layerIds: ["head-active"] }) as
-      | PickingInfo
-      | null;
-    const p = (info?.object as HeadPt | undefined) ?? null;
+    const p = this.pick(x, y);
     const changed = (p?.id ?? -1) !== (this.hover?.id ?? -1);
     if (changed) {
       this.hover = p;
@@ -484,6 +499,12 @@ export class HeadFingerprintDriver implements InterpDriver {
       this.canvas.style.cursor = "";
       return;
     }
+    this.showTooltipFor(p, x, y);
+    this.canvas.style.cursor = "crosshair";
+  }
+
+  /** Row-building + placement, shared by the hover path and a touch tap-to-pin. */
+  private showTooltipFor(p: HeadPt, x: number, y: number): void {
     const b = this.bundle;
     const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
     const im = p.eig1Im;
@@ -505,10 +526,12 @@ export class HeadFingerprintDriver implements InterpDriver {
     }
     this.tooltip.show(rows);
     this.tooltip.move(x, y, this.cssW, this.cssH);
-    this.canvas.style.cursor = "crosshair";
   }
 
   private onLeave(): void {
+    // a tap-pinned tooltip must survive the pointer leaving — touch has no
+    // hover state to "leave" in the first place
+    if (this.tooltip.pinned) return;
     if (this.hover) {
       this.hover = null;
       this.pushLayers();

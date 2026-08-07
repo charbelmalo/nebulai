@@ -607,6 +607,9 @@ export class AblationDriver implements InterpDriver {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    // a tap-pinned tooltip (touch has no hover) survives a stray move — only
+    // the next tap moves it
+    if (this.tooltip.pinned) return;
     const b = this.bundle;
     if (!b) return;
     const c = this.pick(e);
@@ -619,6 +622,15 @@ export class AblationDriver implements InterpDriver {
       this.canvas.style.cursor = "";
       return;
     }
+    const rect = this.canvas.getBoundingClientRect();
+    this.showTooltipFor(c, e.clientX - rect.left, e.clientY - rect.top);
+    this.canvas.style.cursor = "layer" in c ? "pointer" : "crosshair";
+  }
+
+  /** Row-building + placement, shared by the hover path and a touch tap-to-pin. */
+  private showTooltipFor(c: GridCell | CurveCol, x: number, y: number): void {
+    const b = this.bundle;
+    if (!b) return;
     const signed = (v: number, dp = 4) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(dp)}`;
     const rows: TipRow[] = [];
     if ("layer" in c) {
@@ -658,13 +670,24 @@ export class AblationDriver implements InterpDriver {
       });
     }
     this.tooltip.show(rows);
-    const rect = this.canvas.getBoundingClientRect();
-    this.tooltip.move(e.clientX - rect.left, e.clientY - rect.top, this.cssW, this.cssH);
-    this.canvas.style.cursor = "layer" in c ? "pointer" : "crosshair";
+    this.tooltip.move(x, y, this.cssW, this.cssH);
   }
 
   private onClick(e: PointerEvent): void {
     const c = this.pick(e);
+    // touch has no hover, so the tap is the only chance to read whatever it
+    // landed on — pin it independent of whether the tap also selects a head
+    // (a curve-column tap never selects, but its reading is still worth pinning)
+    if (e.pointerType === "touch") {
+      if (c) {
+        const rect = this.canvas.getBoundingClientRect();
+        this.tooltip.pinned = true;
+        this.showTooltipFor(c, e.clientX - rect.left, e.clientY - rect.top);
+      } else {
+        this.tooltip.pinned = false;
+        this.tooltip.hide();
+      }
+    }
     if (!c || !("layer" in c)) return;
     if (this.sel?.kind === "head" && this.sel.layer === c.layer && this.sel.head === c.head) return;
     this.selectHead(c.layer, c.head);
@@ -692,6 +715,7 @@ export class AblationDriver implements InterpDriver {
   }
 
   private onLeave(): void {
+    if (this.tooltip.pinned) return;
     if (this.hover) {
       this.hover = null;
       this.pushLayers();

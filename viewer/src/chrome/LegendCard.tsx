@@ -2,25 +2,23 @@
  *  the weight ramp with honest provenance (metric @ space), the view-mode
  *  radio group, and a truthful empty state for v1 exports without edges. */
 
-import { useSignal } from "@preact/signals";
 import { requestViewMode } from "../app/actions";
 import type { ViewMode } from "../app/store";
-import { $dataset, $toggles, $viewMode } from "./state";
+import { $dataset, $legendCollapsed, $toggles, $viewMode, openPanel } from "./state";
 import { RadioRow } from "./controls";
 
 export function LegendCard() {
-  const collapsed = useSignal(false);
   if (!$toggles.value.legend) return null;
 
   const edges = $dataset.value?.columns.edges ?? null;
 
-  if (collapsed.value) {
+  if ($legendCollapsed.value) {
     return (
       <button
         type="button"
         class="legend-fab"
         aria-label="Open legend"
-        onClick={() => (collapsed.value = false)}
+        onClick={() => openPanel("legend")}
       >
         Connections
       </button>
@@ -35,7 +33,7 @@ export function LegendCard() {
           type="button"
           class="legend-collapse"
           aria-label="Collapse legend"
-          onClick={() => (collapsed.value = true)}
+          onClick={() => ($legendCollapsed.value = true)}
         >
           ›
         </button>

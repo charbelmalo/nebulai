@@ -113,6 +113,10 @@ export class AttentionRolloutDriver implements InterpDriver {
   private hover: RollCell | null = null;
   private playing = false;
   private timer = 0;
+  // ChartStage's onClick callback is (sx, sy) only — it does not forward the
+  // originating PointerEvent — so this is captured on the raw pointerdown to
+  // tell a touch tap from a mouse click by the time onClick fires
+  private lastPointerType = "mouse";
 
   // reused per-instance buffers — a depth step rewrites every value but never
   // the cell set, so these are allocated once per bundle
@@ -143,11 +147,18 @@ export class AttentionRolloutDriver implements InterpDriver {
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onLeave = () => this.hideTip();
+    // read-only: just remembers pointerType for the stage's own pointerdown/up
+    // click-pair detection (chart-stage.ts, not owned here) to consult later
+    const onDown = (e: PointerEvent) => {
+      this.lastPointerType = e.pointerType;
+    };
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("pointerdown", onDown);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("pointerdown", onDown);
     });
   }
 
@@ -496,13 +507,34 @@ export class AttentionRolloutDriver implements InterpDriver {
 
   private onClick(sx: number, sy: number): void {
     const cell = this.pick(sx, sy);
-    if (!cell) return;
+    if (!cell) {
+      // touch has no hover, so a tap in empty ground is the only way to
+      // release a tap-pinned tooltip — and since row isolation is itself a
+      // "pin one row" gesture, the same tap should release it too, closing
+      // the gap where a miss previously did nothing for mouse or touch
+      if (this.lastPointerType === "touch") {
+        this.tooltip.pinned = false;
+        this.tooltip.hide();
+      }
+      if (this.selRow !== -1) {
+        this.selRow = -1;
+        this.pushBars();
+        this.positionLabels();
+      }
+      return;
+    }
     this.selRow = this.selRow === cell.i ? -1 : cell.i; // toggle row isolation
+    if (this.lastPointerType === "touch") {
+      this.tooltip.pinned = true;
+      this.showTooltipFor(cell, sx, sy);
+    }
     this.pushBars();
     this.positionLabels();
   }
 
   private onPointerMove(e: PointerEvent): void {
+    // a tap-pinned tooltip (touch has no hover) survives a stray move
+    if (this.tooltip.pinned) return;
     if (!this.bundle) return;
     // mid-orbit the pointer is steering the camera, not reading the data — a
     // tooltip here would chase the drag across every column it swept
@@ -523,7 +555,14 @@ export class AttentionRolloutDriver implements InterpDriver {
       this.hideTip();
       return;
     }
+    this.showTooltipFor(cell, sx, sy);
+    this.canvas.style.cursor = "crosshair";
+  }
+
+  /** Row-building + placement, shared by the hover path and a touch tap-to-pin. */
+  private showTooltipFor(cell: RollCell, sx: number, sy: number): void {
     const b = this.bundle;
+    if (!b) return;
     const v = this.valOf(cell.i, cell.j);
     const dst = fmtTok(b.token_strs[cell.i] ?? "");
     const src = fmtTok(b.token_strs[cell.j] ?? "");
@@ -536,10 +575,12 @@ export class AttentionRolloutDriver implements InterpDriver {
       { text: "pos", value: `${cell.j}→${cell.i}` },
     ]);
     this.tooltip.move(sx, sy, this.cssW, this.cssH);
-    this.canvas.style.cursor = "crosshair";
   }
 
   private hideTip(): void {
+    // a tap-pinned tooltip must survive the pointer leaving/dragging — touch
+    // has no hover state to interrupt in the first place
+    if (this.tooltip.pinned) return;
     this.tooltip?.hide();
     this.canvas.style.cursor = "";
     if (this.hover) {

@@ -53,6 +53,7 @@ import type { Action, Effect, Fidelity } from "../../seer/contract";
 import { ACTIONS } from "../../seer/contract";
 import type { RunView, SpanRecord } from "../../seer/client";
 import type { Mark, OpenSpan } from "../../seer/live";
+import { GestureRecognizer } from "../gestures";
 import {
   ACTION_COLOR,
   EFFECT_CAP,
@@ -220,6 +221,9 @@ export class LiveDriver {
   private hits: HitRect[] = [];
   private cursor: { x: number; y: number } | null = null;
   private reducedMotion = false;
+  /** touch pan/pinch on the timeline — see src/scene/gestures.ts; the mouse
+   *  path (buttons-driven drag + wheel zoom) is untouched. */
+  private gestures: GestureRecognizer | null = null;
 
   /** The morph, as a journey rather than a position: `t` runs 0 → 1 from
    *  `modeFrom` to `modeTo`, and sits at 1 whenever nothing is moving. */
@@ -252,6 +256,23 @@ export class LiveDriver {
   init(canvas: HTMLCanvasElement): void {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d");
+    // touch is handled once, by the shared recognizer (see gestures.ts) — the
+    // mouse handlers below early-return on pointerType "touch" so the two
+    // paths never fight over the same drag.
+    this.gestures = new GestureRecognizer({
+      onPan: (dx) => {
+        this.panBy(-dx);
+        this.onHover?.(null); // mirrors the mouse-drag suppression below
+      },
+      onPinch: (e) => {
+        const c = this.canvas;
+        if (!c) return;
+        const r = c.getBoundingClientRect();
+        this.zoomBy(1 / e.scale, e.cx - r.left);
+        this.onHover?.(null);
+      },
+    });
+    this.gestures.attach(canvas);
     canvas.addEventListener("pointermove", this.onPointerMove);
     canvas.addEventListener("pointerleave", this.onPointerLeave);
     canvas.addEventListener("pointerdown", this.onPointerDown);
@@ -398,6 +419,7 @@ export class LiveDriver {
   dispose(): void {
     cancelAnimationFrame(this.raf);
     this.raf = 0;
+    this.gestures?.dispose();
     const c = this.canvas;
     if (c) {
       c.removeEventListener("pointermove", this.onPointerMove);
@@ -436,6 +458,7 @@ export class LiveDriver {
   // ── input ──────────────────────────────────────────────────────────────
 
   private onPointerMove = (e: PointerEvent): void => {
+    if (e.pointerType === "touch") return;
     const c = this.canvas;
     if (!c) return;
     const r = c.getBoundingClientRect();
@@ -454,6 +477,7 @@ export class LiveDriver {
   };
 
   private onPointerDown = (e: PointerEvent): void => {
+    if (e.pointerType === "touch") return;
     this.canvas?.setPointerCapture(e.pointerId);
   };
 

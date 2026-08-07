@@ -461,6 +461,7 @@ export class SAEPianoRollDriver implements InterpDriver {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    if (this.tooltip.pinned) return;
     if (!this.deck) return;
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -479,6 +480,11 @@ export class SAEPianoRollDriver implements InterpDriver {
       this.canvas.style.cursor = "";
       return;
     }
+    this.showTooltipFor(c, x, y);
+  }
+
+  private showTooltipFor(c: Cell, x: number, y: number): void {
+    if (!this.tr) return;
     const f = c.row.f;
     const tok = this.tr.token_strs[c.pos] ?? "";
     const cc = this.colorOf(c);
@@ -504,17 +510,29 @@ export class SAEPianoRollDriver implements InterpDriver {
   private onClick(e: PointerEvent): void {
     if (!this.deck) return;
     const rect = this.canvas.getBoundingClientRect();
-    const info = this.deck.pickObject({
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-      radius: 1,
-      layerIds: ["pr-cells"],
-    }) as PickingInfo | null;
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const info = this.deck.pickObject({ x, y, radius: 1, layerIds: ["pr-cells"] }) as
+      | PickingInfo
+      | null;
     const c = (info?.object as Cell | undefined) ?? null;
-    if (!c) return;
+    if (!c) {
+      // tap/click on empty space used to bare-return, leaving a stale linked
+      // feature outlined — clear it, same as clicking the linked row again would
+      if (this.linked !== null) appStore.getState().setInterpSelection(null);
+      this.tooltip.pinned = false;
+      this.tooltip.hide();
+      return;
+    }
     // toggle publish as the global cross-view SAE-feature selection
     const same = this.linked === c.row.f.id;
     appStore.getState().setInterpSelection(same ? null : { kind: "saeFeature", id: c.row.f.id });
+    if (e.pointerType === "touch" && !same) {
+      this.hover = c;
+      this.pushLayers();
+      this.tooltip.pinned = true;
+      this.showTooltipFor(c, x, y);
+    }
   }
 
   /** Cross-view link: outline the selected feature's row when this prompt's
@@ -527,6 +545,7 @@ export class SAEPianoRollDriver implements InterpDriver {
   }
 
   private onLeave(): void {
+    if (this.tooltip.pinned) return;
     if (this.hover) {
       this.hover = null;
       this.pushLayers();

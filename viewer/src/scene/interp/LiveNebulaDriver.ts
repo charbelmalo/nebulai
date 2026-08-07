@@ -165,11 +165,14 @@ export class LiveNebulaDriver implements InterpDriver {
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onLeave = () => this.onLeave();
+    const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("click", onClick);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("click", onClick);
     });
   }
 
@@ -583,12 +586,15 @@ export class LiveNebulaDriver implements InterpDriver {
   }
 
   // ---- hover ------------------------------------------------------------------
-  private onPointerMove(e: PointerEvent): void {
-    if (!this.deck) return;
-    const rect = this.canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const info = this.deck.pickObject({ x, y, radius: 2, layerIds: ["ln-cells", "ln-bars"] }) as PickingInfo | null;
+  private pick(x: number, y: number): PickingInfo | null {
+    if (!this.deck) return null;
+    return this.deck.pickObject({ x, y, radius: 2, layerIds: ["ln-cells", "ln-bars"] }) as PickingInfo | null;
+  }
+
+  /** applies the pick to hover state and shows/positions the tooltip. Returns
+   *  whether anything was actually hit — the touch tap handler uses that to
+   *  decide whether to pin. */
+  private showTooltipFor(info: PickingInfo | null, x: number, y: number): boolean {
     const obj = info?.object as Cell | Bar | undefined;
     const c = obj && "layer" in obj ? obj : null;
     const b = obj && "rank" in obj ? obj : null;
@@ -601,14 +607,14 @@ export class LiveNebulaDriver implements InterpDriver {
     if ((!c && !b) || !r) {
       this.tooltip.hide();
       this.canvas.style.cursor = "";
-      return;
+      return false;
     }
     if (c) {
       const cell = r.cells[c.layer]?.[c.t];
       const fin = r.cells[r.n_layer]?.[c.t];
       if (!cell || !fin) {
         this.tooltip.hide();
-        return;
+        return false;
       }
       // brighter (lower-entropy) lens reading is the "hot" datum the cursor locks
       const sharp = cell[2] < (r.meta.entropy_max || 15.617) * 0.5;
@@ -626,7 +632,7 @@ export class LiveNebulaDriver implements InterpDriver {
       const ft = r.final_top[b.rank];
       if (!ft) {
         this.tooltip.hide();
-        return;
+        return false;
       }
       this.tooltip.show([
         { kind: "label", swatch: AMBER, text: `next-token candidate #${b.rank + 1}` },
@@ -636,9 +642,31 @@ export class LiveNebulaDriver implements InterpDriver {
     }
     this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
+    return true;
+  }
+
+  private onPointerMove(e: PointerEvent): void {
+    if (this.tooltip.pinned) return;
+    if (!this.deck) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    this.showTooltipFor(this.pick(x, y), x, y);
+  }
+
+  private onClick(e: PointerEvent): void {
+    // touch has no hover — a tap pins the reading instead of flashing it mid-lift
+    if (e.pointerType !== "touch") return;
+    if (!this.deck) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const hit = this.showTooltipFor(this.pick(x, y), x, y);
+    this.tooltip.pinned = hit;
   }
 
   private onLeave(): void {
+    if (this.tooltip.pinned) return;
     if (this.hoverCell || this.hoverBar >= 0) {
       this.hoverCell = null;
       this.hoverBar = -1;

@@ -164,11 +164,14 @@ export class NeuronFieldDriver implements InterpDriver {
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onLeave = () => this.onLeave();
+    const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("click", onClick);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("click", onClick);
     });
   }
 
@@ -377,9 +380,37 @@ export class NeuronFieldDriver implements InterpDriver {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    if (this.tooltip.pinned) return;
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+    if (!this.showTooltipFor(x, y)) {
+      this.tooltip.hide();
+      this.canvas.style.cursor = "";
+    }
+  }
+
+  /** Touch-only: a tap pins the readout so it survives past the finger lifting
+   *  (touch has no hover, so pointerleave would otherwise hide it instantly).
+   *  A tap on empty space clears the pin and the hover highlight rather than
+   *  leaving a stale one stuck. Mouse pointers no-op — the hover path serves them. */
+  private onClick(e: PointerEvent): void {
+    if (e.pointerType !== "touch") return;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    if (this.showTooltipFor(x, y)) {
+      this.tooltip.pinned = true;
+    } else {
+      this.tooltip.pinned = false;
+      this.tooltip.hide();
+      this.canvas.style.cursor = "";
+    }
+  }
+
+  /** Pick the neuron at (x, y), update the hover highlight + marker, and show
+   *  the tooltip there. Returns whether a neuron was hit. */
+  private showTooltipFor(x: number, y: number): boolean {
     let p: NeuronPt | null = null;
     const hit = this.field.pickAt(x, y, 6);
     if (hit >= 0) {
@@ -399,11 +430,7 @@ export class NeuronFieldDriver implements InterpDriver {
       }
       this.field.render();
     }
-    if (!p) {
-      this.tooltip.hide();
-      this.canvas.style.cursor = "";
-      return;
-    }
+    if (!p) return false;
     const lc = this.colorOf(p);
     const rows: TipRow[] = [
       { kind: "label", text: `L${p.layer} · neuron ${p.idx}`, swatch: [lc[0], lc[1], lc[2]] },
@@ -411,15 +438,17 @@ export class NeuronFieldDriver implements InterpDriver {
         text: `PC1 ${p.x.toFixed(2)} · PC2 ${p.y.toFixed(2)} · PC3 ${p.z.toFixed(2)}`,
       },
       { text: "‖w_out‖₂", value: p.norm.toFixed(2), hot: true },
-      { text: `promotes “${fmtTok(p.topTok)}” · Δlogit +${p.topVal.toFixed(2)}` },
-      { text: `suppresses “${fmtTok(p.botTok)}” · Δlogit ${p.botVal.toFixed(2)}` },
+      { text: `promotes "${fmtTok(p.topTok)}" · Δlogit +${p.topVal.toFixed(2)}` },
+      { text: `suppresses "${fmtTok(p.botTok)}" · Δlogit ${p.botVal.toFixed(2)}` },
     ];
     this.tooltip.show(rows);
     this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
+    return true;
   }
 
   private onLeave(): void {
+    if (this.tooltip.pinned) return;
     if (this.hover) {
       this.hover = null;
       this.marker.hide();

@@ -410,6 +410,8 @@ export class CompositionWebDriver implements InterpDriver {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    // a tap-pinned tooltip (touch has no hover) survives a stray move
+    if (this.tooltip.pinned) return;
     const b = this.bundle;
     if (!b) return;
     const { node, arc } = this.pick(e);
@@ -418,9 +420,21 @@ export class CompositionWebDriver implements InterpDriver {
       this.hoverArc = arc ?? null;
       this.pushLayers();
     }
+    if (!node && !arc) {
+      this.tooltip.hide();
+      this.canvas.style.cursor = "";
+      return;
+    }
     const rect = this.canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    this.showTooltipFor({ node, arc }, e.clientX - rect.left, e.clientY - rect.top);
+    this.canvas.style.cursor = "pointer";
+  }
+
+  /** Row-building + placement, shared by the hover path and a touch tap-to-pin. */
+  private showTooltipFor(pick: { node?: Node; arc?: Arc }, x: number, y: number): boolean {
+    const b = this.bundle;
+    const { node, arc } = pick;
+    if (!b || (!node && !arc)) return false;
     const rows: TipRow[] = [];
     if (arc) {
       const cc = this.arcColor(arc);
@@ -446,14 +460,10 @@ export class CompositionWebDriver implements InterpDriver {
         rows.push({ text: `strongest ${dir}`, value: `${best.s.toFixed(4)} (${best.ratio.toFixed(1)}×)` });
       }
       rows.push({ text: this.sameNode(this.isolate, node) ? "click to release" : "click to isolate" });
-    } else {
-      this.tooltip.hide();
-      this.canvas.style.cursor = "";
-      return;
     }
     this.tooltip.show(rows);
     this.tooltip.move(x, y, this.cssW, this.cssH);
-    this.canvas.style.cursor = "pointer";
+    return true;
   }
 
   private strongest(n: Node): { best: Arc | null; count: number } {
@@ -468,7 +478,19 @@ export class CompositionWebDriver implements InterpDriver {
   }
 
   private onClick(e: PointerEvent): void {
-    const { node } = this.pick(e);
+    const { node, arc } = this.pick(e);
+    // touch has no hover, so the tap is the only chance to read whatever it
+    // landed on — pin it independent of the isolate logic below (an arc tap
+    // never isolates a node, but its reading is still worth pinning)
+    if (e.pointerType === "touch") {
+      const rect = this.canvas.getBoundingClientRect();
+      if (this.showTooltipFor({ node, arc }, e.clientX - rect.left, e.clientY - rect.top)) {
+        this.tooltip.pinned = true;
+      } else {
+        this.tooltip.pinned = false;
+        this.tooltip.hide();
+      }
+    }
     if (node) {
       this.isolate = this.sameNode(this.isolate, node) ? null : node;
     } else if (this.isolate) {
@@ -508,6 +530,9 @@ export class CompositionWebDriver implements InterpDriver {
   }
 
   private onLeave(): void {
+    // a tap-pinned tooltip must survive the pointer leaving — touch has no
+    // hover state to "leave" in the first place
+    if (this.tooltip.pinned) return;
     if (this.hoverArc || this.hoverNode) {
       this.hoverArc = null;
       this.hoverNode = null;

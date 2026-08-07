@@ -6,7 +6,7 @@
 
 import { requestCompareTour } from "../app/actions";
 import { appStore } from "../app/store";
-import { $compare, $compareData, $compareTour } from "./state";
+import { $compare, $compareCollapsed, $compareData, $compareTour, openPanel } from "./state";
 import { RadioRow, ToggleRow } from "./controls";
 
 const STATE_LABELS: Record<string, string> = {
@@ -23,12 +23,33 @@ export function ComparePanel() {
   const ui = $compare.value;
   if (!data) return null;
 
+  if ($compareCollapsed.value) {
+    return (
+      <button
+        type="button"
+        class="legend-fab compare-fab"
+        aria-label="Open comparison"
+        onClick={() => openPanel("compare")}
+      >
+        Compare
+      </button>
+    );
+  }
+
   const st = appStore.getState();
 
   return (
     <section class="legend compare-panel" aria-label="Comparison">
       <header class="legend-head">
         <h2 class="legend-title">Model comparison</h2>
+        <button
+          type="button"
+          class="legend-collapse"
+          aria-label="Collapse comparison"
+          onClick={() => ($compareCollapsed.value = true)}
+        >
+          ›
+        </button>
       </header>
       <p class="legend-caption">
         {data.meta.n_points} cluster concepts from {data.meta.models.length} models · embedded in{" "}

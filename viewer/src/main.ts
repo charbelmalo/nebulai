@@ -40,6 +40,9 @@ const progress = document.createElement("div");
 progress.className = "boot-progress";
 const status = document.createElement("div");
 status.className = "boot-status";
+// the MetaLine truncates to one line on compact viewports (see chrome.css);
+// tapping it reveals the full provenance string instead of leaving it clipped
+status.addEventListener("click", () => status.classList.toggle("is-expanded"));
 chrome.append(progress, status);
 
 function say(text: string) {

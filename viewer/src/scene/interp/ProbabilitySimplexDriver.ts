@@ -104,11 +104,14 @@ export class ProbabilitySimplexDriver implements InterpDriver {
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onLeave = () => this.onLeave();
+    const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("click", onClick);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("click", onClick);
     });
   }
 
@@ -384,10 +387,39 @@ export class ProbabilitySimplexDriver implements InterpDriver {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    if (this.tooltip.pinned) return;
     if (!this.deck) return;
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+    if (!this.showTooltipFor(x, y)) {
+      this.tooltip.hide();
+      this.canvas.style.cursor = "";
+    }
+  }
+
+  /** Touch-only: a tap pins the readout so it survives past the finger lifting
+   *  (touch has no hover, so pointerleave would otherwise hide it instantly).
+   *  A tap on empty space clears the pin and the hover highlight rather than
+   *  leaving a stale one stuck. Mouse pointers no-op — the hover path serves them. */
+  private onClick(e: PointerEvent): void {
+    if (e.pointerType !== "touch" || !this.deck) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    if (this.showTooltipFor(x, y)) {
+      this.tooltip.pinned = true;
+    } else {
+      this.tooltip.pinned = false;
+      this.tooltip.hide();
+      this.canvas.style.cursor = "";
+    }
+  }
+
+  /** Pick the distribution point at (x, y), update the hover halo, and show
+   *  the tooltip there. Returns whether the point was hit. */
+  private showTooltipFor(x: number, y: number): boolean {
+    if (!this.deck) return false;
     const info = this.deck.pickObject({ x, y, radius: 8, layerIds: ["simplex-point"] }) as
       | PickingInfo
       | null;
@@ -396,11 +428,7 @@ export class ProbabilitySimplexDriver implements InterpDriver {
       this.hoverPoint = over;
       this.pushLayers();
     }
-    if (!over) {
-      this.tooltip.hide();
-      this.canvas.style.cursor = "";
-      return;
-    }
+    if (!over) return false;
     const t1 = fmtTok(this.topk[0]?.[0] ?? "∅");
     const t2 = fmtTok(this.topk[1]?.[0] ?? "∅");
     // each row's swatch is the exact corner color the datum is drawn against;
@@ -414,9 +442,11 @@ export class ProbabilitySimplexDriver implements InterpDriver {
     this.tooltip.show(rows);
     this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
+    return true;
   }
 
   private onLeave(): void {
+    if (this.tooltip.pinned) return;
     if (this.hoverPoint) {
       this.hoverPoint = false;
       this.pushLayers();

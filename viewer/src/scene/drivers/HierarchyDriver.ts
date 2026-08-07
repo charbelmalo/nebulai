@@ -114,7 +114,10 @@ export class HierarchyDriver implements SceneDriver {
     overlay.appendChild(this.tooltip);
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
-    const onLeave = () => this.setHover(null);
+    const onLeave = () => {
+      if (this.pinned) return;
+      this.setHover(null);
+    };
     const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
@@ -438,6 +441,11 @@ export class HierarchyDriver implements SceneDriver {
   // ── interaction: deck pickObject behind our own handlers ────────────────
 
   private hoverNode: number | null = null;
+  /** Set when a tap pinned the tooltip open (this driver hand-rolls its tooltip
+   *  div rather than using the shared InterpTooltip, so it carries its own
+   *  flag). Touch has no hover — pointerleave fires the instant a finger lifts
+   *  — so without a pin the readout could only ever flash mid-drag. */
+  private pinned = false;
 
   private pickNode(x: number, y: number): HierNode | null {
     if (!this.deck) return null;
@@ -449,40 +457,45 @@ export class HierarchyDriver implements SceneDriver {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    if (this.pinned) return;
     const rect = this.canvas.getBoundingClientRect();
     const nd = this.pickNode(e.clientX - rect.left, e.clientY - rect.top);
     this.setHover(nd?.id ?? null);
     if (nd) {
-      const edges = this.ds?.columns.edges;
-      const provenance = edges ? ` (${edges.metric.replace(/_/g, " ")} in ${edges.space})` : "";
-      this.tooltip.innerHTML = "";
-      const line1 = document.createElement("div");
-      line1.className = "point-tooltip-label";
-      const line2 = document.createElement("div");
-      line2.className = "point-tooltip-conf";
-      if (nd.clusterIdx >= 0) {
-        const c = this.ds!.columns.clusters[nd.clusterIdx]!;
-        const pw = nd.parent >= 0 ? this.nodes[nd.parent]!.weight : 0;
-        line1.textContent = c.title;
-        line2.textContent = `${c.size.toLocaleString("en-US")} tokens · joins at ${pw.toFixed(2)}${provenance}`;
-      } else {
-        const beneath = nd.leafEnd - nd.leafStart;
-        line1.textContent = `join · ${beneath} clusters beneath`;
-        line2.textContent =
-          nd.weight > 0
-            ? `merge similarity ${nd.weight.toFixed(2)}${provenance}`
-            : "root — components unlinked in the exported top-k edges";
-      }
-      this.tooltip.append(line1, line2);
-      this.tooltip.style.visibility = "visible";
-      const px = Math.min(e.clientX - rect.left + 14, this.cssW - 260);
-      const py = Math.min(e.clientY - rect.top + 14, this.cssH - 56);
-      this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
-      this.canvas.style.cursor = "pointer";
+      this.showTooltipFor(nd, e.clientX - rect.left, e.clientY - rect.top);
     } else {
       this.tooltip.style.visibility = "hidden";
       this.canvas.style.cursor = "";
     }
+  }
+
+  private showTooltipFor(nd: HierNode, x: number, y: number): void {
+    const edges = this.ds?.columns.edges;
+    const provenance = edges ? ` (${edges.metric.replace(/_/g, " ")} in ${edges.space})` : "";
+    this.tooltip.innerHTML = "";
+    const line1 = document.createElement("div");
+    line1.className = "point-tooltip-label";
+    const line2 = document.createElement("div");
+    line2.className = "point-tooltip-conf";
+    if (nd.clusterIdx >= 0) {
+      const c = this.ds!.columns.clusters[nd.clusterIdx]!;
+      const pw = nd.parent >= 0 ? this.nodes[nd.parent]!.weight : 0;
+      line1.textContent = c.title;
+      line2.textContent = `${c.size.toLocaleString("en-US")} tokens · joins at ${pw.toFixed(2)}${provenance}`;
+    } else {
+      const beneath = nd.leafEnd - nd.leafStart;
+      line1.textContent = `join · ${beneath} clusters beneath`;
+      line2.textContent =
+        nd.weight > 0
+          ? `merge similarity ${nd.weight.toFixed(2)}${provenance}`
+          : "root — components unlinked in the exported top-k edges";
+    }
+    this.tooltip.append(line1, line2);
+    this.tooltip.style.visibility = "visible";
+    const px = Math.min(x + 14, this.cssW - 260);
+    const py = Math.min(y + 14, this.cssH - 56);
+    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
+    this.canvas.style.cursor = "pointer";
   }
 
   private setHover(nodeId: number | null): void {
@@ -505,6 +518,14 @@ export class HierarchyDriver implements SceneDriver {
     appStore
       .getState()
       .setSelection(nd && nd.clusterIdx >= 0 ? { kind: "cluster", id: nd.clusterId } : null);
+    if (!nd) {
+      this.pinned = false;
+      this.tooltip.style.visibility = "hidden";
+    } else if (e.pointerType === "touch") {
+      this.pinned = true;
+      this.setHover(nd.id);
+      this.showTooltipFor(nd, e.clientX - rect.left, e.clientY - rect.top);
+    }
   }
 
   /** Focus for a leaf = its ancestor chain (path to root); everything else

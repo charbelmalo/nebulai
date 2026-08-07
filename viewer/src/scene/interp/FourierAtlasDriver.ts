@@ -99,12 +99,20 @@ export class FourierAtlasDriver implements InterpDriver {
     overlay.appendChild(this.axisRoot);
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
-    const onLeave = () => this.hideTip();
+    // a pinned (touch-tapped) tooltip must survive the finger lifting off —
+    // pointerleave fires the instant a touch ends, so it can't be the hide signal
+    const onLeave = () => {
+      if (this.tooltip.pinned) return;
+      this.hideTip();
+    };
+    const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("click", onClick);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("click", onClick);
     });
   }
 
@@ -330,34 +338,27 @@ export class FourierAtlasDriver implements InterpDriver {
     }
   }
 
-  private onPointerMove(e: PointerEvent): void {
-    if (!this.deck || !this.bundle) return;
-    const rect = this.canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+  /** screen → frequency index, or null off the dial / in the seam gap. */
+  private pickFreq(x: number, y: number): number | null {
+    if (!this.deck || !this.bundle) return null;
     const vp = this.deck.getViewports()[0];
-    if (!vp) return;
+    if (!vp) return null;
     const world = vp.unproject([x, y]) as [number, number, number];
     const wx = world[0];
     const wy = world[1];
     const r = Math.hypot(wx, wy);
-    if (r < DIM_R * 0.6 || r > OUTER_R * 1.08) {
-      this.hideTip();
-      return;
-    }
+    if (r < DIM_R * 0.6 || r > OUTER_R * 1.08) return null;
     // angle → frequency (clockwise from top); reject the seam gap
     let d = START - Math.atan2(wy, wx); // 0 at top, grows clockwise
     d = ((d % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
-    if (d > SWEEP) {
-      this.hideTip();
-      return;
-    }
+    if (d > SWEEP) return null;
     // invert the LOG angle map: f = (nFreq-1)^(d/SWEEP)
     const t = d / SWEEP;
-    const f = Math.max(
-      1,
-      Math.min(this.nFreq - 1, Math.round(Math.pow(this.nFreq - 1, t))),
-    );
+    return Math.max(1, Math.min(this.nFreq - 1, Math.round(Math.pow(this.nFreq - 1, t))));
+  }
+
+  private showTooltipFor(f: number, x: number, y: number): void {
+    if (!this.bundle) return;
     const power = this.bundle.power_mean[f]!;
     const period = this.nCtx / f;
     const dimCount = this.counts[f]!;
@@ -375,6 +376,35 @@ export class FourierAtlasDriver implements InterpDriver {
     this.tooltip.show(rows);
     this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
+  }
+
+  private onPointerMove(e: PointerEvent): void {
+    if (this.tooltip.pinned) return;
+    if (!this.deck || !this.bundle) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const f = this.pickFreq(x, y);
+    if (f == null) {
+      this.hideTip();
+      return;
+    }
+    this.showTooltipFor(f, x, y);
+  }
+
+  private onClick(e: PointerEvent): void {
+    // touch has no hover — a tap pins the reading instead of flashing it mid-lift
+    if (e.pointerType !== "touch") return;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const f = this.pickFreq(x, y);
+    if (f != null) {
+      this.tooltip.pinned = true;
+      this.showTooltipFor(f, x, y);
+    } else {
+      this.hideTip();
+    }
   }
 
   private hideTip(): void {

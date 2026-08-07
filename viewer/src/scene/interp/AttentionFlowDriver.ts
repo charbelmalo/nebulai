@@ -95,11 +95,17 @@ export class AttentionFlowDriver implements InterpDriver {
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onLeave = () => this.hideTip();
+    // this view has no click-driven selection — the grid cells and token
+    // labels handle their own clicks/hovers — so the only job of a canvas tap
+    // is pinning the line tooltip, since touch has no hover to read it on
+    const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("click", onClick);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("click", onClick);
     });
   }
 
@@ -301,18 +307,32 @@ export class AttentionFlowDriver implements InterpDriver {
     this.pushLayers();
   }
 
+  private pick(x: number, y: number): Line | null {
+    if (!this.deck) return null;
+    const info = this.deck.pickObject({ x, y, radius: 4, layerIds: ["af-lines"] });
+    return (info?.object as Line | undefined) ?? null;
+  }
+
   private onPointerMove(e: PointerEvent): void {
+    // a tap-pinned tooltip (touch has no hover) survives a stray move
+    if (this.tooltip.pinned) return;
     if (!this.deck || !this.bundle) return;
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const info = this.deck.pickObject({ x, y, radius: 4, layerIds: ["af-lines"] });
-    const line = info?.object as Line | undefined;
+    const line = this.pick(x, y);
     if (!line) {
       this.hideTip();
       return;
     }
+    this.showTooltipFor(line, x, y);
+    this.canvas.style.cursor = "crosshair";
+  }
+
+  /** Row-building + placement, shared by the hover path and a touch tap-to-pin. */
+  private showTooltipFor(line: Line, x: number, y: number): void {
     const b = this.bundle;
+    if (!b) return;
     const qi = fmtTok(b.token_strs[line.i] ?? "");
     const kj = fmtTok(b.token_strs[line.j] ?? "");
     const rows: TipRow[] = [
@@ -322,10 +342,29 @@ export class AttentionFlowDriver implements InterpDriver {
     ];
     this.tooltip.show(rows);
     this.tooltip.move(x, y, this.cssW, this.cssH);
-    this.canvas.style.cursor = "crosshair";
+  }
+
+  private onClick(e: PointerEvent): void {
+    // this view has no click-driven selection, so touch's only need here is
+    // pinning the tooltip a tap landed on
+    if (e.pointerType !== "touch") return;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const line = this.pick(x, y);
+    if (line) {
+      this.tooltip.pinned = true;
+      this.showTooltipFor(line, x, y);
+    } else {
+      this.tooltip.pinned = false;
+      this.tooltip.hide();
+    }
   }
 
   private hideTip(): void {
+    // a tap-pinned tooltip must survive the pointer leaving — touch has no
+    // hover state to "leave" in the first place
+    if (this.tooltip.pinned) return;
     this.tooltip?.hide();
     this.canvas.style.cursor = "";
   }

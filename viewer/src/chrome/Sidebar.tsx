@@ -14,8 +14,10 @@ import {
   $dims,
   $loading,
   $settings,
+  $sidebarOpen,
   $toggles,
   $viewMode,
+  openPanel,
 } from "./state";
 import { SelectRow, SliderRow, Tabs, ToggleRow } from "./controls";
 
@@ -29,19 +31,18 @@ const TOGGLE_ROWS: { key: keyof Toggles; label: string }[] = [
 ];
 
 export function Sidebar() {
-  const open = useSignal(true);
   const tab = useSignal("Settings");
   const caps = $capabilities.value;
   const toggles = $toggles.value;
   const settings = $settings.value;
 
-  if (!open.value) {
+  if (!$sidebarOpen.value) {
     return (
       <button
         type="button"
         class="sidebar-fab"
         aria-label="Open settings"
-        onClick={() => (open.value = true)}
+        onClick={() => openPanel("sidebar")}
       >
         ⚙
       </button>
@@ -60,7 +61,7 @@ export function Sidebar() {
           type="button"
           class="sidebar-collapse"
           aria-label="Collapse settings"
-          onClick={() => (open.value = false)}
+          onClick={() => ($sidebarOpen.value = false)}
         >
           ‹
         </button>

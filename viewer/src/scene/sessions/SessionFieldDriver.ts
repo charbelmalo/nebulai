@@ -60,6 +60,7 @@ import {
   type SessionTurn,
   type ToolCategory,
 } from "../../chrome/sessionlog";
+import { GestureRecognizer } from "../gestures";
 import { createBloomPipeline, type BloomPipeline } from "../post/bloom";
 import { IdPicker } from "../picking";
 import { asinhScale, suggestK, type AxisScale } from "./scales";
@@ -268,6 +269,8 @@ export class SessionFieldDriver {
   private labels: HTMLElement[] = [];
   private tooltipEl: HTMLElement | null = null;
   private abort = new AbortController();
+  /** touch orbit/zoom — see src/scene/gestures.ts; the mouse path is untouched */
+  private gestures: GestureRecognizer | null = null;
 
   async init(canvas: HTMLCanvasElement, overlay: HTMLElement): Promise<void> {
     this.canvas = canvas;
@@ -1130,9 +1133,29 @@ export class SessionFieldDriver {
   private attachPointer(): void {
     const sig = this.abort.signal;
     const el = this.canvas;
+
+    // touch is handled once, by the shared recognizer (see gestures.ts) — the
+    // pointer handlers below early-return on pointerType "touch" so the two
+    // paths never fight over the same drag.
+    this.gestures = new GestureRecognizer({
+      onPan: (dx, dy) => {
+        this.az -= dx * 0.006;
+        this.el = clamp(this.el + dy * 0.006, SessionFieldDriver.EL_MIN, SessionFieldDriver.EL_MAX);
+        this.cameraDirty = true;
+      },
+      onPinch: (e) => {
+        this.dist = clamp(this.dist / e.scale, SessionFieldDriver.DIST_MIN, SessionFieldDriver.DIST_MAX);
+        this.az -= e.dcx * 0.006;
+        this.el = clamp(this.el + e.dcy * 0.006, SessionFieldDriver.EL_MIN, SessionFieldDriver.EL_MAX);
+        this.cameraDirty = true;
+      },
+    });
+    this.gestures.attach(el, sig);
+
     el.addEventListener(
       "pointerdown",
       (e) => {
+        if (e.pointerType === "touch") return;
         this.dragging = true;
         this.dragMoved = false;
         this.last = { x: e.clientX, y: e.clientY };
@@ -1143,6 +1166,7 @@ export class SessionFieldDriver {
     el.addEventListener(
       "pointermove",
       (e) => {
+        if (e.pointerType === "touch") return;
         const r = el.getBoundingClientRect();
         this.mouse = { x: e.clientX - r.left, y: e.clientY - r.top };
         if (this.dragging && this.last) {
@@ -1158,6 +1182,7 @@ export class SessionFieldDriver {
       { signal: sig },
     );
     const end = (e: PointerEvent) => {
+      if (e.pointerType === "touch") return;
       if (this.dragging && !this.dragMoved) this.clickSelect();
       this.dragging = false;
       this.last = null;
@@ -1406,6 +1431,7 @@ export class SessionFieldDriver {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
     this.abort.abort();
+    this.gestures?.dispose();
     this.clearData();
     // NB: never dispose a Sprite's geometry — THREE.Sprite shares ONE
     // module-level quad across every sprite in the app (see PointsLayer).

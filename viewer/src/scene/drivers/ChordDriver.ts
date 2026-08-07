@@ -121,7 +121,10 @@ export class ChordDriver implements SceneDriver {
     overlay.appendChild(this.tooltip);
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
-    const onLeave = () => this.setHover(null);
+    const onLeave = () => {
+      if (this.pinned) return;
+      this.setHover(null);
+    };
     const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
@@ -440,37 +443,44 @@ export class ChordDriver implements SceneDriver {
   }
 
   private hoverRim: number | null = null;
+  /** Set when a tap pinned the tooltip open (this driver hand-rolls its tooltip
+   *  div rather than using the shared InterpTooltip, so it carries its own
+   *  flag). Touch has no hover — pointerleave fires the instant a finger lifts
+   *  — so without a pin the readout could only ever flash mid-drag. */
+  private pinned = false;
 
   private onPointerMove(e: PointerEvent): void {
+    if (this.pinned) return;
     const rect = this.canvas.getBoundingClientRect();
     const idx = this.hitTest(e.clientX - rect.left, e.clientY - rect.top);
     this.setHover(idx);
     if (idx !== null) {
-      const r = this.rim[idx]!;
-      const c = this.ds?.columns.clusters[r.clusterIdx];
-      if (c) {
-        this.tooltip.innerHTML = "";
-        const line1 = document.createElement("div");
-        line1.className = "point-tooltip-label";
-        line1.textContent = c.title;
-        const line2 = document.createElement("div");
-        line2.className = "point-tooltip-conf";
-        const edges = this.ds?.columns.edges;
-        const provenance = edges
-          ? ` (${edges.metric.replace(/_/g, " ")} in ${edges.space})`
-          : "";
-        line2.textContent = `${c.size.toLocaleString("en-US")} tokens · ${r.degree} links${provenance}`;
-        this.tooltip.append(line1, line2);
-        this.tooltip.style.visibility = "visible";
-        const px = Math.min(e.clientX - rect.left + 14, this.cssW - 240);
-        const py = Math.min(e.clientY - rect.top + 14, this.cssH - 56);
-        this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
-      }
+      this.showTooltipFor(idx, e.clientX - rect.left, e.clientY - rect.top);
       this.canvas.style.cursor = "pointer";
     } else {
       this.tooltip.style.visibility = "hidden";
       this.canvas.style.cursor = "";
     }
+  }
+
+  private showTooltipFor(idx: number, x: number, y: number): void {
+    const r = this.rim[idx]!;
+    const c = this.ds?.columns.clusters[r.clusterIdx];
+    if (!c) return;
+    this.tooltip.innerHTML = "";
+    const line1 = document.createElement("div");
+    line1.className = "point-tooltip-label";
+    line1.textContent = c.title;
+    const line2 = document.createElement("div");
+    line2.className = "point-tooltip-conf";
+    const edges = this.ds?.columns.edges;
+    const provenance = edges ? ` (${edges.metric.replace(/_/g, " ")} in ${edges.space})` : "";
+    line2.textContent = `${c.size.toLocaleString("en-US")} tokens · ${r.degree} links${provenance}`;
+    this.tooltip.append(line1, line2);
+    this.tooltip.style.visibility = "visible";
+    const px = Math.min(x + 14, this.cssW - 240);
+    const py = Math.min(y + 14, this.cssH - 56);
+    this.tooltip.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px)`;
   }
 
   private setHover(idx: number | null): void {
@@ -488,6 +498,14 @@ export class ChordDriver implements SceneDriver {
     appStore
       .getState()
       .setSelection(idx === null ? null : { kind: "cluster", id: this.rim[idx]!.clusterId });
+    if (idx === null) {
+      this.pinned = false;
+      this.tooltip.style.visibility = "hidden";
+    } else if (e.pointerType === "touch") {
+      this.pinned = true;
+      this.setHover(idx);
+      this.showTooltipFor(idx, e.clientX - rect.left, e.clientY - rect.top);
+    }
   }
 
   /** Focus = selection if pinned, else hover. Chords touching the focused

@@ -444,6 +444,14 @@ export class OVEigenDriver implements InterpDriver {
       appStore
         .getState()
         .setInterpSelection(next === null ? null : { kind: "head", layer: p.layer, head: p.headIdx });
+      // touch has no hover to read the isolate from — pin the readout open
+      if (e.pointerType === "touch" && next !== null) {
+        this.hover = p;
+        this.pushLayers();
+        this.tooltip.pinned = true;
+        const rect = this.canvas.getBoundingClientRect();
+        this.showTooltipFor(p, e.clientX - rect.left, e.clientY - rect.top);
+      }
     } else if (this.isolateHead !== null) {
       this.setIsolate(null, null);
       appStore.getState().setInterpSelection(null);
@@ -466,6 +474,7 @@ export class OVEigenDriver implements InterpDriver {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    if (this.tooltip.pinned) return;
     const p = this.pick(e);
     const changed = (p?.id ?? -1) !== (this.hover?.id ?? -1);
     if (changed) {
@@ -478,8 +487,11 @@ export class OVEigenDriver implements InterpDriver {
       return;
     }
     const rect = this.canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    this.showTooltipFor(p, e.clientX - rect.left, e.clientY - rect.top);
+  }
+
+  private showTooltipFor(p: EigPt, x: number, y: number): void {
+    if (!this.bundle) return;
     const cp = this.bundle.copying[p.head] ?? 0;
     const sgn = p.im >= 0 ? "+" : "−";
     const lc = LAYER_COLORS[p.layer] ?? [205, 210, 224];
@@ -500,6 +512,7 @@ export class OVEigenDriver implements InterpDriver {
   }
 
   private onLeave(): void {
+    if (this.tooltip.pinned) return;
     if (this.hover) {
       this.hover = null;
       this.pushLayers();

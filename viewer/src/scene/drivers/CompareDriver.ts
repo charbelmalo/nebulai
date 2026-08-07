@@ -37,6 +37,7 @@ import {
   type CompareData,
 } from "../../data/compare";
 import { createBloomPipeline, type BloomPipeline } from "../post/bloom";
+import { GestureRecognizer } from "../gestures";
 import { BG } from "../../styles/tokens";
 
 const STATE_TWEEN_MS = 900;
@@ -191,6 +192,8 @@ export class CompareDriver {
   private tooltip: HTMLElement | null = null;
   private unsubscribe: (() => void) | null = null;
   private abort = new AbortController();
+  /** touch pan/pinch — see src/scene/gestures.ts; the mouse path below is untouched */
+  private gestures: GestureRecognizer | null = null;
 
   async init(canvas: HTMLCanvasElement): Promise<void> {
     this.canvas = canvas;
@@ -739,9 +742,26 @@ export class CompareDriver {
     let ly = 0;
     const sig = this.abort.signal;
 
+    // touch is handled once, by the shared recognizer (see gestures.ts) — the
+    // pointer handlers below early-return on pointerType "touch" so the two
+    // paths never fight over the same drag.
+    this.gestures = new GestureRecognizer({
+      onPan: (dx, dy) => {
+        this.theta -= dx * 0.006;
+        this.phi = Math.max(-1.5, Math.min(1.5, this.phi + dy * 0.006));
+      },
+      onPinch: (e) => {
+        this.radius = clamp(this.radius / e.scale, 8, 180);
+        this.theta -= e.dcx * 0.006;
+        this.phi = Math.max(-1.5, Math.min(1.5, this.phi + e.dcy * 0.006));
+      },
+    });
+    this.gestures.attach(this.canvas, sig);
+
     this.canvas.addEventListener(
       "pointerdown",
       (e) => {
+        if (e.pointerType === "touch") return;
         dragging = true;
         lx = e.clientX;
         ly = e.clientY;
@@ -749,10 +769,18 @@ export class CompareDriver {
       },
       { signal: sig },
     );
-    this.canvas.addEventListener("pointerup", () => (dragging = false), { signal: sig });
+    this.canvas.addEventListener(
+      "pointerup",
+      (e) => {
+        if (e.pointerType === "touch") return;
+        dragging = false;
+      },
+      { signal: sig },
+    );
     this.canvas.addEventListener(
       "pointermove",
       (e) => {
+        if (e.pointerType === "touch") return;
         if (dragging) {
           this.theta -= (e.clientX - lx) * 0.006;
           this.phi = Math.max(-1.5, Math.min(1.5, this.phi + (e.clientY - ly) * 0.006));
@@ -878,6 +906,7 @@ export class CompareDriver {
   dispose(): void {
     this.disposed = true;
     this.abort.abort();
+    this.gestures?.dispose();
     this.unsubscribe?.();
     this.tooltip?.remove();
     this.clearField();

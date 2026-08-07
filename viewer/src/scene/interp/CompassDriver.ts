@@ -530,6 +530,8 @@ export class CompassDriver implements InterpDriver {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    // a tap-pinned tooltip (touch has no hover) survives a stray move
+    if (this.tooltip.pinned) return;
     const com = this.com;
     const sae = this.sae;
     if (!com || !sae) return;
@@ -543,6 +545,16 @@ export class CompassDriver implements InterpDriver {
       this.canvas.style.cursor = "";
       return;
     }
+    const rect = this.canvas.getBoundingClientRect();
+    this.showTooltipFor(i, e.clientX - rect.left, e.clientY - rect.top);
+    this.canvas.style.cursor = "pointer";
+  }
+
+  /** Row-building + placement, shared by the hover path and a touch tap-to-pin. */
+  private showTooltipFor(i: number, x: number, y: number): void {
+    const com = this.com;
+    const sae = this.sae;
+    if (!com || !sae) return;
     const L = this.layerOf(i);
     const unit = (com.ni[i] ?? 0) % com.meta.d_mlp;
     const tok = vis(com.tok_strs[com.ti_u[i] ?? 0] ?? "");
@@ -563,18 +575,39 @@ export class CompassDriver implements InterpDriver {
       text: `rand-dir mean: n ${com.meta.baseline.neuron.mean} · t ${com.meta.baseline.token.mean} · click to pin`,
     });
     this.tooltip.show(rows);
-    const rect = this.canvas.getBoundingClientRect();
-    this.tooltip.move(e.clientX - rect.left, e.clientY - rect.top, this.cssW, this.cssH);
-    this.canvas.style.cursor = "pointer";
+    this.tooltip.move(x, y, this.cssW, this.cssH);
   }
 
   private onClick(e: PointerEvent): void {
     if (!this.com) return;
     const i = this.pick(e);
-    if (i == null) return;
+    if (i == null) {
+      // touch has no hover, so a tap in empty space is the only way to
+      // release a tap-pinned tooltip — and since this scatter's pin is a
+      // "select one feature" gesture, the same tap should clear a stuck
+      // selection instead of silently doing nothing (previously the case
+      // for both mouse and touch)
+      if (e.pointerType === "touch") {
+        this.tooltip.pinned = false;
+        this.tooltip.hide();
+      }
+      if (this.sel != null) {
+        this.sel = null;
+        appStore.getState().setInterpSelection(null);
+        this.buildChips();
+        this.pushLayers();
+        this.positionLabels();
+      }
+      return;
+    }
     this.sel = this.sel === i ? null : i;
     // publish the pin as the global cross-view SAE-feature selection
     appStore.getState().setInterpSelection(this.sel === null ? null : { kind: "saeFeature", id: this.sel });
+    if (e.pointerType === "touch") {
+      const rect = this.canvas.getBoundingClientRect();
+      this.tooltip.pinned = true;
+      this.showTooltipFor(i, e.clientX - rect.left, e.clientY - rect.top);
+    }
     this.buildChips();
     this.pushLayers();
     this.positionLabels();
@@ -602,6 +635,9 @@ export class CompassDriver implements InterpDriver {
   }
 
   private onLeave(): void {
+    // a tap-pinned tooltip must survive the pointer leaving — touch has no
+    // hover state to "leave" in the first place
+    if (this.tooltip.pinned) return;
     if (this.hover != null) {
       this.hover = null;
       this.pushLayers();

@@ -744,7 +744,11 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
             " changes nothing unless you pass --apply."
         ),
     )
-    ins.add_argument("agents", nargs="*", choices=["claude", "codex", "hermes"], default=[])
+    # default=None, not []: for a nargs="*" positional argparse runs the default
+    # itself through the choices check, so an empty list fails as "invalid choice:
+    # '[]'". None skips that path and still parses to [], which the `or` below reads
+    # as "every agent".
+    ins.add_argument("agents", nargs="*", choices=["claude", "codex", "hermes"], default=None)
     ins.add_argument("--apply", dest="dry_run", action="store_false", default=True,
                      help="actually write the changes")
     ins.add_argument("--status", action="store_true", help="what is installed right now")
@@ -753,7 +757,7 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     ins.set_defaults(seer_fn=_cmd_install)
 
     un = s.add_parser("uninstall", help="remove our hook entries and nothing else")
-    un.add_argument("agents", nargs="*", choices=["claude", "codex", "hermes"], default=[])
+    un.add_argument("agents", nargs="*", choices=["claude", "codex", "hermes"], default=None)
     un.add_argument("--purge", action="store_true", help="delete the spool too")
     un.set_defaults(seer_fn=_cmd_uninstall)
 

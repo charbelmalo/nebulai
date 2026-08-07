@@ -124,11 +124,17 @@ export class EmbeddingConstellationDriver implements InterpDriver {
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onLeave = () => this.onLeave();
+    // this view has no click-driven selection — the tap's only job is
+    // standing in for hover on a device that has none, so its readout can
+    // actually be read
+    const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("click", onClick);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("click", onClick);
     });
   }
 
@@ -268,6 +274,8 @@ export class EmbeddingConstellationDriver implements InterpDriver {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    // a tap-pinned tooltip (touch has no hover) survives a stray move
+    if (this.tooltip.pinned) return;
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -289,6 +297,12 @@ export class EmbeddingConstellationDriver implements InterpDriver {
       this.canvas.style.cursor = "";
       return;
     }
+    this.showTooltipFor(s, x, y);
+    this.canvas.style.cursor = "crosshair";
+  }
+
+  /** Row-building + placement, shared by the hover path and a touch tap-to-pin. */
+  private showTooltipFor(s: Star, x: number, y: number): void {
     const [cr, cg, cb] = s.lead ? SPACE : NOSPACE;
     const rows: TipRow[] = [
       { kind: "label", text: `token “${fmtTok(s.str)}”`, swatch: [cr, cg, cb] },
@@ -301,10 +315,36 @@ export class EmbeddingConstellationDriver implements InterpDriver {
     ];
     this.tooltip.show(rows);
     this.tooltip.move(x, y, this.cssW, this.cssH);
-    this.canvas.style.cursor = "crosshair";
+  }
+
+  private onClick(e: PointerEvent): void {
+    // this view has no click-driven selection — a tap stands in for the
+    // hover this device doesn't have, both for the marker and the tooltip
+    if (e.pointerType !== "touch") return;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const hit = this.field.pickAt(x, y, 6);
+    const s = hit >= 0 ? ((this.stars[hit] as Star) ?? null) : null;
+    this.hover = s;
+    this.field.setDim(s ? HOVER_DIM : 1);
+    if (s) {
+      const [sx, sy] = this.field.worldToScreen(s.x, s.y);
+      this.marker.show(sx, sy, this.radiusOf(s.norm) + 2, this.dataBoxPx());
+      this.tooltip.pinned = true;
+      this.showTooltipFor(s, x, y);
+    } else {
+      this.marker.hide();
+      this.tooltip.pinned = false;
+      this.tooltip.hide();
+    }
+    this.field.render();
   }
 
   private onLeave(): void {
+    // a tap-pinned tooltip must survive the pointer leaving — touch has no
+    // hover state to "leave" in the first place
+    if (this.tooltip.pinned) return;
     if (this.hover) {
       this.hover = null;
       this.marker.hide();

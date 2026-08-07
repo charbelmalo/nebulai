@@ -450,6 +450,7 @@ export class SAEConstellationDriver implements InterpDriver {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    if (this.tooltip.pinned) return;
     if (!this.deck) return;
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -468,6 +469,10 @@ export class SAEConstellationDriver implements InterpDriver {
       this.canvas.style.cursor = "";
       return;
     }
+    this.showTooltipFor(p, x, y);
+  }
+
+  private showTooltipFor(p: FeaturePt, x: number, y: number): void {
     const lc = this.colorOf(p);
     const rows: TipRow[] = [
       { kind: "label", text: `SAE feature ${p.id}`, swatch: [lc[0], lc[1], lc[2]] },
@@ -486,17 +491,29 @@ export class SAEConstellationDriver implements InterpDriver {
   private onClick(e: PointerEvent): void {
     if (!this.deck) return;
     const rect = this.canvas.getBoundingClientRect();
-    const info = this.deck.pickObject({
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-      radius: 5,
-      layerIds: ["sae-active"],
-    }) as PickingInfo | null;
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const info = this.deck.pickObject({ x, y, radius: 5, layerIds: ["sae-active"] }) as
+      | PickingInfo
+      | null;
     const p = (info?.object as FeaturePt | undefined) ?? null;
-    if (!p) return;
+    if (!p) {
+      // tap/click on empty space used to bare-return, leaving a stale linked
+      // feature lit — clear it, same as clicking the linked feature again would
+      if (this.linked !== null) appStore.getState().setInterpSelection(null);
+      this.tooltip.pinned = false;
+      this.tooltip.hide();
+      return;
+    }
     // toggle publish as the global cross-view SAE-feature selection
     const same = this.linked === p.id;
     appStore.getState().setInterpSelection(same ? null : { kind: "saeFeature", id: p.id });
+    if (e.pointerType === "touch" && !same) {
+      this.hover = p;
+      this.pushLayers();
+      this.tooltip.pinned = true;
+      this.showTooltipFor(p, x, y);
+    }
   }
 
   /** Cross-view link: mark the selected feature with a steady accent diamond. */
@@ -508,6 +525,7 @@ export class SAEConstellationDriver implements InterpDriver {
   }
 
   private onLeave(): void {
+    if (this.tooltip.pinned) return;
     if (this.hover) {
       this.hover = null;
       this.pushLayers();

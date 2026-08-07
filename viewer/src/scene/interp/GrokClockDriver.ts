@@ -104,11 +104,14 @@ export class GrokClockDriver implements InterpDriver {
 
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onLeave = () => this.onLeave();
+    const onClick = (e: PointerEvent) => this.onClick(e);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("click", onClick);
     this.disposers.push(() => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("click", onClick);
     });
   }
 
@@ -680,10 +683,12 @@ export class GrokClockDriver implements InterpDriver {
     }) as PickingInfo | null;
   }
 
-  private onPointerMove(e: PointerEvent): void {
+  /** applies the picked layer's object to hover state, builds the readout, and
+   *  shows/positions the tooltip. Returns whether anything was actually hit —
+   *  the touch tap handler uses that to decide whether to pin. */
+  private showTooltipFor(info: PickingInfo | null, x: number, y: number): boolean {
     const g = this.g;
-    if (!g) return;
-    const info = this.pick(e);
+    if (!g) return false;
     const layer = info?.layer?.id;
     const prev = `${this.hoverCk}/${this.hoverHeat?.ci},${this.hoverHeat?.k}/${this.hoverA}`;
     this.hoverCk = layer === "grok-curve-hit" ? (info?.object as CkCol).ci : null;
@@ -727,30 +732,45 @@ export class GrokClockDriver implements InterpDriver {
       );
     } else if (this.hoverA != null && g.clocks[this.clockIdx]) {
       const ck = g.clocks[this.clockIdx];
-      if (!ck) return;
+      if (!ck) return false;
       const a = this.hoverA;
-      const x = ck.xy[a * 2] ?? 0;
-      const y = ck.xy[a * 2 + 1] ?? 0;
-      const ang = (Math.atan2(y, x) * 180) / Math.PI;
+      const x2 = ck.xy[a * 2] ?? 0;
+      const y2 = ck.xy[a * 2 + 1] ?? 0;
+      const ang = (Math.atan2(y2, x2) * 180) / Math.PI;
       rows.push(
         { kind: "label", text: `token a = ${a} · clock k = ${ck.k}`, swatch: AMBER },
         { text: "angle", value: `${ang.toFixed(1)}°`, hot: true },
-        { text: `proj (${x.toFixed(4)}, ${y.toFixed(4)})` },
+        { text: `proj (${x2.toFixed(4)}, ${y2.toFixed(4)})` },
         { text: `k·a mod ${g.meta.p} = ${(ck.k * a) % g.meta.p} — its slot on the dial` },
         { text: `phase alignment of this clock: ${ck.circ}` },
       );
     } else {
       this.tooltip.hide();
       this.canvas.style.cursor = "";
-      return;
+      return false;
     }
     this.tooltip.show(rows);
-    const rect = this.canvas.getBoundingClientRect();
-    this.tooltip.move(e.clientX - rect.left, e.clientY - rect.top, this.cssW, this.cssH);
+    this.tooltip.move(x, y, this.cssW, this.cssH);
     this.canvas.style.cursor = "crosshair";
+    return true;
+  }
+
+  private onPointerMove(e: PointerEvent): void {
+    if (this.tooltip.pinned) return;
+    const rect = this.canvas.getBoundingClientRect();
+    this.showTooltipFor(this.pick(e), e.clientX - rect.left, e.clientY - rect.top);
+  }
+
+  private onClick(e: PointerEvent): void {
+    // touch has no hover — a tap pins the reading instead of flashing it mid-lift
+    if (e.pointerType !== "touch") return;
+    const rect = this.canvas.getBoundingClientRect();
+    const hit = this.showTooltipFor(this.pick(e), e.clientX - rect.left, e.clientY - rect.top);
+    this.tooltip.pinned = hit;
   }
 
   private onLeave(): void {
+    if (this.tooltip.pinned) return;
     if (this.hoverCk != null || this.hoverHeat || this.hoverA != null) {
       this.hoverCk = this.hoverHeat = null;
       this.hoverA = null;
