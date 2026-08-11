@@ -22,6 +22,12 @@ nebulai = "nebulai.cli:main"
 [dependency-groups]
 dev = ["pytest"]
 
+[tool.pytest.ini_options]
+# `network` tests hit the real Hugging Face hub, so they are deselected by
+# default; opt in with `pytest -m network` (the trailing -m wins over addopts)
+markers = ["network: opt-in test that makes a real network request"]
+addopts = "-m 'not network'"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

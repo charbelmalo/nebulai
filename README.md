@@ -4,8 +4,8 @@ A semantic cloud of a micro model's concept space: decompose a small model
 into interpretable units, label each unit, embed and cluster the labels, and
 render the whole thing as a navigable map of meaning.
 
-Three interchangeable front-ends define *what a point is*; they all feed the
-same back-end (reduce → cluster → name → export → render):
+Interchangeable front-ends define *what a point is*; they all feed the same
+back-end (reduce → cluster → name → export → render):
 
 | Variant | A point is… | Status |
 |---|---|---|
@@ -13,12 +13,17 @@ same back-end (reduce → cluster → name → export → render):
 | **A — SAE features** | one sparse-autoencoder decoder direction | ✅ working |
 | **B — MLP neurons** | one raw MLP write direction (`c_proj` row) | ✅ working |
 | **P — probe concepts** | one LLM-proposed concept near a seed topic (no model weights) | ✅ working |
+| **U — unembedding** | one vocabulary token (its `W_U` row) — untied models only | 🔜 planned |
 
 A/B/C are built and exported — see `out/` for artifacts from each. Both A and B
 read weights directly through the shared safetensors loader, so neither needs
 sae-lens or TransformerLens at runtime. P is the odd one out: it decomposes no
 model at all, and exists to answer the human-language question the others
-can't — see [Semantic probe](#semantic-probe--a-cloud-with-no-model-in-it).
+can't — see [Semantic probe](#semantic-probe--a-cloud-with-no-model-in-it). U is
+C's twin on the output side and asks the question C alone cannot: *does the
+model read tokens the way it writes them?* It is meaningless on a tied model
+(one matrix serves both roles), which is what makes a tied model the control —
+see [Reading a model you never download](#reading-a-model-you-never-download).
 
 ## Quickstart
 
@@ -39,8 +44,81 @@ Outputs land in `out/<model>/`:
 1. **Front-end** — produce `Units`: ids + geometry vectors + display labels. For Plan C the geometry is the (mean-centered) embedding matrix itself, curated to drop byte-fragment and control tokens.
 2. **Reduce** — UMAP (cosine): a ~10-d space for clustering, 3-d for the flythrough, and a 2-d view projected from the 3-d one so the views stay aligned. Clustering never runs on the 2-d/3-d projections — they invent structure.
 3. **Cluster** — HDBSCAN; membership probability becomes per-point confidence.
-4. **Name** — each cluster's most-central members go to a namer. `--namer auto` (default) tries **a local ollama server** → **OpenRouter** (key from `~/.config/nebulai/.env`) → a centroid-token fallback. `--namer` and `--ollama-model` / `--openrouter-model` control this.
+4. **Name** — each cluster's most-central members go to a namer. `--namer auto` (default) tries **a local ollama server** → **OpenRouter** (key from `~/.config/nebulai/.env`) → a centroid-token fallback. `--namer` and `--ollama-model` / `--openrouter-model` control this. When the namer is a *pinned* corpus model rather than whatever is reachable, two extra rules apply — identity and cost — see [Reading a model you never download](#reading-a-model-you-never-download).
 5. **Export + render** — `nebulai.json`, static PNG, interactive HTML.
+
+## Reading a model you never download
+
+The atlas used to be bounded by disk: mapping a model meant fetching its
+checkpoint. It isn't anymore. `https://huggingface.co/{repo}/resolve/{rev}/{shard}`
+answers **HTTP 206 Partial Content with no auth**, so the loader reads the
+safetensors header — a few hundred KB of JSON carrying every tensor's dtype,
+shape and byte range — and then streams only the rows it maps. Measured across
+the four models below: **1.87 GB of streamed rows against 344 GB of
+checkpoints.**
+
+Byte ranges, not shards, are what make this work. The shard holding
+Muse-Glimmer-30B's `W_E` is 49.95 GB of its 59.55 GB checkpoint; "download only
+the shard you need" would have fetched 84% of it.
+
+| model | repo | checkpoint | W_E | W_U | 50k-token stream | map |
+|---|---|---|---|---|---|---|
+| Muse-Glimmer-30B | `meta-models/Muse-Glimmer-30B` | 59.55 GB | BF16 `[202048, 6656]` | untied | 666 MB (1.12%) | 🔜 planned |
+| Gemma-4-26B-A4B-it | `google/gemma-4-26B-A4B-it` | 51.61 GB | BF16 `[262144, 2816]` | **tied** | 282 MB (0.55%) | 🔜 planned |
+| Ling-2.6-flash | `inclusionAI/Ling-2.6-flash` | 208.37 GB | BF16 `[157184, 4096]` | untied | 410 MB (0.20%) | 🔜 planned |
+| Mistral-Nemo-Instruct-2407 | `mistralai/Mistral-Nemo-Instruct-2407` | 24.50 GB | BF16 `[131072, 5120]` | untied | 512 MB (2.09%) | 🔜 planned |
+
+Ling is the case that settles the design: 208 GB across 26 numbered shards plus
+a separate `model-mtp-layer.safetensors`, 25,015 tensors — and a token map needs
+0.2% of it. Gemma-4's **tied** embeddings make it the control for the W_E vs W_U
+question rather than a gap in the corpus: with one matrix serving both roles the
+answer is known in advance, which is the only calibration that overlap score
+has. Exact keys, per-model architecture notes and prices live in
+[`src/nebulai/corpus.py`](src/nebulai/corpus.py), which is the source of truth.
+
+Three rules come with this, and they are as much a part of the architecture as
+the range reads:
+
+- **Pin the revision.** `main` floats. A run resolves it to a commit sha and
+  stamps it into `meta`, so "the model changed under us" stays distinguishable
+  from "the pipeline changed."
+- **Pin the model's identity — never substitute.** A cheaper endpoint serving a
+  *different* model is not a fallback; its titles are not this model's
+  semantics. Model ids are pinned (never a family, never an alias) and an
+  unavailable one is a refusal, not a downgrade. Two of the four models have **no
+  HF-router route at all** (no provider serves them), and `corpus.py` records
+  that as `None` rather than filling it with a near neighbour — an absent route
+  is information, and `probe_endpoints.py` re-checks it on every run.
+- **Estimate cost before spending it.** A gate (default $1.00,
+  `corpus.DEFAULT_MAX_COST_USD`) prices a run from the measured request shape
+  and, over budget, names cheaper alternatives for a human to choose. For scale:
+  naming a 250-cluster map at Glimmer's rate is **$0.019**, and re-naming every
+  map currently in `out/` (14 of them, 1660 clusters) is **$0.125**.
+
+Check any of this yourself — it needs no API key, sends no chat request, and
+therefore costs nothing:
+
+```sh
+uv run scripts/probe_endpoints.py                 # revisions, keys, bytes, routes, cost
+uv run scripts/probe_endpoints.py --rows 8        # range-read and decode real rows
+uv run scripts/probe_endpoints.py --weights-only  # the half that needs no credentials
+```
+
+It is stdlib-only (not even numpy), so `python3.11+ scripts/probe_endpoints.py`
+works too — including when the venv is the thing that is broken.
+
+"No key configured" is one of its normal results, not an error. Prices are read
+live from OpenRouter and drift against `corpus.py` is flagged rather than
+silently trusted.
+
+**Status. No map from any of these four models exists yet** — the validated-map
+table further down is unchanged, and none of the rows above carries a number it
+has not earned. The corpus definition and this measurement tooling are in the
+tree; the remote range-read loader lives in `src/nebulai/weights.py` and the
+pinned-identity namer in `src/nebulai/backend/name.py`, and those files, not
+this one, are the truth about what they currently support. Plan and rationale:
+[`recommended-plan.md`](recommended-plan.md); what measurement corrected along
+the way: [`updated-implementation-plan.md`](updated-implementation-plan.md).
 
 ## Comparing models
 
@@ -98,7 +176,13 @@ uv run nebulai probe "photosynthesis" --sensitivity 0.6   # near-synonyms only
 
 Unlike the three weight-reading front-ends, this one cannot run offline — it
 needs a reachable generator *and* a reachable embedder. With neither configured
-it exits naming each backend it tried and why.
+it exits naming each backend it tried and why. The endpoint route removes the
+*hardware* half of that constraint (a good generator no longer has to fit in
+local VRAM) but not the caveat itself, which was never about hardware. It also
+puts this front-end squarely under the identity rule: a probe cloud is the joint
+opinion of the generator and the embedder that produced it, so which generator
+answered is part of the map's provenance, not an implementation detail — and
+substituting a cheaper one silently changes what the cloud is evidence of.
 
 **What a probe cloud is evidence of.** Two models' joint opinion — the generator
 that proposed the terms and the embedder that positioned them. Not a fact about
@@ -160,7 +244,11 @@ uv run nebulai metrics gpt2 gpt2__neurons__h.8.mlp.c_proj   # picks up the resul
 These re-run UMAP, so they are a separate command rather than part of a build.
 Results land in `validation.json` next to `nebulai.json`.
 
-**What this currently shows**, across all nine maps:
+**What this currently shows**, across all nine **built and validated** maps.
+Every number here came from a run. The four endpoint-era models
+([above](#reading-a-model-you-never-download)) have no rows because they have no
+maps yet — a planned map earns a row once it is built and has cleared its null
+floor, not before:
 
 | map | points | silhouette | null floor | margin | trust | seed ARI |
 |---|---|---|---|---|---|---|
@@ -205,6 +293,7 @@ Explore clustering settings without re-running UMAP:
 ```sh
 scripts/sweep_hdbscan.py out/gpt2/reduced.npz     # leaf/eom x mcs x min_samples
 scripts/inspect_map.py out/gpt2/nebulai.json      # meta, top clusters, size dist
+scripts/probe_endpoints.py                        # corpus reachability + cost matrix
 ```
 
 ## SessionSeer — the agent's trajectory, not the model's concept space
@@ -245,6 +334,7 @@ uses: [`docs/OBSERVABILITY-SURFACE.md`](docs/OBSERVABILITY-SURFACE.md).
 - **Plan C's geometry is the model's own** (embedding rows). For Plans A/B, laying points out by *label* embeddings shows the label-embedder's semantics, not the model's — the viewer will expose both projections (decoder-direction vs label space) as a toggle.
 - Raw token-embedding structure is partly frequency/orthography; mean-centering + cosine mitigate but don't remove that.
 - Cluster selection defaults to `leaf`, which deliberately over-fragments: `eom` collapses token maps into one mega-cluster. That choice raises the noise fraction *and* lowers seed stability, so read both numbers against the method (`nebulai validate` prints it).
+- **Weight geometry, not activations.** Every model-derived map here answers "what can this layer *write*", never "what did it write for prompt X". Reaching models over endpoints does not change that: the rows are read from the checkpoint, and the endpoint is only ever the namer. A map is evidence about the weights; the model that titled it is provenance.
 - This is a visualization + clustering tool over public micro models. No causal claims.
 
 ## Roadmap
@@ -253,3 +343,4 @@ uses: [`docs/OBSERVABILITY-SURFACE.md`](docs/OBSERVABILITY-SURFACE.md).
 - Intervention-based validation: does ablating a cluster's units change the behaviour its title claims?
 - Phase 2: WebGPU point cloud reading `nebulai.json` — 3D flythrough, hover, cluster hulls, filters, 2D↔3D toggle. (The `compare` viewer is the first cut of this renderer.)
 - Cross-model: Route B (orthogonal Procrustes alignment on shared tokens) as a geometry-space companion to the current concept-space `compare`, for same-family models.
+- W_E vs W_U on the untied corpus models — which token families the model reads differently from how it writes them — with the tied model as the control that says what "no difference" scores. See [`recommended-plan.md`](recommended-plan.md).

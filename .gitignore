@@ -12,5 +12,6 @@ viewer/local-sessions/
 
 # Local working artifacts (demos, thinking notes, inspiration dumps — not source)
 in/
+outputs/
 scratchpad-demo/
 viewer/design/

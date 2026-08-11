@@ -113,12 +113,31 @@ def _expand_ollama(term: str, n: int, host: str, model: str) -> list:
     return json.loads(out).get("concepts", [])
 
 
-def _expand_openrouter(term: str, n: int, model: str, env_file: str | None) -> list:
-    from ..backend.name import _load_openrouter_key
+def _expand_remote(
+    term: str,
+    n: int,
+    url: str,
+    headers: dict,
+    model: str,
+    expect_model: str | None = None,
+    usage: dict | None = None,
+) -> list:
+    """One expansion against an OpenAI-protocol remote (OpenRouter or the HF
+    router). Factored so the two remotes cannot drift into different prompts —
+    a probe cloud is already the joint opinion of two models, and a third
+    variable hidden in the transport would make it uninterpretable.
 
-    key = _load_openrouter_key(env_file)
-    if not key:
-        raise RuntimeError("no OPENROUTER_API_KEY")
+    `expect_model` is the anti-substitution check: both routers echo the model
+    they ran, so a router that quietly served a neighbour is caught here rather
+    than being stamped into meta as the model that was asked for.
+    """
+    from ..backend.name import (
+        NamerIdentityError,
+        _accumulate_usage,
+        json_object,
+        same_model,
+    )
+
     body = json.dumps(
         {
             "model": model,
@@ -133,14 +152,75 @@ def _expand_openrouter(term: str, n: int, model: str, env_file: str | None) -> l
             "response_format": {"type": "json_object"},
         }
     ).encode()
-    req = urllib.request.Request(
-        "https://openrouter.ai/api/v1/chat/completions",
-        data=body,
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
-    )
+    req = urllib.request.Request(url, data=body, headers=headers)
     with urllib.request.urlopen(req, timeout=180) as r:
         payload = json.load(r)
-    return json.loads(payload["choices"][0]["message"]["content"]).get("concepts", [])
+    served = str(payload.get("model") or "")
+    if expect_model and served and not same_model(served, expect_model):
+        raise NamerIdentityError(
+            f"asked {url} for {expect_model!r} and it answered as {served!r} — "
+            "a cloud grown by a different model is a different cloud"
+        )
+    if usage is not None:
+        _accumulate_usage(payload, usage)
+    return json_object(payload["choices"][0]["message"]["content"]).get("concepts", [])
+
+
+def _expand_openrouter(
+    term: str,
+    n: int,
+    model: str,
+    env_file: str | None,
+    expect_model: str | None = None,
+    usage: dict | None = None,
+) -> list:
+    from ..backend.name import _OPENROUTER_URL, _load_openrouter_key
+
+    key = _load_openrouter_key(env_file)
+    if not key:
+        raise RuntimeError("no OPENROUTER_API_KEY")
+    return _expand_remote(
+        term,
+        n,
+        _OPENROUTER_URL,
+        {"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+        model,
+        expect_model=expect_model,
+        usage=usage,
+    )
+
+
+def _expand_hf(
+    term: str,
+    n: int,
+    model: str,
+    env_file: str | None,
+    expect_model: str | None = None,
+    usage: dict | None = None,
+) -> list:
+    """Expansion via HF Inference Providers' OpenAI-compatible router.
+
+    Same shape as the OpenRouter leg; the model id is the HF repo rather than an
+    OpenRouter slug, and a corpus row with `hf_endpoint=None` means no provider
+    serves that model — which is a refusal, not a reason to reach for another.
+    """
+    from ..backend.name import _HF_ROUTER_URL, _HF_TOKEN_FILE, _load_hf_token
+
+    token = _load_hf_token(env_file)
+    if not token:
+        raise RuntimeError(
+            "no HF token in HF_TOKEN / HUGGINGFACE_HUB_TOKEN, the .env file, or "
+            f"{_HF_TOKEN_FILE}"
+        )
+    return _expand_remote(
+        term,
+        n,
+        _HF_ROUTER_URL,
+        {"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+        model,
+        expect_model=expect_model,
+        usage=usage,
+    )
 
 
 def _expand_openai(
@@ -177,6 +257,29 @@ def _expand_anthropic(term: str, n: int, model: str) -> list:
     return json.loads(text).get("concepts", [])
 
 
+def expansion_calls(depth: int, breadth: int) -> int:
+    """How many generator calls a (depth, breadth) probe will make.
+
+    One call on the seed, then one per term at each level: 1 + b + b^2 + ...
+    This is what the cost gate prices, so it has to match the BFS in
+    load_probe_units rather than be a guess about it.
+    """
+    return sum(max(breadth, 1) ** i for i in range(max(depth, 0))) + 1
+
+
+def _probe_cost_gate(model_id: str, depth: int, breadth: int, max_cost_usd: float):
+    """Same refusal rule as the namer, priced for a probe's call pattern.
+
+    `estimate_naming_cost(n, key, batch_size=1)` prices n requests at ~1500
+    prompt + ~400 completion tokens each. An expansion prompt is far smaller
+    than a naming batch (~200 in, ~100 out measured), so this is a genuine upper
+    bound — the gate errs toward refusing, never toward overspending.
+    """
+    from ..backend.name import cost_gate
+
+    return cost_gate(model_id, expansion_calls(depth, breadth), max_cost_usd, batch_size=1)
+
+
 def _make_expander(
     generator: str,
     ollama_host: str,
@@ -187,39 +290,120 @@ def _make_expander(
     llm_host: str = "http://localhost:8050",
     llm_model: str = "",
     llm_api_key: str | None = None,
+    hf_model: str = "",
+    model: str | None = None,
+    max_cost_usd: float | None = None,
+    depth: int = 2,
+    breadth: int = 12,
+    stamp: dict | None = None,
 ):
     """Resolve the generator once, up front — a cloud whose first half came
     from one model and second half from another after a mid-run fallback would
-    be uninterpretable, so this fails loudly instead of degrading."""
-    from ..backend.name import _ollama_pick_model, _openai_pick_model
+    be uninterpretable, so this fails loudly instead of degrading.
 
-    chain = {
-        "auto": ["ollama", "openai", "openrouter", "anthropic"],
-        "ollama": ["ollama"],
-        "openai": ["openai"],
-        "openrouter": ["openrouter"],
-        "anthropic": ["anthropic"],
-    }[generator]
+    `model=` pins the generator's identity. The existing fall-through is the
+    same substitution hazard the namer had: a probe cloud attributed to Glimmer
+    but actually grown by whatever local model was up is a fabrication about
+    what Glimmer associates with the seed. So under a pin only a backend that
+    serves that exact id may run, and `NamerIdentityError` is raised otherwise.
+
+    `stamp`, when given, receives {backend, model, identity, cost_usd} — the
+    resolved identity, for meta. The label return value stays a plain
+    "backend:model" string because callers (and their tests) key off it.
+    """
+    from ..backend.name import (
+        DEFAULT_MAX_COST_USD,
+        NamerBudgetError,
+        NamerIdentityError,
+        _ollama_pick_model,
+        _ollama_tags,
+        _openai_list_models,
+        _openai_pick_model,
+        _serves_pin,
+        actual_cost,
+        corpus_entry,
+    )
+
+    if max_cost_usd is None:
+        max_cost_usd = DEFAULT_MAX_COST_USD
+    pinned = (model or "").strip() or None
+    identity = "pinned" if pinned else "auto"
+    usage = {"prompt_tokens": 0, "completion_tokens": 0}
+
+    if pinned:
+        # cheapest/most local host for THIS model first; no other model is a
+        # substitute, so there is no final fall-through entry
+        chain = (
+            ["ollama", "openai", "hf", "openrouter"]
+            if generator == "auto"
+            else [generator]
+        )
+    else:
+        chain = {
+            "auto": ["ollama", "openai", "openrouter", "anthropic"],
+            "ollama": ["ollama"],
+            "openai": ["openai"],
+            "openrouter": ["openrouter"],
+            "hf": ["hf"],
+            "anthropic": ["anthropic"],
+        }[generator]
+
+    def record(backend: str, resolved: str) -> None:
+        if stamp is not None:
+            stamp.update(
+                {
+                    "backend": backend,
+                    "model": resolved,
+                    "identity": identity,
+                    "cost_usd": actual_cost(resolved, usage),
+                    "usage": dict(usage),
+                }
+            )
 
     tried: list[str] = []
+    declined: list[str] = []
     for backend in chain:
         try:
             if backend == "ollama":
-                picked = _ollama_pick_model(ollama_host, ollama_model)
-                if picked is None:
-                    raise RuntimeError(f"ollama at {ollama_host} unreachable")
+                if pinned:
+                    picked = next(
+                        (t for t in _ollama_tags(ollama_host) if _serves_pin(t, pinned)),
+                        None,
+                    )
+                    if picked is None:
+                        raise RuntimeError(
+                            f"ollama at {ollama_host} serves no build of "
+                            f"{pinned!r} (has: "
+                            f"{_ollama_tags(ollama_host)[:6] or 'nothing reachable'})"
+                        )
+                else:
+                    picked = _ollama_pick_model(ollama_host, ollama_model)
+                    if picked is None:
+                        raise RuntimeError(f"ollama at {ollama_host} unreachable")
                 _expand_ollama(_PROBE_TERM, 2, ollama_host, picked)
+                record("ollama", picked)
                 return (
                     lambda t, n: _expand_ollama(t, n, ollama_host, picked),
                     f"ollama:{picked}",
                 )
             if backend == "openai":
-                picked = _openai_pick_model(llm_host, llm_model, llm_api_key)
-                if picked is None:
-                    raise RuntimeError(
-                        f"no chat model on {llm_host} (unreachable, or it "
-                        "serves only embedding/rerank/audio models)"
-                    )
+                if pinned:
+                    # exact only — the picker's substring fallback is the
+                    # substitution a pin forbids
+                    ids = _openai_list_models(llm_host, llm_api_key)
+                    picked = next((i for i in ids if _serves_pin(i, pinned)), None)
+                    if picked is None:
+                        raise RuntimeError(
+                            f"{llm_host} does not serve {pinned!r} (it lists: "
+                            f"{ids[:6] or 'nothing reachable'})"
+                        )
+                else:
+                    picked = _openai_pick_model(llm_host, llm_model, llm_api_key)
+                    if picked is None:
+                        raise RuntimeError(
+                            f"no chat model on {llm_host} (unreachable, or it "
+                            "serves only embedding/rerank/audio models)"
+                        )
                 # a truncation here is not a failed backend: the model answered,
                 # at length. Only a hard error means it can't generate.
                 from ..backend.name import ChatTruncated
@@ -228,24 +412,66 @@ def _make_expander(
                     _expand_openai(_PROBE_TERM, 2, llm_host, picked, llm_api_key)
                 except ChatTruncated as trunc:
                     print(f"  generator openai:{picked} rambles ({trunc}) — using it anyway")
+                record("openai", picked)
                 return (
                     lambda t, n: _expand_openai(t, n, llm_host, picked, llm_api_key),
                     f"openai:{picked}",
                 )
-            if backend == "openrouter":
-                _expand_openrouter(_PROBE_TERM, 2, openrouter_model, env_file)
+            if backend in ("openrouter", "hf"):
+                spec = corpus_entry(pinned) if pinned else None
+                if pinned:
+                    if backend == "hf" and spec is not None and spec.hf_endpoint is None:
+                        raise RuntimeError(
+                            f"no HF inference provider serves {spec.key} "
+                            f"({spec.repo}) — corpus hf_endpoint is None"
+                        )
+                    target = (
+                        (spec.hf_endpoint if backend == "hf" else spec.endpoint)
+                        if spec is not None
+                        else pinned
+                    )
+                else:
+                    target = hf_model if backend == "hf" else openrouter_model
+                    if backend == "hf" and not target:
+                        raise RuntimeError(
+                            "--generator hf needs a model: pass --namer-model "
+                            "(pinned) or --hf-model"
+                        )
+                _probe_cost_gate(target, depth, breadth, max_cost_usd)
+                fn = _expand_openrouter if backend == "openrouter" else _expand_hf
+                expect = target if pinned else None
+                fn(_PROBE_TERM, 2, target, env_file, expect_model=expect, usage=usage)
+                record(backend, target)
                 return (
-                    lambda t, n: _expand_openrouter(t, n, openrouter_model, env_file),
-                    f"openrouter:{openrouter_model}",
+                    lambda t, n: fn(
+                        t, n, target, env_file, expect_model=expect, usage=usage
+                    ),
+                    f"{backend}:{target}",
                 )
-            _expand_anthropic(_PROBE_TERM, 2, anthropic_model)
+            target = pinned or anthropic_model
+            _probe_cost_gate(target, depth, breadth, max_cost_usd)
+            _expand_anthropic(_PROBE_TERM, 2, target)
+            record("anthropic", target)
             return (
-                lambda t, n: _expand_anthropic(t, n, anthropic_model),
-                f"anthropic:{anthropic_model}",
+                lambda t, n: _expand_anthropic(t, n, target),
+                f"anthropic:{target}",
             )
+        except NamerBudgetError:
+            raise  # terminal: refusing over budget must not pick a cheaper model
         except Exception as e:
             tried.append(backend)
+            declined.append(f"{backend}: {type(e).__name__}: {e}")
             print(f"  generator '{backend}' unavailable ({type(e).__name__}: {e})")
+
+    if pinned:
+        reasons = "\n".join(f"  - {d}" for d in declined)
+        raise NamerIdentityError(
+            f"no configured backend can serve the pinned generator {pinned!r}, "
+            "and a cloud grown by a different model is not this model's "
+            f"cloud.\ntried {len(declined)} backend(s):\n{reasons}\n"
+            "fix one of those backends, or drop --generator-model to let the "
+            "chain use whatever is reachable (it will be stamped in meta)."
+        )
     # the per-backend reasons are already on stdout; summarising with only the
     # LAST exception reads as if that one backend were the whole problem
     raise RuntimeError(
@@ -276,6 +502,9 @@ def load_probe_units(
     llm_host: str = "http://localhost:8050",
     llm_model: str = "",
     llm_api_key: str | None = None,
+    hf_model: str = "",
+    generator_model: str | None = None,
+    max_cost_usd: float | None = None,
     max_terms: int = 4000,
     reuse_terms: list[str] | None = None,
     reused_from: str | None = None,
@@ -290,6 +519,11 @@ def load_probe_units(
     at is narrower than the terms that were actually proposed.
     """
     from ..backend.embed import embed_texts
+
+    # filled by _make_expander with the resolved generator identity; stays empty
+    # when the expander is stubbed out, in which case the stamps below fall back
+    # to splitting the "backend:model" label
+    gen_stamp: dict = {}
 
     # Re-embedding a FIXED concept set is the only way to change this map's
     # embedding space without also changing its points. The generator is
@@ -314,6 +548,8 @@ def load_probe_units(
         # depth/parent structure is not recoverable from an exported label list,
         # and inventing one would put a false tree in meta
         depths = [0] * len(terms)
+        # no generator ran, so there is no generator identity to claim
+        gen_stamp = {"backend": "reused", "model": "", "identity": "none"}
         print(f"  reusing {len(terms)} concepts from {reused_from or 'caller'} — no generator call")
     else:
         expand, generator_used = _make_expander(
@@ -326,6 +562,12 @@ def load_probe_units(
             llm_host,
             llm_model,
             llm_api_key,
+            hf_model=hf_model,
+            model=generator_model,
+            max_cost_usd=max_cost_usd,
+            depth=depth,
+            breadth=breadth,
+            stamp=gen_stamp,
         )
 
         seen: set[str] = {_norm(seed)}
@@ -403,6 +645,18 @@ def load_probe_units(
             "geometry": "third-party text-embedding space — NOT model-internal",
             "probe_seed": seed,
             "generator": generator_used,
+            # `generator` stays "backend:model" (the viewer and the metrics
+            # table read it); these three say the same thing unambiguously —
+            # generator_model is the EXACT id that answered, which is what a
+            # reader needs to know whether this cloud is the model it claims.
+            "generator_backend": gen_stamp.get("backend")
+            or generator_used.split(":", 1)[0],
+            "generator_model": gen_stamp.get(
+                "model",
+                generator_used.split(":", 1)[1] if ":" in generator_used else "",
+            ),
+            "generator_identity": gen_stamp.get("identity", "auto"),
+            "generator_cost_usd": gen_stamp.get("cost_usd"),
             "embed_model": embed_model,
             "embed_host": embed_host,
             "embed_api": embed_api,

@@ -8,6 +8,8 @@ effect depends on the embedder's opinions, which is precisely the thing this
 front-end must never hide.
 """
 
+import json
+
 import numpy as np
 import pytest
 
@@ -215,3 +217,274 @@ def test_the_availability_probe_uses_a_concrete_term(monkeypatch):
         "openai", "http://o", "", "orm", "am", None, llm_host="http://h"
     )
     assert seen == [probe_mod._PROBE_TERM] and probe_mod._PROBE_TERM != "test"
+
+
+# --- generator identity ----------------------------------------------------
+# The generator is half of what a probe cloud measures: a cloud attributed to
+# Glimmer but actually grown by whatever local model happened to be up is a
+# fabrication about what Glimmer associates with the seed. So the same rule the
+# namer follows applies here — pin means pin, and `auto` must stamp what ran.
+
+
+@pytest.fixture(autouse=True)
+def _no_probe_network(monkeypatch, tmp_path):
+    """Keep a real HF token on the developer's box from turning a
+    'nothing serves it' test into a live call."""
+    for var in ("OPENROUTER_API_KEY", "HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(name_mod, "_HF_TOKEN_FILE", str(tmp_path / "absent-token"))
+    monkeypatch.setattr(name_mod, "_DEFAULT_ENV_FILE", str(tmp_path / "absent.env"))
+
+
+def test_a_pinned_generator_no_backend_serves_refuses(monkeypatch):
+    """Every backend is up — for a different model — which is exactly when the
+    fall-through chain would grow a cloud and mislabel whose it is."""
+    ran: list[str] = []
+    monkeypatch.setattr(name_mod, "_ollama_tags", lambda host: ["llama3.2:3b"])
+    monkeypatch.setattr(
+        name_mod, "_openai_list_models", lambda host, key=None: ["Qwen3.6-35B"]
+    )
+    monkeypatch.setattr(
+        probe_mod,
+        "_expand_ollama",
+        lambda *a, **k: (ran.append("ollama"), ["a", "b"])[1],
+    )
+    monkeypatch.setattr(
+        probe_mod,
+        "_expand_openai",
+        lambda *a, **k: (ran.append("openai"), ["a", "b"])[1],
+    )
+
+    with pytest.raises(name_mod.NamerIdentityError) as exc:
+        probe_mod._make_expander(
+            "auto",
+            "http://o",
+            "",
+            "orm",
+            "am",
+            None,
+            llm_host="http://h",
+            model="muse-glimmer-30b",
+        )
+    msg = str(exc.value)
+    assert "muse-glimmer-30b" in msg
+    assert "llama3.2:3b" in msg and "Qwen3.6-35B" in msg
+    assert ran == [], f"a different model grew concepts: {ran}"
+
+
+def test_a_pinned_generator_that_is_served_runs_and_is_stamped(monkeypatch):
+    """The positive control for the refusal above."""
+    monkeypatch.setattr(name_mod, "_ollama_tags", lambda host: [])
+    monkeypatch.setattr(
+        name_mod,
+        "_openai_list_models",
+        lambda host, key=None: ["meta-models/Muse-Glimmer-30B"],
+    )
+    asked: list[str] = []
+    monkeypatch.setattr(
+        probe_mod,
+        "_expand_openai",
+        lambda term, n, host, model, key: (asked.append(model), ["a", "b"])[1],
+    )
+
+    stamp: dict = {}
+    _, label = probe_mod._make_expander(
+        "auto",
+        "http://o",
+        "",
+        "orm",
+        "am",
+        None,
+        llm_host="http://h",
+        model="meta/muse-glimmer-30b",  # the OpenRouter spelling of the same model
+        stamp=stamp,
+    )
+    assert label == "openai:meta-models/Muse-Glimmer-30B"
+    assert asked == ["meta-models/Muse-Glimmer-30B"]
+    assert stamp["identity"] == "pinned"
+    assert stamp["model"] == "meta-models/Muse-Glimmer-30B"
+    assert stamp["backend"] == "openai"
+
+
+def test_the_probe_cost_gate_refuses_a_big_expansion_without_downgrading(monkeypatch):
+    """A depth-3 breadth-20 probe is 1 + 20 + 400 BFS calls plus the one
+    throwaway availability probe = 422. The gate must be able to trip on that,
+    and must not quietly pick the free model instead."""
+    monkeypatch.setattr(name_mod, "_ollama_tags", lambda host: [])
+    monkeypatch.setattr(name_mod, "_openai_list_models", lambda host, key=None: [])
+
+    assert probe_mod.expansion_calls(3, 20) == 1 + 20 + 400 + 1
+    with pytest.raises(name_mod.NamerBudgetError) as exc:
+        probe_mod._make_expander(
+            "openrouter",
+            "http://o",
+            "",
+            "orm",
+            "am",
+            None,
+            model="muse-glimmer-30b",
+            max_cost_usd=0.10,
+            depth=3,
+            breadth=20,
+        )
+    msg = str(exc.value)
+    assert "$0.10 ceiling" in msg
+    assert "NOT selected" in msg and "gemma-4-26b" in msg
+
+
+def test_a_free_generator_is_never_gated(monkeypatch):
+    """Gemma-4 is $0.00, so no expansion size can put it over any ceiling."""
+    seen: list[str] = []
+    monkeypatch.setattr(
+        probe_mod,
+        "_expand_openrouter",
+        lambda term, n, model, env, **k: (seen.append(model), ["a", "b"])[1],
+    )
+    stamp: dict = {}
+    _, label = probe_mod._make_expander(
+        "openrouter",
+        "http://o",
+        "",
+        "google/gemma-4-26b-a4b-it:free",
+        "am",
+        None,
+        max_cost_usd=0.0,
+        depth=4,
+        breadth=30,
+        stamp=stamp,
+    )
+    assert label == "openrouter:google/gemma-4-26b-a4b-it:free"
+    assert seen == ["google/gemma-4-26b-a4b-it:free"]
+    assert stamp["identity"] == "auto"
+
+
+def test_the_cloud_stamps_the_resolved_generator_identity(monkeypatch, fake_stack):
+    """meta must carry the exact model id, not only the 'backend:model' blob."""
+    fake_stack(sim_for=lambda t: 0.9)
+
+    def expander(*a, **k):
+        if k.get("stamp") is not None:
+            k["stamp"].update(
+                {
+                    "backend": "hf",
+                    "model": "meta-models/Muse-Glimmer-30B",
+                    "identity": "pinned",
+                    "cost_usd": 0.00042,
+                }
+            )
+        return (lambda t, n: [f"c-{t}-{i}" for i in range(n)], "hf:meta-models/Muse-Glimmer-30B")
+
+    monkeypatch.setattr(probe_mod, "_make_expander", expander)
+    units = load_probe_units("grief", depth=1, breadth=4, sensitivity=0.0)
+    m = units.meta
+    assert m["generator"] == "hf:meta-models/Muse-Glimmer-30B"
+    assert m["generator_backend"] == "hf"
+    assert m["generator_model"] == "meta-models/Muse-Glimmer-30B"
+    assert m["generator_identity"] == "pinned"
+    assert m["generator_cost_usd"] == 0.00042
+
+
+def test_reused_terms_claim_no_generator_identity(monkeypatch, fake_stack):
+    """A rebuild from an exported term list ran no generator, so it must not
+    inherit or invent one."""
+    fake_stack(sim_for=lambda t: 0.9)
+    units = load_probe_units(
+        "grief",
+        sensitivity=0.0,
+        reuse_terms=["grief", "mourning", "loss"],
+        reused_from="probe__grief",
+    )
+    assert units.meta["generator"] == "reused:probe__grief"
+    assert units.meta["generator_identity"] == "none"
+    assert units.meta["generator_model"] == ""
+
+
+def test_the_hf_expander_posts_to_the_router_with_the_shared_prompt(
+    monkeypatch, tmp_path
+):
+    tok = tmp_path / "token"
+    tok.write_text("hf_xyz\n")
+    monkeypatch.setattr(name_mod, "_HF_TOKEN_FILE", str(tok))
+    seen: dict = {}
+
+    class _Resp:
+        def __init__(self, payload):
+            self._p = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return self._p
+
+    def fake(req, timeout=None):
+        seen["url"] = req.full_url
+        seen["auth"] = req.get_header("Authorization")
+        seen["body"] = json.loads(req.data)
+        return _Resp(
+            json.dumps(
+                {
+                    "model": "meta-models/Muse-Glimmer-30B",
+                    "choices": [
+                        {"message": {"content": json.dumps({"concepts": ["tide", "reef"]})}}
+                    ],
+                    "usage": {"prompt_tokens": 120, "completion_tokens": 30},
+                }
+            ).encode()
+        )
+
+    monkeypatch.setattr(probe_mod.urllib.request, "urlopen", fake)
+    usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    got = probe_mod._expand_hf(
+        "ocean",
+        5,
+        "meta-models/Muse-Glimmer-30B",
+        None,
+        expect_model="meta-models/Muse-Glimmer-30B",
+        usage=usage,
+    )
+
+    assert got == ["tide", "reef"]
+    assert seen["url"] == "https://router.huggingface.co/v1/chat/completions"
+    assert seen["auth"] == "Bearer hf_xyz"
+    assert seen["body"]["model"] == "meta-models/Muse-Glimmer-30B"
+    # the same system prompt every other generator gets — a transport-specific
+    # prompt would make a cross-generator comparison meaningless
+    assert seen["body"]["messages"][0]["content"] == probe_mod._SYSTEM
+    assert usage == {"prompt_tokens": 120, "completion_tokens": 30}
+
+
+def test_a_router_serving_another_model_is_rejected_not_stamped(monkeypatch, tmp_path):
+    tok = tmp_path / "token"
+    tok.write_text("hf_xyz\n")
+    monkeypatch.setattr(name_mod, "_HF_TOKEN_FILE", str(tok))
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "model": "google/gemma-4-12b-it",
+                    "choices": [
+                        {"message": {"content": json.dumps({"concepts": ["tide"]})}}
+                    ],
+                }
+            ).encode()
+
+    monkeypatch.setattr(probe_mod.urllib.request, "urlopen", lambda *a, **k: _Resp())
+    with pytest.raises(name_mod.NamerIdentityError, match="answered as"):
+        probe_mod._expand_hf(
+            "ocean",
+            5,
+            "meta-models/Muse-Glimmer-30B",
+            None,
+            expect_model="meta-models/Muse-Glimmer-30B",
+        )

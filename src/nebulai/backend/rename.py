@@ -108,6 +108,20 @@ def rename_map(map_dir: Path, namer: str = "claude-cli", **namer_kwargs) -> dict
     doc["meta"]["renamed_from"] = was  # the namer immediately before this run
     doc["meta"]["namer_history"] = history
     doc["meta"]["reps_space"] = "u_cluster"
+    # `units` here is reconstructed from the export and thrown away, so the
+    # identity stamps name_clusters wrote onto it would be lost — carry them
+    # onto the document the rename actually persists. Without this a renamed
+    # map keeps the identity of the namer that BUILT it, which is worse than
+    # carrying none at all.
+    for key in (
+        "namer_backend",
+        "namer_model",
+        "namer_identity",
+        "namer_cost_usd",
+        "namer_tokens",
+    ):
+        if key in units.meta:
+            doc["meta"][key] = units.meta[key]
     doc_path.write_text(json.dumps(doc))
     return {
         "id": map_dir.name,

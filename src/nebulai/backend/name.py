@@ -5,7 +5,32 @@ chat server (also local: LM Studio, vLLM, llama.cpp, an MLX box on the LAN) ->
 OpenRouter (key from env or a .env file) -> centroid fallback (title = the
 members nearest the cluster centroid). The pipeline therefore always
 completes; the LLM namers simply activate when one is reachable or a key is
-present. Anthropic stays available via `--namer anthropic`.
+present. Anthropic stays available via `--namer anthropic`, HF Inference
+Providers via `--namer hf`.
+
+Two rules constrain that chain, and both exist because a map's titles are
+evidence about a specific model.
+
+**Identity.** `auto` means "any namer": the caller has expressed no identity
+requirement, so falling through is honest — provided the map records what
+actually answered. `model=` (CLI `--namer-model`) means "THIS model", and then
+a reachable *different* model is not a fallback, it is a fabrication: the
+export would claim Glimmer's semantics while carrying some other model's. So a
+pin never substitutes. If no configured backend can serve that exact id,
+`NamerIdentityError` says which backends were tried and why each declined, and
+the centroid fallback is not offered either — centroid is not the pinned model.
+
+**Cost.** Before anything reaches a paid endpoint the spend is estimated from
+the real cluster count and the corpus's measured per-token prices. Over
+`max_cost_usd` the run is REFUSED (`NamerBudgetError`) with the numbers, and the
+cheaper corpus models are printed but never selected — auto-downgrading to fit a
+budget is the same substitution bug wearing a different hat. A $0.00 endpoint
+(Gemma-4) skips the gate entirely.
+
+Whatever path runs, `units.meta` is stamped with `namer_backend`, `namer_model`
+(the exact id that answered), `namer_identity` and — when the endpoint reports
+usage — `namer_cost_usd`, so an exported map can always say which model titled
+it. `export_json` splats `units.meta`, so those keys land in `nebulai.json`.
 """
 
 import json
@@ -15,7 +40,27 @@ from pathlib import Path
 
 import numpy as np
 
+from ..corpus import CORPUS, DEFAULT_MAX_COST_USD, ModelSpec, estimate_naming_cost
 from ..units import Units
+
+
+class NamerIdentityError(RuntimeError):
+    """A pinned model could not be served, and substituting is not allowed.
+
+    Raised only when the caller pinned an identity (`model=` / `--namer-model`).
+    In `auto` there is no identity to violate, so the chain still falls through
+    — it just has to stamp whatever answered.
+    """
+
+
+class NamerBudgetError(RuntimeError):
+    """The estimated spend exceeds the ceiling, so nothing was sent.
+
+    Deliberately terminal: it is NOT caught by the fall-through chain. Quietly
+    continuing to a cheaper model after refusing would be the auto-downgrade
+    this exists to prevent, and quietly continuing to centroid would hide a
+    refusal the human asked to be told about.
+    """
 
 _SYSTEM = (
     "You name clusters of tokens drawn from a language model's vocabulary. "
@@ -48,6 +93,10 @@ _SCHEMA = {
 
 _DEFAULT_ENV_FILE = "~/.config/nebulai/.env"
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+# HF Inference Providers speak the OpenAI chat protocol behind one router, so
+# the same request/parse code serves both remotes — see _name_with_remote.
+_HF_ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
+_HF_TOKEN_FILE = "~/.cache/huggingface/token"
 _DEFAULT_OLLAMA_HOST = "http://localhost:11434"  # local ollama server
 _DEFAULT_LLM_HOST = "http://localhost:8050"  # OpenAI-compatible chat server
 
@@ -70,12 +119,156 @@ def _batch_lines(reps: dict[int, list[str]], cids: list[int]) -> str:
     )
 
 
-# --- OpenRouter -----------------------------------------------------------
+# --- model identity -------------------------------------------------------
+#
+# The whole point of the corpus is that `endpoint` is a pinned model id. These
+# helpers are what stop a pin from drifting into a family or a neighbour.
+
+
+def corpus_entry(model_id: str) -> ModelSpec | None:
+    """The corpus spec this id names, by key / repo / endpoint / hf_endpoint.
+
+    `corpus.spec()` raises and does not know about `hf_endpoint`; naming needs a
+    lookup that can also say "not in the corpus" without an exception, because
+    most OpenRouter slugs legitimately aren't.
+    """
+    want = (model_id or "").strip().lower()
+    if not want:
+        return None
+    for s in CORPUS.values():
+        for alias in (s.key, s.repo, s.endpoint, s.hf_endpoint):
+            if alias and alias.lower() == want:
+                return s
+    return None
+
+
+def _pin_aliases(pinned: str) -> list[str]:
+    """Every id that names the SAME model as `pinned` (its corpus row, if any).
+
+    A corpus model is reachable under four spellings — `muse-glimmer-30b`, the
+    HF repo, the OpenRouter slug, the HF router id — and they are one model, so
+    a pin written in any of them must match a backend serving any other.
+    """
+    s = corpus_entry(pinned)
+    if s is None:
+        return [pinned.strip()]
+    return [a for a in (s.key, s.repo, s.endpoint, s.hf_endpoint) if a]
+
+
+def same_model(served: str, wanted: str) -> bool:
+    """True only when `served` IS `wanted` — never a family or fragment match.
+
+    Two tolerances, both measured rather than assumed:
+
+    * case. The HF router serves `google/gemma-4-26B-A4B-it` while the corpus
+      writes `google/gemma-4-26b-a4b-it` (checked against /v1/models on
+      2026-08-12). That is one repo, and a case-exact compare would refuse a
+      model that is in fact being served.
+    * an ollama `:tag`. `mymodel:q4_K_M` is a BUILD of `mymodel`, not another
+      model — so it matches, and the *tag* is what gets stamped into
+      `namer_model`, because the quantisation is part of what answered.
+
+    Nothing else matches. `_openai_pick_model`'s substring fallback is exactly
+    the substitution a pin exists to forbid, so the pinned path never uses it.
+    """
+    a, b = (served or "").strip().lower(), (wanted or "").strip().lower()
+    if not a or not b:
+        return False
+    return a == b or a.split(":", 1)[0] == b or a == b.split(":", 1)[0]
+
+
+def _serves_pin(served: str, pinned: str) -> bool:
+    return any(same_model(served, alias) for alias in _pin_aliases(pinned))
+
+
+# --- the cost gate --------------------------------------------------------
+
+
+def _is_free(model_id: str, s: ModelSpec | None) -> bool:
+    """A genuinely $0 endpoint. Corpus price wins; otherwise the `:free` suffix
+    OpenRouter uses to mark its no-charge variants."""
+    if s is not None:
+        return s.usd_in == 0.0 and s.usd_out == 0.0
+    return model_id.strip().endswith(":free")
+
+
+def _alternatives(exclude: str, n_clusters: int, batch_size: int) -> list[tuple[str, str, float]]:
+    """Cheaper corpus models for this job, cheapest first. Listed for a human
+    to choose from — deliberately never auto-selected."""
+    rows = []
+    for s in CORPUS.values():
+        if s.key == exclude:
+            continue
+        rows.append((s.key, s.endpoint, estimate_naming_cost(n_clusters, s.key, batch_size)))
+    return sorted(rows, key=lambda r: r[2])
+
+
+def cost_gate(
+    model_id: str,
+    n_clusters: int,
+    max_cost_usd: float = DEFAULT_MAX_COST_USD,
+    batch_size: int = 15,
+) -> float | None:
+    """Estimate the spend before sending. Returns USD, or None if unpriceable.
+
+    Raises `NamerBudgetError` over budget. It never returns a *different* model
+    to fit the ceiling: the alternatives go in the message for a human to pick
+    from, because swapping the model silently changes what the map is evidence
+    of — the exact failure `NamerIdentityError` exists to prevent, arrived at
+    from the money side instead of the reachability side.
+
+    A model with no corpus row cannot be priced (most OpenRouter slugs), so the
+    ceiling is unenforceable for it and this says so rather than pretending.
+    """
+    s = corpus_entry(model_id)
+    if _is_free(model_id, s):
+        return 0.0
+    if s is None:
+        print(
+            f"  cost: {model_id} has no corpus price — the "
+            f"${max_cost_usd:.2f} ceiling cannot be enforced for it"
+        )
+        return None
+
+    est = estimate_naming_cost(n_clusters, s.key, batch_size)
+    if est <= max_cost_usd:
+        print(
+            f"  cost: ~${est:.4f} to name {n_clusters} clusters on "
+            f"{s.endpoint} (ceiling ${max_cost_usd:.2f}) — proceeding"
+        )
+        return est
+
+    batches = -(-n_clusters // batch_size)
+    lines = [
+        f"naming {n_clusters} clusters on {s.endpoint} would cost about "
+        f"${est:.4f}, over the ${max_cost_usd:.2f} ceiling (--max-cost-usd).",
+        f"  {batches} batches x {batch_size} clusters, ~1500 prompt + ~400 "
+        f"completion tokens each, at ${s.usd_in}/M in and ${s.usd_out}/M out.",
+        "cheaper corpus models for this job — NOT selected, because a silent "
+        "downgrade would change which model the map is evidence of:",
+    ]
+    for key, endpoint, alt in _alternatives(s.key, n_clusters, batch_size):
+        if alt < est:
+            lines.append(f"    {key:<16} {endpoint:<34} ~${alt:.4f}")
+    lines.append(
+        f"re-run with --namer-model <one of the above>, or raise the ceiling "
+        f"with --max-cost-usd {est:.4f}"
+    )
+    raise NamerBudgetError("\n".join(lines))
+
+
+# --- remote OpenAI-protocol endpoints (OpenRouter, HF Inference Providers) --
+
 
 def _load_openrouter_key(env_file: str | None) -> str | None:
     """os.environ first, then the last uncommented OPENROUTER_API_KEY= in the
     .env file."""
-    key = os.environ.get("OPENROUTER_API_KEY")
+    return _load_key("OPENROUTER_API_KEY", env_file)
+
+
+def _load_key(var: str, env_file: str | None) -> str | None:
+    """os.environ first, then the last uncommented `<var>=` in the .env file."""
+    key = os.environ.get(var)
     if key:
         return key.strip()
     path = Path(env_file or _DEFAULT_ENV_FILE).expanduser()
@@ -84,9 +277,134 @@ def _load_openrouter_key(env_file: str | None) -> str | None:
     found = None
     for line in path.read_text().splitlines():
         s = line.strip()
-        if s.startswith("OPENROUTER_API_KEY="):
+        if s.startswith(f"{var}="):
             found = s.split("=", 1)[1].strip().strip("'\"")
     return found or None
+
+
+def _load_hf_token(env_file: str | None) -> str | None:
+    """HF_TOKEN / HUGGINGFACE_HUB_TOKEN, the .env file, then the CLI's own
+    token file — the same order `huggingface_hub` itself resolves in, so a box
+    already logged in with `hf auth login` needs no extra configuration."""
+    for var in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"):
+        tok = _load_key(var, env_file)
+        if tok:
+            return tok
+    path = Path(_HF_TOKEN_FILE).expanduser()
+    if path.exists():
+        tok = path.read_text().strip()
+        if tok:
+            return tok
+    return None
+
+
+def _remote_body(reps: dict[int, list[str]], batch: list[int], model: str) -> dict:
+    """The one request shape both remotes send, so they cannot drift apart."""
+    return {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _SYSTEM},
+            {
+                "role": "user",
+                "content": "Name each cluster.\n\n" + _batch_lines(reps, batch),
+            },
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "cluster_titles",
+                "strict": True,
+                "schema": _SCHEMA,
+            },
+        },
+        "max_tokens": 2000,
+        "temperature": 0.2,
+    }
+
+
+def _accumulate_usage(payload: dict, usage: dict) -> None:
+    """Add one response's reported token counts to the running total.
+
+    Actual usage, not the estimate, is what gets stamped — the estimate is an
+    upper bound by construction (see corpus.estimate_naming_cost) and reporting
+    it as the cost would overstate every run.
+    """
+    got = payload.get("usage") or {}
+    usage["prompt_tokens"] += int(got.get("prompt_tokens") or 0)
+    usage["completion_tokens"] += int(got.get("completion_tokens") or 0)
+    if got.get("cost") is not None:  # OpenRouter's own authoritative number
+        usage["cost"] = (usage.get("cost") or 0.0) + float(got["cost"])
+
+
+def actual_cost(model_id: str, usage: dict) -> float | None:
+    """USD actually spent, from reported usage. None when unpriceable.
+
+    The provider's own `cost` wins when it reports one; otherwise the corpus's
+    measured per-token prices are applied to the reported token counts.
+    """
+    if usage.get("cost") is not None:
+        return round(float(usage["cost"]), 8)
+    s = corpus_entry(model_id)
+    if s is None:
+        return None
+    if not (usage.get("prompt_tokens") or usage.get("completion_tokens")):
+        return None
+    # 8 places, not 6: one naming batch on Ling costs $0.000027, and rounding a
+    # real spend to $0.00 is the kind of "free" that stops being true at scale
+    return round(
+        (usage["prompt_tokens"] * s.usd_in + usage["completion_tokens"] * s.usd_out)
+        / 1e6,
+        8,
+    )
+
+
+def _name_with_remote(
+    reps: dict[int, list[str]],
+    url: str,
+    headers: dict[str, str],
+    model: str,
+    batch_size: int = 15,
+    usage: dict | None = None,
+    expect_model: str | None = None,
+    timeout: float = 120.0,
+) -> dict[int, str]:
+    """Batched structured naming against an OpenAI-protocol remote.
+
+    Shared by OpenRouter and the HF router: same batching, same json_schema
+    response_format, same parse. The only differences between the two are the
+    URL and the auth header, which is why they are parameters here rather than
+    a second copy of this function.
+
+    `expect_model` is the anti-substitution check on the wire. Both routers echo
+    the model they actually ran in the completion, and a router that quietly
+    served a neighbour (a `:free` variant, a provider's own repack) would
+    otherwise be indistinguishable from one that honoured the request.
+    """
+    titles: dict[int, str] = {}
+    cids = sorted(reps)
+    for start in range(0, len(cids), batch_size):
+        batch = cids[start : start + batch_size]
+        body = json.dumps(_remote_body(reps, batch, model)).encode()
+        req = urllib.request.Request(url, data=body, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            payload = json.load(r)
+        if "choices" not in payload:
+            raise RuntimeError(f"{url} returned no choices: {str(payload)[:200]}")
+        served = str(payload.get("model") or "")
+        if expect_model and served and not same_model(served, expect_model):
+            raise NamerIdentityError(
+                f"asked {url} for {expect_model!r} and it answered as "
+                f"{served!r} — a different model's titles are not this "
+                "model's semantics, so the reply is discarded"
+            )
+        if usage is not None:
+            _accumulate_usage(payload, usage)
+        content = payload["choices"][0]["message"].get("content") or ""
+        for item in json_object(content).get("titles", []):
+            cid = int(item["id"])
+            if cid in reps:  # a hallucinated id must not invent a cluster
+                titles[cid] = str(item["title"]).strip() or "unnamed"
+    return titles
 
 
 def _name_with_openrouter(
@@ -94,59 +412,75 @@ def _name_with_openrouter(
     model: str,
     env_file: str | None,
     batch_size: int = 15,
+    usage: dict | None = None,
+    expect_model: str | None = None,
 ) -> dict[int, str]:
     key = _load_openrouter_key(env_file)
     if not key:
         raise RuntimeError("no OPENROUTER_API_KEY in env or .env file")
-    headers = {
+    body_headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
         "X-Title": "Nebul.AI",
     }
-    titles: dict[int, str] = {}
-    cids = sorted(reps)
-    for start in range(0, len(cids), batch_size):
-        batch = cids[start : start + batch_size]
-        body = json.dumps(
-            {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": _SYSTEM},
-                    {
-                        "role": "user",
-                        "content": "Name each cluster.\n\n" + _batch_lines(reps, batch),
-                    },
-                ],
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "cluster_titles",
-                        "strict": True,
-                        "schema": _SCHEMA,
-                    },
-                },
-                "max_tokens": 2000,
-                "temperature": 0.2,
-            }
-        ).encode()
-        req = urllib.request.Request(_OPENROUTER_URL, data=body, headers=headers)
-        with urllib.request.urlopen(req, timeout=120) as r:
-            content = json.load(r)["choices"][0]["message"]["content"]
-        for item in json.loads(content)["titles"]:
-            titles[int(item["id"])] = str(item["title"]).strip()
-    return titles
+    return _name_with_remote(
+        reps,
+        _OPENROUTER_URL,
+        body_headers,
+        model,
+        batch_size=batch_size,
+        usage=usage,
+        expect_model=expect_model,
+    )
+
+
+def _name_with_hf(
+    reps: dict[int, list[str]],
+    model: str,
+    env_file: str | None,
+    batch_size: int = 15,
+    usage: dict | None = None,
+    expect_model: str | None = None,
+) -> dict[int, str]:
+    """Name via HF Inference Providers' OpenAI-compatible router.
+
+    The model id here is the HF repo (`meta-models/Muse-Glimmer-30B`), not an
+    OpenRouter slug; the router picks the provider serving it. Corpus rows carry
+    `hf_endpoint=None` where no provider serves the model at all (Ling), and
+    that is a refusal, never a reroute to a different model.
+    """
+    token = _load_hf_token(env_file)
+    if not token:
+        raise RuntimeError(
+            "no HF token in HF_TOKEN / HUGGINGFACE_HUB_TOKEN, the .env file, or "
+            f"{_HF_TOKEN_FILE}"
+        )
+    return _name_with_remote(
+        reps,
+        _HF_ROUTER_URL,
+        {"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        model,
+        batch_size=batch_size,
+        usage=usage,
+        expect_model=expect_model,
+    )
 
 
 # --- ollama ---------------------------------------------------
 
-def _ollama_pick_model(host: str, preferred: str) -> str | None:
+def _ollama_tags(host: str) -> list[str]:
+    """Text-capable model tags on an ollama server ([] when unreachable)."""
     try:
         with urllib.request.urlopen(f"{host}/api/tags", timeout=3) as r:
             tags = [m["name"] for m in json.load(r).get("models", [])]
     except Exception:
-        return None
+        return []
     # never pick an embedding model for text generation
-    tags = [t for t in tags if "embed" not in t.lower()]
+    return [t for t in tags if "embed" not in t.lower()]
+
+
+def _ollama_pick_model(host: str, preferred: str) -> str | None:
+    tags = _ollama_tags(host)
     if not tags:
         return None
     for t in tags:
@@ -274,15 +608,27 @@ def json_object(text: str) -> dict:
     raise ValueError(f"unbalanced JSON in reply: {text[:200]!r}")
 
 
-def _openai_pick_model(host: str, preferred: str, api_key: str | None = None) -> str | None:
-    """Resolve a chat model id on an OpenAI-compatible server, or None."""
+def _openai_list_models(host: str, api_key: str | None = None) -> list[str]:
+    """Model ids advertised by an OpenAI-compatible server ([] if unreachable).
+
+    Split out from _openai_pick_model because the PINNED path must compare
+    against this raw list itself: the picker's substring fallback below is
+    exactly the "close enough" match that a pinned identity forbids.
+    """
     req = urllib.request.Request(f"{host.rstrip('/')}/v1/models")
     if api_key:
         req.add_header("Authorization", f"Bearer {api_key}")
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
-            ids = [m["id"] for m in json.load(r).get("data", [])]
+            return [m["id"] for m in json.load(r).get("data", [])]
     except Exception:
+        return []
+
+
+def _openai_pick_model(host: str, preferred: str, api_key: str | None = None) -> str | None:
+    """Resolve a chat model id on an OpenAI-compatible server, or None."""
+    ids = _openai_list_models(host, api_key)
+    if not ids:
         return None
     if preferred and preferred in ids:
         return preferred
@@ -760,6 +1106,52 @@ def placeholder_titles(
     return titles, "none(all-placeholder-labels)"
 
 
+def stamp_identity(
+    meta: dict,
+    backend: str,
+    model: str,
+    identity: str,
+    cost_usd: float | None = None,
+    tokens: dict | None = None,
+) -> None:
+    """Record WHICH model titled this map, on every path including centroid.
+
+    `export_json` splats `units.meta`, so these land in nebulai.json. Without
+    them a map that silently fell through to a different model is
+    indistinguishable from one that used the model the command named — which is
+    the whole failure this module is built against.
+    """
+    meta["namer_backend"] = backend
+    meta["namer_model"] = model
+    meta["namer_identity"] = identity
+    meta["namer_cost_usd"] = cost_usd
+    if tokens and (tokens.get("prompt_tokens") or tokens.get("completion_tokens")):
+        meta["namer_tokens"] = {
+            "prompt": tokens["prompt_tokens"],
+            "completion": tokens["completion_tokens"],
+        }
+
+
+# Chains for `auto` (no identity requirement) — unchanged behaviour, plus the
+# new `hf` remote as an explicit choice.
+_CHAINS: dict[str, list[str]] = {
+    "auto": ["ollama", "openai", "openrouter", "centroid"],
+    "openrouter": ["openrouter", "centroid"],
+    "hf": ["hf", "centroid"],
+    "ollama": ["ollama", "centroid"],
+    "openai": ["openai", "centroid"],
+    "anthropic": ["anthropic", "centroid"],
+    "claude-cli": ["claude-cli", "centroid"],
+    "codex-cli": ["codex-cli", "centroid"],
+    "none": ["centroid"],
+}
+
+# Under a pin the chain is "every host that could serve THIS model", cheapest
+# and most local first — and centroid is absent, because centroid is not the
+# pinned model, it is four token strings joined by a dot.
+_PINNED_AUTO_CHAIN = ["ollama", "openai", "hf", "openrouter"]
+
+
 def name_clusters(
     units: Units,
     cluster_ids: np.ndarray,
@@ -774,82 +1166,184 @@ def name_clusters(
     llm_api_key: str | None = None,
     claude_cli_model: str = "",
     codex_cli_model: str = "",
+    hf_model: str = "",
+    model: str | None = None,
+    max_cost_usd: float = DEFAULT_MAX_COST_USD,
 ) -> tuple[dict[int, str], str]:
-    """Returns ({cluster_id: title}, backend_used)."""
+    """Returns ({cluster_id: title}, backend_used), and stamps `units.meta`.
+
+    `model=` pins an identity: only a backend that can serve THAT exact id may
+    run, and if none can this raises `NamerIdentityError` instead of naming the
+    map with whatever was reachable. Without it the chain behaves exactly as
+    before — but either way `units.meta` records the model that answered.
+    """
     reps = {
         int(cid): _representatives(units, np.where(cluster_ids == cid)[0])
         for cid in sorted(set(cluster_ids.tolist()))
         if cid >= 0
     }
     if not reps:
+        stamp_identity(units.meta, "none", "", "auto")
         return {}, "none"
 
-    chain = {
-        "auto": ["ollama", "openai", "openrouter", "centroid"],
-        "openrouter": ["openrouter", "centroid"],
-        "ollama": ["ollama", "centroid"],
-        "openai": ["openai", "centroid"],
-        "anthropic": ["anthropic", "centroid"],
-        "claude-cli": ["claude-cli", "centroid"],
-        "codex-cli": ["codex-cli", "centroid"],
-        "none": ["centroid"],
-    }[namer]
+    pinned = (model or "").strip() or None
+    identity = "pinned" if pinned else "auto"
+    n = len(reps)
 
-    last_err: Exception | None = None
-    for backend in chain:
-        try:
-            if backend == "openrouter":
-                return (
-                    _name_with_openrouter(reps, openrouter_model, env_file),
-                    f"openrouter:{openrouter_model}",
+    if pinned:
+        if namer == "none":
+            raise NamerIdentityError(
+                f"--namer none names nothing, so it cannot serve the pinned "
+                f"model {pinned!r}; drop one of the two flags"
+            )
+        chain = _PINNED_AUTO_CHAIN if namer == "auto" else [namer]
+    else:
+        chain = _CHAINS[namer]
+
+    usage = {"prompt_tokens": 0, "completion_tokens": 0}
+
+    def run(backend: str) -> tuple[dict[int, str], str, str]:
+        """(titles, label, exact model id that answered) for one backend."""
+        if backend in ("openrouter", "hf"):
+            if pinned:
+                s = corpus_entry(pinned)
+                if backend == "hf" and s is not None and s.hf_endpoint is None:
+                    raise RuntimeError(
+                        f"no HF inference provider serves {s.key} "
+                        f"({s.repo}) — corpus hf_endpoint is None"
+                    )
+                target = (
+                    (s.hf_endpoint if backend == "hf" else s.endpoint)
+                    if s is not None
+                    else pinned
                 )
-            if backend == "ollama":
-                model = _ollama_pick_model(ollama_host, ollama_model)
-                return (
-                    _name_with_ollama(reps, ollama_host, ollama_model),
-                    f"ollama:{model}",
+            else:
+                target = hf_model if backend == "hf" else openrouter_model
+                if backend == "hf" and not target:
+                    raise RuntimeError(
+                        "--namer hf needs a model: pass --namer-model (pinned) "
+                        "or --hf-model"
+                    )
+            cost_gate(target, n, max_cost_usd)
+            fn = _name_with_openrouter if backend == "openrouter" else _name_with_hf
+            titles = fn(
+                reps,
+                target,
+                env_file,
+                usage=usage,
+                expect_model=target if pinned else None,
+            )
+            return titles, f"{backend}:{target}", target
+
+        if backend == "ollama":
+            if pinned:
+                served = next(
+                    (t for t in _ollama_tags(ollama_host) if _serves_pin(t, pinned)),
+                    None,
                 )
-            if backend == "openai":
-                model = _openai_pick_model(llm_host, llm_model, llm_api_key)
-                if model is None:
+                if served is None:
+                    have = _ollama_tags(ollama_host)
+                    raise RuntimeError(
+                        f"ollama at {ollama_host} serves no build of {pinned!r} "
+                        f"(has: {have[:6] or 'nothing reachable'})"
+                    )
+            else:
+                served = _ollama_pick_model(ollama_host, ollama_model)
+            # the *tag* is stamped, not the pin: a q4 build is what answered
+            return (
+                _name_with_ollama(reps, ollama_host, served or ollama_model),
+                f"ollama:{served}",
+                str(served),
+            )
+
+        if backend == "openai":
+            if pinned:
+                # exact only. _openai_pick_model's substring fallback would
+                # happily return a neighbour, which is the substitution bug.
+                ids = _openai_list_models(llm_host, llm_api_key)
+                served = next((i for i in ids if _serves_pin(i, pinned)), None)
+                if served is None:
+                    raise RuntimeError(
+                        f"{llm_host} does not serve {pinned!r} "
+                        f"(it lists: {ids[:6] or 'nothing reachable'})"
+                    )
+            else:
+                served = _openai_pick_model(llm_host, llm_model, llm_api_key)
+                if served is None:
                     raise RuntimeError(
                         f"no chat model on {llm_host} (unreachable, or it serves "
                         "only embedding/rerank/audio models)"
                     )
-                return (
-                    _name_with_openai(reps, llm_host, model, llm_api_key),
-                    f"openai:{model}",
-                )
-            if backend in ("claude-cli", "codex-cli"):
-                fn = (
-                    _name_with_claude_cli
-                    if backend == "claude-cli"
-                    else _name_with_codex_cli
-                )
-                cli_model = (
-                    claude_cli_model if backend == "claude-cli" else codex_cli_model
-                )
-                titles = fn(reps, cli_model)
-                # the model IS the variable under test for these backends, so it
-                # is stamped even when it fell back to the CLI's own default —
-                # 'default' is a question the reader can answer, '' is not
-                label = f"{backend}:{cli_model or 'default'}"
-                if len(titles) < len(reps):
-                    label += f"(partial:{len(titles)}/{len(reps)})"
-                return titles, label
-            if backend == "anthropic":
-                titles = _name_with_anthropic(reps, anthropic_model)
-                # the batch path can come back short if individual requests
-                # errored; say so in the namer rather than letting a map look
-                # fully named when some clusters export an empty title
-                label = f"anthropic:{anthropic_model}"
-                if len(titles) < len(reps):
-                    label += f"(partial:{len(titles)}/{len(reps)})"
-                return titles, label
-            return _name_with_centroid(reps), "centroid"
-        except Exception as e:  # fall through the chain, remember why
+            return (
+                _name_with_openai(reps, llm_host, served, llm_api_key),
+                f"openai:{served}",
+                served,
+            )
+
+        if backend in ("claude-cli", "codex-cli"):
+            fn = (
+                _name_with_claude_cli
+                if backend == "claude-cli"
+                else _name_with_codex_cli
+            )
+            cli_model = pinned or (
+                claude_cli_model if backend == "claude-cli" else codex_cli_model
+            )
+            titles = fn(reps, cli_model)
+            # the model IS the variable under test for these backends, so it
+            # is stamped even when it fell back to the CLI's own default —
+            # 'default' is a question the reader can answer, '' is not
+            label = f"{backend}:{cli_model or 'default'}"
+            if len(titles) < len(reps):
+                label += f"(partial:{len(titles)}/{len(reps)})"
+            return titles, label, cli_model or "default"
+
+        if backend == "anthropic":
+            target = pinned or anthropic_model
+            cost_gate(target, n, max_cost_usd)
+            titles = _name_with_anthropic(reps, target)
+            # the batch path can come back short if individual requests
+            # errored; say so in the namer rather than letting a map look
+            # fully named when some clusters export an empty title
+            label = f"anthropic:{target}"
+            if len(titles) < len(reps):
+                label += f"(partial:{len(titles)}/{len(reps)})"
+            return titles, label, target
+
+        return _name_with_centroid(reps), "centroid", "centroid"
+
+    declined: list[str] = []
+    last_err: Exception | None = None
+    for backend in chain:
+        try:
+            titles, label, used = run(backend)
+        except NamerBudgetError:
+            # terminal on purpose: refusing over budget is the ANSWER, and
+            # falling through to a cheaper model would be the auto-downgrade
+            # the gate exists to prevent
+            raise
+        except Exception as e:
+            if pinned:
+                declined.append(f"{backend}: {type(e).__name__}: {e}")
+                continue
             last_err = e
             print(
                 f"  namer '{backend}' unavailable ({type(e).__name__}: {e}); falling back"
             )
+            continue
+        stamp_identity(
+            units.meta, backend, used, identity, actual_cost(used, usage), usage
+        )
+        return titles, label
+
+    if pinned:
+        reasons = "\n".join(f"  - {d}" for d in declined)
+        raise NamerIdentityError(
+            f"no configured backend can serve the pinned model {pinned!r}, and "
+            "substituting a different model would make this map claim semantics "
+            "it does not have.\n"
+            f"tried {len(declined)} backend(s):\n{reasons}\n"
+            "fix one of those backends, or drop --namer-model to let the chain "
+            "use whatever is reachable (it will be stamped in meta.namer_model)."
+        )
     raise RuntimeError(f"all namers failed: {last_err}")

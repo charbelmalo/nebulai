@@ -7,6 +7,25 @@ different models can be laid out and categorized together honestly — the
 comparison happens in a third-party embedder, never by pretending two models'
 raw geometries share a basis. Also the vector source for the api-embeddings
 token front-end (frontends/api_tokens.py), under the same honesty rule.
+
+Unlike the namer, this module has never had a fall-through chain: the caller
+always names the embedder and no code here picks one, so there is no path by
+which a different embedder is silently substituted. The one gap that DID exist
+is closed by `EmbedIdentityError` below — a multi-model server that ignores the
+`model` field and serves whatever it has loaded.
+
+Reachability, measured 2026-08-12 on this machine: nothing serves it.
+localhost:11434 and localhost:8050 both refuse the connection and the LAN box
+at 192.168.0.200 times out, so `nebulai compare` currently fails after ~12s of
+retry backoff with a RuntimeError from `_embed_batch`, uncaught by the CLI. No
+remote drop-in was added, because there isn't a faithful one: the HF router has
+no /v1/embeddings route at all (GET returns 404), and the only live HF path for
+this embedder is `hf-inference`'s feature-extraction pipeline, whose response
+shape neither branch below parses. The ollama `mxbai-embed-large` tag is also a
+quantised GGUF build of `mixedbread-ai/mxbai-embed-large-v1`, so its vectors
+are not the fp32 repo's vectors — pointing `compare` at the repo would change
+the neutral space, which is precisely the substitution this file must not make
+quietly.
 """
 
 import json
@@ -20,13 +39,37 @@ _DEFAULT_OLLAMA_HOST = "http://localhost:11434"  # local ollama server
 _DEFAULT_EMBED_MODEL = "mxbai-embed-large"
 
 
+class EmbedIdentityError(RuntimeError):
+    """The endpoint served a different embedding model than the one requested.
+
+    `compare` exists to put several models' clusters into ONE neutral space, so
+    which embedder produced the vectors is not a detail — it IS the space. A
+    host that ignores the `model` field and serves whatever it has loaded (the
+    multi-model OpenAI-compatible servers do exactly this) would yield a map
+    stamped `mxbai-embed-large` and positioned by something else. Same rule as
+    backend.name.NamerIdentityError, applied to the embedder.
+    """
+
+
 def parse_embed_response(payload: dict, api: str, host: str, model: str) -> list[list[float]]:
     """Extract embeddings from one response, in input order.
 
     ollama's /api/embed returns {"embeddings": [...]}; OpenAI-compatible
     /v1/embeddings returns {"data": [{"index", "embedding"}, ...]} whose order
     is not guaranteed — sort by index.
+
+    When the response names the model it ran, that name is checked against the
+    one asked for. Servers that omit the field are taken at their word — there
+    is nothing to check against, and refusing them would break every endpoint
+    that simply does not report it.
     """
+    served = str(payload.get("model") or "")
+    if served and model and served.split(":", 1)[0].lower() != model.split(":", 1)[0].lower():
+        raise EmbedIdentityError(
+            f"asked {host} to embed with {model!r} and it answered as "
+            f"{served!r} — a different embedder is a different semantic space, "
+            "so these vectors are not comparable with the rest of the map"
+        )
     if api == "openai":
         data = payload.get("data")
         if not data:

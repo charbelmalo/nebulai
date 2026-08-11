@@ -53,6 +53,10 @@ def _run_tokens(args: argparse.Namespace) -> None:
     dataset_id = args.model.replace("/", "__")
     if args.source == "api":
         dataset_id += f"__api-{args.embed_model.replace('/', '__')}"
+    elif getattr(args, "unembedding", False):
+        # W_U is a different matrix from W_E — never share an output dir (or a
+        # reduction cache) with the embedding map
+        dataset_id += "__unembed"
     out_dir = Path(args.out) / dataset_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -80,11 +84,20 @@ def _run_tokens(args: argparse.Namespace) -> None:
         from .frontends.tokens import load_token_units
 
         units = load_token_units(
-            args.model, center=not args.no_center, max_tokens=args.max_tokens
+            args.model,
+            center=not args.no_center,
+            max_tokens=args.max_tokens,
+            revision=args.revision,
+            remote=args.remote,
+            which="output" if args.unembedding else "input",
         )
+        mb = units.meta["bytes_fetched"] / 1e6
         print(
             f"[1/5] loaded {len(units)} token units from {args.model} "
-            f"(vocab {units.meta['vocab_size']}, curated to {units.meta['kept']}) [{t()}]"
+            f"@{units.meta['revision'][:8]} ({units.meta['which']} / "
+            f"{units.meta['weight_key']}, vocab {units.meta['vocab_size']}, "
+            f"curated to {units.meta['kept']}, {units.meta['source']}, "
+            f"{mb:.0f} MB fetched) [{t()}]"
         )
 
     # UMAP is the expensive step — cache reductions keyed by their params
@@ -96,6 +109,11 @@ def _run_tokens(args: argparse.Namespace) -> None:
         "n_neighbors": args.n_neighbors,
         "seed": args.seed,
     }
+    if args.source != "api":
+        # geometry-identifying params: a cached reduction from a different
+        # revision or matrix is a different cloud, not a cache hit
+        reduce_params["revision"] = units.meta["revision"]
+        reduce_params["which"] = units.meta["which"]
     if args.source == "api":
         # extra keys only for api builds, so existing hf caches stay valid
         reduce_params["source"] = "api"
@@ -158,6 +176,9 @@ def _run_tokens(args: argparse.Namespace) -> None:
         llm_host=args.llm_host,
         llm_model=args.llm_model,
         llm_api_key=args.llm_api_key,
+        hf_model=args.hf_model,
+        model=args.namer_model,
+        max_cost_usd=args.max_cost_usd,
     )
     print(f"[4/5] named {len(titles)} clusters via '{namer_used}' [{t()}]")
 
@@ -309,6 +330,9 @@ def _run_sae(args: argparse.Namespace) -> None:
             llm_host=args.llm_host,
             llm_model=args.llm_model,
             llm_api_key=args.llm_api_key,
+            hf_model=args.hf_model,
+            model=args.namer_model,
+            max_cost_usd=args.max_cost_usd,
         )
     print(f"[4/5] named {len(titles)} clusters via '{namer_used}' [{t()}]")
 
@@ -370,6 +394,14 @@ def _run_neurons(args: argparse.Namespace) -> None:
         )
 
     t = _timer()
+    expert = args.expert
+    if expert is not None and expert not in ("shared", "dense"):
+        try:
+            expert = int(expert)
+        except ValueError:
+            raise SystemExit(
+                f"--expert must be an integer, 'shared' or 'dense', not {expert!r}"
+            ) from None
     units = load_neuron_units(
         model_repo=args.model,
         layer=args.layer,
@@ -377,6 +409,9 @@ def _run_neurons(args: argparse.Namespace) -> None:
         center=args.center,
         labels_source=args.labels,
         out_root=Path(args.out),
+        revision=args.revision,
+        expert=expert,
+        remote=args.remote,
     )
     # arch-aware path (gpt2 c_proj vs llama down_proj) is stamped by the loader
     tensor_path = units.meta["tensor_path"]
@@ -394,6 +429,8 @@ def _run_neurons(args: argparse.Namespace) -> None:
         "layer": args.layer,
         "max_neurons": args.max_neurons,
         "source": args.source,
+        "revision": units.meta["revision"],
+        "expert": units.meta["expert"],
         "center": args.center,
         "cluster_dim": args.cluster_dim,
         "n_neighbors": args.n_neighbors,
@@ -462,6 +499,9 @@ def _run_neurons(args: argparse.Namespace) -> None:
             llm_host=args.llm_host,
             llm_model=args.llm_model,
             llm_api_key=args.llm_api_key,
+            hf_model=args.hf_model,
+            model=args.namer_model,
+            max_cost_usd=args.max_cost_usd,
         )
     print(f"[4/5] named {len(titles)} clusters via '{namer_used}' [{t()}]")
 
@@ -681,6 +721,12 @@ def _run_probe(args: argparse.Namespace) -> None:
             llm_host=args.llm_host,
             llm_model=args.llm_model,
             llm_api_key=args.llm_api_key,
+            hf_model=args.hf_model,
+            # the generator is pinned by the SAME flag as the namer: a probe
+            # run names one model, and the cloud and its titles should not be
+            # able to disagree about which one it was
+            generator_model=args.namer_model,
+            max_cost_usd=args.max_cost_usd,
             reuse_terms=reuse_terms,
             reused_from=reused_from,
         )
@@ -738,6 +784,9 @@ def _run_probe(args: argparse.Namespace) -> None:
         llm_host=args.llm_host,
         llm_model=args.llm_model,
         llm_api_key=args.llm_api_key,
+        hf_model=args.hf_model,
+        model=args.namer_model,
+        max_cost_usd=args.max_cost_usd,
     )
     print(f"[4/5] named {len(titles)} clusters via '{namer_used}' [{t()}]")
 
@@ -845,6 +894,7 @@ def _run_rename(args: argparse.Namespace) -> None:
     points here were built once and are correct, while the namer that titled
     them has been replaced twice. Rebuilding to fix only the titles would
     re-run UMAP over 50k vectors to land back on the same coordinates."""
+    from .backend.name import NamerBudgetError, NamerIdentityError
     from .backend.rename import rename_map, sync_index
 
     out_root = Path(args.out)
@@ -871,10 +921,18 @@ def _run_rename(args: argparse.Namespace) -> None:
                 llm_host=args.llm_host,
                 llm_model=args.llm_model,
                 llm_api_key=args.llm_api_key,
+                hf_model=args.hf_model,
+                model=args.namer_model,
+                max_cost_usd=args.max_cost_usd,
                 claude_cli_model=args.claude_cli_model,
                 codex_cli_model=args.codex_cli_model,
                 env_file=args.env_file,
             )
+        except (NamerIdentityError, NamerBudgetError) as e:
+            # NOT a per-map skip: an unservable pin or a blown budget will hold
+            # for every remaining map too, so skipping would print the same
+            # refusal N times and still exit 0 with nothing renamed
+            raise SystemExit(f"rename: {e}") from e
         except (ValueError, FileNotFoundError, KeyError) as e:
             # a map left with its old titles is a better outcome than a map
             # given invented ones, so this is a skip, not a failure
@@ -967,8 +1025,10 @@ def _run_compare(args: argparse.Namespace) -> None:
 
 def _add_llm_args(sp: argparse.ArgumentParser) -> None:
     """Flags for an OpenAI-compatible chat server (LM Studio, vLLM, llama.cpp,
-    an MLX box on the LAN). Shared by every subcommand that names clusters, so
-    the four namer front-ends cannot drift apart."""
+    an MLX box on the LAN), plus the model-identity and cost-ceiling flags.
+    Shared by every subcommand that names clusters, so the four namer
+    front-ends cannot drift apart."""
+    from .corpus import DEFAULT_MAX_COST_USD as _DEFAULT_MAX_COST_USD
     sp.add_argument(
         "--llm-host",
         default="http://localhost:8050",
@@ -984,6 +1044,30 @@ def _add_llm_args(sp: argparse.ArgumentParser) -> None:
         "--llm-api-key",
         default=None,
         help="bearer token for --llm-host (omit for a keyless local server)",
+    )
+    sp.add_argument(
+        "--namer-model",
+        default=None,
+        help="PIN the naming model: a corpus key (muse-glimmer-30b), an HF repo "
+        "or an endpoint slug. Only a backend serving that exact model may run; "
+        "if none can, the run FAILS instead of titling the map with a different "
+        "model. Omit for 'any reachable namer' — the chain then stamps whatever "
+        "answered into meta.namer_model",
+    )
+    sp.add_argument(
+        "--hf-model",
+        default="",
+        help="model id for --namer hf when nothing is pinned (HF Inference "
+        "Providers router, e.g. meta-models/Muse-Glimmer-30B)",
+    )
+    sp.add_argument(
+        "--max-cost-usd",
+        type=float,
+        default=_DEFAULT_MAX_COST_USD,
+        help=f"ceiling on one command's spend at a paid endpoint (default "
+        f"${_DEFAULT_MAX_COST_USD:.2f}). Over budget the run is REFUSED with the "
+        "estimate and the cheaper corpus alternatives listed; it never downgrades "
+        "to a cheaper model on your behalf. A $0.00 endpoint skips the gate",
     )
 
 
@@ -1031,6 +1115,27 @@ def main() -> None:
     t.add_argument(
         "--no-center", action="store_true", help="skip mean-centering W_E"
     )
+    t.add_argument(
+        "--revision",
+        default="main",
+        help="HF branch/tag/sha for the weights (default: main; the resolved "
+        "commit sha is stamped into the map's meta, so the run stays "
+        "reproducible after main moves)",
+    )
+    t.add_argument(
+        "--remote",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="read W_E over HTTP range requests instead of downloading the "
+        "checkpoint (default: auto — remote for sharded or >2GB checkpoints, "
+        "which is the only way to reach the 24-208GB corpus models)",
+    )
+    t.add_argument(
+        "--unembedding",
+        action="store_true",
+        help="map W_U (lm_head) instead of W_E — refused on tied models, whose "
+        "W_U IS their W_E",
+    )
     t.add_argument("--cluster-dim", type=int, default=10)
     t.add_argument("--n-neighbors", type=int, default=30)
     t.add_argument("--min-cluster-size", type=int, default=None)
@@ -1049,7 +1154,7 @@ def main() -> None:
     )
     t.add_argument(
         "--namer",
-        choices=["auto", "openrouter", "ollama", "openai", "anthropic", "claude-cli", "codex-cli", "none"],
+        choices=["auto", "openrouter", "hf", "ollama", "openai", "anthropic", "claude-cli", "codex-cli", "none"],
         default="auto",
         help="cluster-naming backend "
         "(auto: ollama -> openai -> openrouter -> centroid)",
@@ -1157,7 +1262,7 @@ def main() -> None:
     )
     s.add_argument(
         "--namer",
-        choices=["auto", "openrouter", "ollama", "openai", "anthropic", "claude-cli", "codex-cli", "none"],
+        choices=["auto", "openrouter", "hf", "ollama", "openai", "anthropic", "claude-cli", "codex-cli", "none"],
         default="auto",
         help="cluster-naming backend "
         "(auto: ollama -> openai -> openrouter -> centroid)",
@@ -1249,6 +1354,28 @@ def main() -> None:
         help="mean-center W_out rows (off by default — directions ARE the "
         "semantics; reduce uses cosine)",
     )
+    n.add_argument(
+        "--revision",
+        default="main",
+        help="HF branch/tag/sha for the weights (default: main; the resolved "
+        "commit sha is stamped into the map's meta)",
+    )
+    n.add_argument(
+        "--expert",
+        default=None,
+        help="which write matrix on an MoE layer: an expert index (0..N-1), "
+        "'shared' for a shared expert, or 'dense' for the layer's plain "
+        "mlp.down_proj. Required on MoE layers — a layer has one write matrix "
+        "per expert, and mapping one of 128 under the layer's name would "
+        "misreport what was measured",
+    )
+    n.add_argument(
+        "--remote",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="read the layer over HTTP range requests instead of downloading "
+        "the checkpoint (default: auto — remote for sharded or >2GB models)",
+    )
     n.add_argument("--out", default="out", help="output directory root")
     n.add_argument("--cluster-dim", type=int, default=10)
     n.add_argument("--n-neighbors", type=int, default=30)
@@ -1268,7 +1395,7 @@ def main() -> None:
     )
     n.add_argument(
         "--namer",
-        choices=["auto", "openrouter", "ollama", "openai", "anthropic", "claude-cli", "codex-cli", "none"],
+        choices=["auto", "openrouter", "hf", "ollama", "openai", "anthropic", "claude-cli", "codex-cli", "none"],
         default="auto",
         help="cluster-naming backend "
         "(auto: ollama -> openai -> openrouter -> centroid)",
@@ -1389,13 +1516,15 @@ def main() -> None:
     pr.add_argument(
         "--generator",
         default="auto",
-        choices=["auto", "ollama", "openai", "openrouter", "anthropic"],
+        choices=["auto", "ollama", "openai", "openrouter", "hf", "anthropic"],
         help="which LLM proposes concepts "
-        "(auto: ollama -> openai -> openrouter -> anthropic)",
+        "(auto: ollama -> openai -> openrouter -> anthropic). Pin the exact "
+        "model with --namer-model: the generator is half of what a probe cloud "
+        "measures, so a silent fall-through to another model is a fabrication",
     )
     pr.add_argument(
         "--namer",
-        choices=["auto", "openrouter", "ollama", "openai", "anthropic", "claude-cli", "codex-cli", "none"],
+        choices=["auto", "openrouter", "hf", "ollama", "openai", "anthropic", "claude-cli", "codex-cli", "none"],
         default="auto",
         help="cluster-naming backend "
         "(auto: ollama -> openai -> openrouter -> centroid)",
@@ -1506,7 +1635,7 @@ def main() -> None:
     r.add_argument("--out", default="out", help="output directory root")
     r.add_argument(
         "--namer",
-        choices=["auto", "openrouter", "ollama", "openai", "anthropic", "claude-cli", "codex-cli", "none"],
+        choices=["auto", "openrouter", "hf", "ollama", "openai", "anthropic", "claude-cli", "codex-cli", "none"],
         default="claude-cli",
         help="naming backend (default: claude-cli — it runs on an existing "
         "subscription, so re-titling a whole corpus costs no API spend)",
