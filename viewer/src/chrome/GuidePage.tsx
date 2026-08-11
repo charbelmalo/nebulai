@@ -6,26 +6,50 @@
  *  view so the reader can check the numbers themselves. */
 
 import { appStore } from "../app/store";
-import type { InterpGroup } from "../scene/interp/InterpDriver";
+import type { GuideFormula, InterpGroup } from "../scene/interp/InterpDriver";
 import { GROUP_LABEL, INTERP_FEATURES } from "../scene/interp/registry";
+import { GUIDE_RESEARCH } from "./guideResearch";
 
 const GROUP_ORDER: InterpGroup[] = ["weights", "forward", "sae", "trained", "live"];
 
 const GROUP_SOURCE: Record<InterpGroup, string> = {
-  weights: "Raw weight tensors only — no forward pass. Computed offline in float64.",
-  forward: "One real forward pass on a curated prompt (pick the prompt in Internals).",
-  sae: "Sparse-autoencoder features from downloaded SAE weights.",
-  trained: "A small model trained offline (e.g. a grokking toy model).",
+  weights:
+    "Measurements taken directly from the model’s stored parameters. The model did not " +
+    "process a prompt for these views. Calculations were run offline at high precision.",
+  forward:
+    "Measurements from one complete model run on a prepared prompt. Choose the prompt " +
+    "on the Internals page.",
+  sae:
+    "Patterns found by a sparse autoencoder (SAE), a separate tool that breaks model " +
+    "activity into smaller, reusable features. These views use downloaded SAE parameters.",
+  trained:
+    "Measurements from a small model trained offline for a focused experiment, such as " +
+    "modular addition. It is not GPT-2 unless stated.",
   live:
-    "A real forward pass on text you type — computed on request by a local " +
-    "probe server running the same numpy GPT-2 as every offline bundle " +
-    "(weights stay on your machine; nothing is precomputed).",
+    "Measurements from a complete model run on text you enter. A local server performs " +
+    "the calculation by default, so your prompt and model weights stay on your machine. " +
+    "If you choose a remote server in Settings, your prompt is sent there instead.",
 };
 
 function openInInternals(id: string): void {
   const s = appStore.getState();
   s.setInterpFeature(id);
   s.setPage("interp");
+}
+
+/** MathML has native layout support in every browser we support. Formula markup
+ * comes only from the static feature registry, never from prompts or fetched
+ * data; the matching aria label provides a usable spoken equivalent. */
+function GuideFormulaView({ formula }: { formula: GuideFormula }) {
+  return (
+    <math
+      class="guide-card-formula"
+      aria-label={formula.ariaLabel}
+      role="math"
+      display="block"
+      dangerouslySetInnerHTML={{ __html: formula.mathml }}
+    />
+  );
 }
 
 export function GuidePage() {
@@ -41,23 +65,18 @@ export function GuidePage() {
     <div class="guide-page" role="main">
       <div class="guide-scroll">
         <header class="guide-head">
-          <p class="guide-kicker">Nebul.AI · Internals</p>
-          <h1 class="guide-title">The math behind every view</h1>
+          <p class="guide-kicker">Nebul.AI · Model Guide</p>
+          <h1 class="guide-title">How to read every model view</h1>
           <p class="guide-lede">
-            Each Internals view renders exactly <em>one real computed quantity</em>{" "}
-            from a model — attention, residual norms, singular-value spectra, a
-            positional-embedding DFT, the logit lens. No placeholder data, no fake
-            motion, no misleading encodings: the axes and colors <em>are</em> the
-            numbers, and every view exposes exact hover values. This page states
-            the precise formula and the on-disk source for each one, so the map is
-            defensible — and, where a view has a known honest artifact (an
-            attention sink, a massive activation), it says so.
+            Each view shows one measurement taken from a model. Hover to inspect exact
+            values. This guide explains what the view measures, how to read its colors
+            and axes, how the numbers were calculated, and where the data came from.
+            When a view has an important limitation or known artifact, we call it out.
           </p>
           <p class="guide-count">
-            <strong>{live} of 25</strong> features are live. A feature only appears
-            once its driver renders real data end-to-end; the rest await their
-            source data (SAE weights, gradients, a trained toy model, a live
-            forward pass) and are deliberately not shown.
+            <strong>{live} of 25</strong> planned views are available. We publish a
+            view only after it works from source data to visualization. Views that
+            still need data or computation stay hidden until they are ready.
           </p>
         </header>
 
@@ -78,17 +97,35 @@ export function GuidePage() {
                       class="guide-card-open"
                       onClick={() => openInInternals(f.id)}
                     >
-                      Open in Internals →
+                      Explore this view →
                     </button>
                   </div>
                   <p class="guide-card-blurb">{f.blurb}</p>
                   <div class="guide-card-row">
-                    <span class="guide-card-tag">math</span>
-                    <code class="guide-card-math">{f.math}</code>
+                    <span class="guide-card-tag">Calculation</span>
+                    <div class="guide-card-calculation">
+                      <p class="guide-card-math">{f.math}</p>
+                      {f.formulas?.map((formula, i) => (
+                        <GuideFormulaView key={`${f.id}-formula-${i}`} formula={formula} />
+                      ))}
+                    </div>
                   </div>
                   <div class="guide-card-row">
-                    <span class="guide-card-tag">source</span>
+                    <span class="guide-card-tag">Data source</span>
                     <span class="guide-card-source">{f.source}</span>
+                  </div>
+                  <div class="guide-card-row">
+                    <span class="guide-card-tag">Research</span>
+                    <ol class="guide-card-research">
+                      {GUIDE_RESEARCH[f.id].map((source) => (
+                        <li key={source.url}>
+                          <a href={source.url} target="_blank" rel="noreferrer">
+                            {source.title}
+                          </a>
+                          <span>{source.citation}</span>
+                        </li>
+                      ))}
+                    </ol>
                   </div>
                   {f.legend && (
                     <ul class="guide-card-legend">
@@ -111,13 +148,12 @@ export function GuidePage() {
 
         <footer class="guide-foot">
           <p>
-            Reproduce these bundles with{" "}
-            <span class="interp-kbd">nebulai interp --model &lt;id&gt;</span> — it
-            runs the forward pass, captures attention / residual norms / the logit
-            lens, and SVD-decomposes the weights, writing{" "}
-            <span class="interp-kbd">out/&lt;id&gt;/interp/*.json</span>. The viewer
-            reads exactly those files; nothing here is synthesized in the browser
-            beyond the stated transforms (DFT, SVD summaries, attention rollout).
+            To rebuild the data, run{" "}
+            <span class="interp-kbd">nebulai interp --model &lt;id&gt;</span>. This runs
+            the model, records the measurements used by the views, and saves them
+            under <span class="interp-kbd">out/&lt;id&gt;/interp/*.json</span>. The
+            browser reads those files and only applies the transformations named in
+            this guide.
           </p>
         </footer>
       </div>

@@ -1713,24 +1713,76 @@ body.page-seer #stage {
 }
 .guide-card-tag {
   flex: 0 0 auto;
-  width: 46px;
+  width: 72px;
   padding-top: 2px;
   font: 650 9.5px/1.2 var(--font-mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-faint);
 }
-.guide-card-math {
+.guide-card-calculation {
   flex: 1;
-  font: 500 11.5px/1.55 var(--font-mono);
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+.guide-card-math {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
   color: var(--text);
   overflow-wrap: anywhere;
+}
+.guide-card-formula {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  box-sizing: border-box;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--hairline) 88%, var(--text-faint));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: nowrap;
+  scrollbar-width: thin;
 }
 .guide-card-source {
   flex: 1;
   font-size: 11.5px;
   line-height: 1.55;
   color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.guide-card-research {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding-left: 17px;
+  display: grid;
+  gap: 5px;
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+.guide-card-research li {
+  padding-left: 2px;
+  color: var(--text-faint);
+}
+.guide-card-research a {
+  color: var(--accent);
+  text-decoration: none;
+  text-underline-offset: 3px;
+}
+.guide-card-research a:hover,
+.guide-card-research a:focus-visible {
+  text-decoration: underline;
+}
+.guide-card-research span {
+  display: block;
+  margin-top: 1px;
+  color: var(--text-faint);
 }
 .guide-card-legend {
   list-style: none;
@@ -1769,6 +1821,28 @@ body.page-seer #stage {
 @media (max-width: 720px) {
   .guide-cards {
     grid-template-columns: 1fr;
+  }
+  .guide-card-head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+  }
+  .guide-card-open {
+    grid-column: 2;
+    justify-self: start;
+  }
+  .guide-card-row {
+    display: block;
+  }
+  .guide-card-tag {
+    display: block;
+    width: auto;
+    margin-bottom: 7px;
+    padding-top: 0;
+  }
+  .guide-card-formula {
+    padding: 7px;
+    font-size: 11px;
   }
   .guide-title {
     font-size: 28px;

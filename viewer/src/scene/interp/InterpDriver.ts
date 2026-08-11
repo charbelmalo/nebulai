@@ -56,6 +56,16 @@ export interface LegendKey {
   rgb: string;
 }
 
+/** A typeset formula shown alongside the plain-language calculation on /guide.
+ *  `mathml` is a static, registry-owned MathML fragment (never user input), so
+ *  the guide can use the browser's native mathematical layout without adding a
+ *  second rendering dependency to the viewer. `ariaLabel` remains the clear
+ *  spoken equivalent for assistive technology. */
+export interface GuideFormula {
+  mathml: string;
+  ariaLabel: string;
+}
+
 /** One entry in the Internals feature rail. `n` is the feature's number in the
  *  25-feature spec; `blurb` states the exact real quantity (shown as the
  *  legend subtitle and on /guide). Only IMPLEMENTED features are registered —
@@ -67,10 +77,13 @@ export interface InterpFeature {
   label: string;
   group: InterpGroup;
   blurb: string;
-  /** The exact quantity/formula the view renders, in one plain-text line (kept
-   *  ASCII-mathy, not LaTeX — it drops straight into /guide). REQUIRED so a live
-   *  feature can never ship without stating its math. */
+  /** A plain-language account of the exact quantity the view renders. REQUIRED
+   *  so a live feature can never ship without stating its calculation. */
   math: string;
+  /** Native MathML equations for any symbolic part of `math`. These supplement
+   *  the explanation rather than replacing it, so formulas stay readable to
+   *  people who do not use mathematical notation. */
+  formulas?: GuideFormula[];
   /** Which bundle field(s) the numbers come from, and how they were computed
    *  offline (the provenance line on /guide). REQUIRED for the same reason. */
   source: string;
