@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <!-- Seer's own mark: an eye-shaped lens on the run, not Nebulai's nebula.
+         Kept as a data URI so the page needs no second request. -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M3 16c4-7 9-10.5 13-10.5S25 9 29 16c-4 7-9 10.5-13 10.5S7 23 3 16z' fill='none' stroke='%2346c8eb' stroke-width='2.4'/%3E%3Ccircle cx='16' cy='16' r='4.4' fill='%23f5c33b'/%3E%3C/svg%3E"
+    />
+    <title>Seer — agent runs</title>
+  </head>
+  <body>
+    <!-- No #stage here, and that is the point: Seer's three pages each own
+         their own canvas inside their own fixed panel. The layered
+         stage/overlay stack in index.html belongs to the atlas drivers, none
+         of which are in this bundle. -->
+    <div id="chrome"></div>
+    <script type="module" src="/src/seer-main.ts"></script>
+  </body>
+</html>

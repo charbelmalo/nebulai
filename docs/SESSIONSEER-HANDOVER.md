@@ -32,14 +32,17 @@ whose capture process died).
 ## 2. Running it
 
 ```bash
-PYTHONPATH=src "$REPO"/.venv/bin/python -m nebulai seer serve --watch
+PYTHONPATH=src "$REPO"/.venv/bin/python -m nebulai.seer.cli serve --watch
 ```
 
 `$REPO` is the repo root. The venv lives there, not in a worktree: `.venv/`
 beside `src/`, so a worktree runs the root interpreter against its own `src`.
-`--root <dir>` sets the event-log root and must come **before** the subcommand
-(`nebulai seer --root X serve`, not `serve --root X`) — it is an argument of the
-`seer` parser, not of `serve`.
+Seer is its own command, not a `nebulai` subcommand — `nebulai` never imports
+`nebulai.seer` — so an installed venv can also just run `seer serve --watch`
+directly (`.venv/bin/seer`, or `uv run seer serve --watch`). `--root <dir>`
+sets the event-log root and must come **before** the subcommand
+(`seer --root X serve`, not `serve --root X`) — it is an argument of the
+top-level `seer` parser, not of `serve`.
 
 Tests:
 
@@ -249,12 +252,15 @@ line.
 ## 5. Gotchas that cost time
 
 - **A running `seer serve` does not reload changed code.** An adapter fix that
-  "did not work" was a stale process. `pkill -f "nebulai seer"`, restart,
+  "did not work" was a stale process. `pkill -f "seer serve"`, restart,
   re-fire.
 - The Bash tool's working directory resets to the worktree root between calls —
   use absolute paths for anything under `viewer/`.
-- The viewer's Seer page is at `#page=seer`, but changing `location.hash` on an
-  already-loaded page does not re-route; reload, or click the nav pill.
+- Seer is its own app entry: open `seer.html` (not `index.html#page=seer` — the
+  Nebulai entry drops any page it does not own). Its three pages are Live
+  (`#page=seer`), Transcripts (`#page=sessions`) and Topics (`#page=snapshot`);
+  changing `location.hash` on an already-loaded page does not re-route, so
+  reload or click the nav pill.
 - There may be more than one vite on the box. Use the port `preview_list`
   reports for *this* worktree; another worktree's dev server will happily serve
   a stale bundle that looks almost right.

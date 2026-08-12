@@ -36,31 +36,13 @@ it. `export_json` splats `units.meta`, so those keys land in `nebulai.json`.
 import json
 import os
 import urllib.request
-from pathlib import Path
 
 import numpy as np
 
-from ..corpus import CORPUS, DEFAULT_MAX_COST_USD, ModelSpec, estimate_naming_cost
+from .. import llm
+from ..corpus import DEFAULT_MAX_COST_USD
+from ..llm import NamerBudgetError, NamerIdentityError  # re-exported for callers
 from ..units import Units
-
-
-class NamerIdentityError(RuntimeError):
-    """A pinned model could not be served, and substituting is not allowed.
-
-    Raised only when the caller pinned an identity (`model=` / `--namer-model`).
-    In `auto` there is no identity to violate, so the chain still falls through
-    — it just has to stamp whatever answered.
-    """
-
-
-class NamerBudgetError(RuntimeError):
-    """The estimated spend exceeds the ceiling, so nothing was sent.
-
-    Deliberately terminal: it is NOT caught by the fall-through chain. Quietly
-    continuing to a cheaper model after refusing would be the auto-downgrade
-    this exists to prevent, and quietly continuing to centroid would hide a
-    refusal the human asked to be told about.
-    """
 
 _SYSTEM = (
     "You name clusters of tokens drawn from a language model's vocabulary. "
@@ -91,15 +73,6 @@ _SCHEMA = {
     "additionalProperties": False,
 }
 
-_DEFAULT_ENV_FILE = "~/.config/nebulai/.env"
-_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-# HF Inference Providers speak the OpenAI chat protocol behind one router, so
-# the same request/parse code serves both remotes — see _name_with_remote.
-_HF_ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
-_HF_TOKEN_FILE = "~/.cache/huggingface/token"
-_DEFAULT_OLLAMA_HOST = "http://localhost:11434"  # local ollama server
-_DEFAULT_LLM_HOST = "http://localhost:8050"  # OpenAI-compatible chat server
-
 
 def _representatives(
     units: Units, member_idx: np.ndarray, k: int = 20
@@ -119,183 +92,7 @@ def _batch_lines(reps: dict[int, list[str]], cids: list[int]) -> str:
     )
 
 
-# --- model identity -------------------------------------------------------
-#
-# The whole point of the corpus is that `endpoint` is a pinned model id. These
-# helpers are what stop a pin from drifting into a family or a neighbour.
-
-
-def corpus_entry(model_id: str) -> ModelSpec | None:
-    """The corpus spec this id names, by key / repo / endpoint / hf_endpoint.
-
-    `corpus.spec()` raises and does not know about `hf_endpoint`; naming needs a
-    lookup that can also say "not in the corpus" without an exception, because
-    most OpenRouter slugs legitimately aren't.
-    """
-    want = (model_id or "").strip().lower()
-    if not want:
-        return None
-    for s in CORPUS.values():
-        for alias in (s.key, s.repo, s.endpoint, s.hf_endpoint):
-            if alias and alias.lower() == want:
-                return s
-    return None
-
-
-def _pin_aliases(pinned: str) -> list[str]:
-    """Every id that names the SAME model as `pinned` (its corpus row, if any).
-
-    A corpus model is reachable under four spellings — `muse-glimmer-30b`, the
-    HF repo, the OpenRouter slug, the HF router id — and they are one model, so
-    a pin written in any of them must match a backend serving any other.
-    """
-    s = corpus_entry(pinned)
-    if s is None:
-        return [pinned.strip()]
-    return [a for a in (s.key, s.repo, s.endpoint, s.hf_endpoint) if a]
-
-
-def same_model(served: str, wanted: str) -> bool:
-    """True only when `served` IS `wanted` — never a family or fragment match.
-
-    Two tolerances, both measured rather than assumed:
-
-    * case. The HF router serves `google/gemma-4-26B-A4B-it` while the corpus
-      writes `google/gemma-4-26b-a4b-it` (checked against /v1/models on
-      2026-08-12). That is one repo, and a case-exact compare would refuse a
-      model that is in fact being served.
-    * an ollama `:tag`. `mymodel:q4_K_M` is a BUILD of `mymodel`, not another
-      model — so it matches, and the *tag* is what gets stamped into
-      `namer_model`, because the quantisation is part of what answered.
-
-    Nothing else matches. `_openai_pick_model`'s substring fallback is exactly
-    the substitution a pin exists to forbid, so the pinned path never uses it.
-    """
-    a, b = (served or "").strip().lower(), (wanted or "").strip().lower()
-    if not a or not b:
-        return False
-    return a == b or a.split(":", 1)[0] == b or a == b.split(":", 1)[0]
-
-
-def _serves_pin(served: str, pinned: str) -> bool:
-    return any(same_model(served, alias) for alias in _pin_aliases(pinned))
-
-
-# --- the cost gate --------------------------------------------------------
-
-
-def _is_free(model_id: str, s: ModelSpec | None) -> bool:
-    """A genuinely $0 endpoint. Corpus price wins; otherwise the `:free` suffix
-    OpenRouter uses to mark its no-charge variants."""
-    if s is not None:
-        return s.usd_in == 0.0 and s.usd_out == 0.0
-    return model_id.strip().endswith(":free")
-
-
-def _alternatives(exclude: str, n_clusters: int, batch_size: int) -> list[tuple[str, str, float]]:
-    """Cheaper corpus models for this job, cheapest first. Listed for a human
-    to choose from — deliberately never auto-selected."""
-    rows = []
-    for s in CORPUS.values():
-        if s.key == exclude:
-            continue
-        rows.append((s.key, s.endpoint, estimate_naming_cost(n_clusters, s.key, batch_size)))
-    return sorted(rows, key=lambda r: r[2])
-
-
-def cost_gate(
-    model_id: str,
-    n_clusters: int,
-    max_cost_usd: float = DEFAULT_MAX_COST_USD,
-    batch_size: int = 15,
-) -> float | None:
-    """Estimate the spend before sending. Returns USD, or None if unpriceable.
-
-    Raises `NamerBudgetError` over budget. It never returns a *different* model
-    to fit the ceiling: the alternatives go in the message for a human to pick
-    from, because swapping the model silently changes what the map is evidence
-    of — the exact failure `NamerIdentityError` exists to prevent, arrived at
-    from the money side instead of the reachability side.
-
-    A model with no corpus row cannot be priced (most OpenRouter slugs), so the
-    ceiling is unenforceable for it and this says so rather than pretending.
-    """
-    s = corpus_entry(model_id)
-    if _is_free(model_id, s):
-        return 0.0
-    if s is None:
-        print(
-            f"  cost: {model_id} has no corpus price — the "
-            f"${max_cost_usd:.2f} ceiling cannot be enforced for it"
-        )
-        return None
-
-    est = estimate_naming_cost(n_clusters, s.key, batch_size)
-    if est <= max_cost_usd:
-        print(
-            f"  cost: ~${est:.4f} to name {n_clusters} clusters on "
-            f"{s.endpoint} (ceiling ${max_cost_usd:.2f}) — proceeding"
-        )
-        return est
-
-    batches = -(-n_clusters // batch_size)
-    lines = [
-        f"naming {n_clusters} clusters on {s.endpoint} would cost about "
-        f"${est:.4f}, over the ${max_cost_usd:.2f} ceiling (--max-cost-usd).",
-        f"  {batches} batches x {batch_size} clusters, ~1500 prompt + ~400 "
-        f"completion tokens each, at ${s.usd_in}/M in and ${s.usd_out}/M out.",
-        "cheaper corpus models for this job — NOT selected, because a silent "
-        "downgrade would change which model the map is evidence of:",
-    ]
-    for key, endpoint, alt in _alternatives(s.key, n_clusters, batch_size):
-        if alt < est:
-            lines.append(f"    {key:<16} {endpoint:<34} ~${alt:.4f}")
-    lines.append(
-        f"re-run with --namer-model <one of the above>, or raise the ceiling "
-        f"with --max-cost-usd {est:.4f}"
-    )
-    raise NamerBudgetError("\n".join(lines))
-
-
 # --- remote OpenAI-protocol endpoints (OpenRouter, HF Inference Providers) --
-
-
-def _load_openrouter_key(env_file: str | None) -> str | None:
-    """os.environ first, then the last uncommented OPENROUTER_API_KEY= in the
-    .env file."""
-    return _load_key("OPENROUTER_API_KEY", env_file)
-
-
-def _load_key(var: str, env_file: str | None) -> str | None:
-    """os.environ first, then the last uncommented `<var>=` in the .env file."""
-    key = os.environ.get(var)
-    if key:
-        return key.strip()
-    path = Path(env_file or _DEFAULT_ENV_FILE).expanduser()
-    if not path.exists():
-        return None
-    found = None
-    for line in path.read_text().splitlines():
-        s = line.strip()
-        if s.startswith(f"{var}="):
-            found = s.split("=", 1)[1].strip().strip("'\"")
-    return found or None
-
-
-def _load_hf_token(env_file: str | None) -> str | None:
-    """HF_TOKEN / HUGGINGFACE_HUB_TOKEN, the .env file, then the CLI's own
-    token file — the same order `huggingface_hub` itself resolves in, so a box
-    already logged in with `hf auth login` needs no extra configuration."""
-    for var in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"):
-        tok = _load_key(var, env_file)
-        if tok:
-            return tok
-    path = Path(_HF_TOKEN_FILE).expanduser()
-    if path.exists():
-        tok = path.read_text().strip()
-        if tok:
-            return tok
-    return None
 
 
 def _remote_body(reps: dict[int, list[str]], batch: list[int], model: str) -> dict:
@@ -320,42 +117,6 @@ def _remote_body(reps: dict[int, list[str]], batch: list[int], model: str) -> di
         "max_tokens": 2000,
         "temperature": 0.2,
     }
-
-
-def _accumulate_usage(payload: dict, usage: dict) -> None:
-    """Add one response's reported token counts to the running total.
-
-    Actual usage, not the estimate, is what gets stamped — the estimate is an
-    upper bound by construction (see corpus.estimate_naming_cost) and reporting
-    it as the cost would overstate every run.
-    """
-    got = payload.get("usage") or {}
-    usage["prompt_tokens"] += int(got.get("prompt_tokens") or 0)
-    usage["completion_tokens"] += int(got.get("completion_tokens") or 0)
-    if got.get("cost") is not None:  # OpenRouter's own authoritative number
-        usage["cost"] = (usage.get("cost") or 0.0) + float(got["cost"])
-
-
-def actual_cost(model_id: str, usage: dict) -> float | None:
-    """USD actually spent, from reported usage. None when unpriceable.
-
-    The provider's own `cost` wins when it reports one; otherwise the corpus's
-    measured per-token prices are applied to the reported token counts.
-    """
-    if usage.get("cost") is not None:
-        return round(float(usage["cost"]), 8)
-    s = corpus_entry(model_id)
-    if s is None:
-        return None
-    if not (usage.get("prompt_tokens") or usage.get("completion_tokens")):
-        return None
-    # 8 places, not 6: one naming batch on Ling costs $0.000027, and rounding a
-    # real spend to $0.00 is the kind of "free" that stops being true at scale
-    return round(
-        (usage["prompt_tokens"] * s.usd_in + usage["completion_tokens"] * s.usd_out)
-        / 1e6,
-        8,
-    )
 
 
 def _name_with_remote(
@@ -391,16 +152,16 @@ def _name_with_remote(
         if "choices" not in payload:
             raise RuntimeError(f"{url} returned no choices: {str(payload)[:200]}")
         served = str(payload.get("model") or "")
-        if expect_model and served and not same_model(served, expect_model):
+        if expect_model and served and not llm.same_model(served, expect_model):
             raise NamerIdentityError(
                 f"asked {url} for {expect_model!r} and it answered as "
                 f"{served!r} — a different model's titles are not this "
                 "model's semantics, so the reply is discarded"
             )
         if usage is not None:
-            _accumulate_usage(payload, usage)
+            llm.accumulate_usage(payload, usage)
         content = payload["choices"][0]["message"].get("content") or ""
-        for item in json_object(content).get("titles", []):
+        for item in llm.json_object(content).get("titles", []):
             cid = int(item["id"])
             if cid in reps:  # a hallucinated id must not invent a cluster
                 titles[cid] = str(item["title"]).strip() or "unnamed"
@@ -415,7 +176,7 @@ def _name_with_openrouter(
     usage: dict | None = None,
     expect_model: str | None = None,
 ) -> dict[int, str]:
-    key = _load_openrouter_key(env_file)
+    key = llm.load_openrouter_key(env_file)
     if not key:
         raise RuntimeError("no OPENROUTER_API_KEY in env or .env file")
     body_headers = {
@@ -425,7 +186,7 @@ def _name_with_openrouter(
     }
     return _name_with_remote(
         reps,
-        _OPENROUTER_URL,
+        llm.OPENROUTER_URL,
         body_headers,
         model,
         batch_size=batch_size,
@@ -449,15 +210,15 @@ def _name_with_hf(
     `hf_endpoint=None` where no provider serves the model at all (Ling), and
     that is a refusal, never a reroute to a different model.
     """
-    token = _load_hf_token(env_file)
+    token = llm.load_hf_token(env_file)
     if not token:
         raise RuntimeError(
             "no HF token in HF_TOKEN / HUGGINGFACE_HUB_TOKEN, the .env file, or "
-            f"{_HF_TOKEN_FILE}"
+            f"{llm.HF_TOKEN_FILE}"
         )
     return _name_with_remote(
         reps,
-        _HF_ROUTER_URL,
+        llm.HF_ROUTER_URL,
         {"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         model,
         batch_size=batch_size,
@@ -468,31 +229,10 @@ def _name_with_hf(
 
 # --- ollama ---------------------------------------------------
 
-def _ollama_tags(host: str) -> list[str]:
-    """Text-capable model tags on an ollama server ([] when unreachable)."""
-    try:
-        with urllib.request.urlopen(f"{host}/api/tags", timeout=3) as r:
-            tags = [m["name"] for m in json.load(r).get("models", [])]
-    except Exception:
-        return []
-    # never pick an embedding model for text generation
-    return [t for t in tags if "embed" not in t.lower()]
-
-
-def _ollama_pick_model(host: str, preferred: str) -> str | None:
-    tags = _ollama_tags(host)
-    if not tags:
-        return None
-    for t in tags:
-        if t == preferred or t.startswith(preferred + ":"):
-            return t
-    return tags[0]
-
-
 def _name_with_ollama(
     reps: dict[int, list[str]], host: str, preferred: str
 ) -> dict[int, str]:
-    model = _ollama_pick_model(host, preferred)
+    model = llm.ollama_pick_model(host, preferred)
     if model is None:
         raise RuntimeError(f"ollama at {host} unreachable or no text models")
     titles: dict[int, str] = {}
@@ -525,191 +265,6 @@ def _name_with_ollama(
 
 # --- OpenAI-compatible chat server ----------------------------------------
 
-# /v1/models on a multi-purpose server (the M4 lists rerankers, whisper, TTS,
-# embedders and a diffusion checkpoint alongside its chat model) — anything
-# matching these is not a text generator and must never be auto-picked.
-# A reasoning model's scratchpad alone ran 300-700 tokens here on trivial
-# prompts and blew past 2048 on a 12-concept expansion. An unused ceiling is
-# free — the model stops when it stops — so this floor is set high enough that
-# truncation is the exception, not the thing every caller has to tune around.
-_MIN_CHAT_TOKENS = 4096
-
-
-class ChatTruncated(RuntimeError):
-    """The model kept generating until it hit the token ceiling.
-
-    Distinct from every other chat failure because it means the opposite thing:
-    an unreachable host or a non-chat model produces no output at all, whereas
-    this one produced *too much*. Callers probing whether a backend works at all
-    should treat it as a pass — see frontends.probe._make_expander, where
-    treating it as a failure retired a perfectly good generator.
-    """
-
-_NON_CHAT_HINTS = (
-    "embed",
-    "rerank",
-    "whisper",
-    "tts",
-    "flux",
-    "nsfw",
-    "clip",
-    "vae",
-    # sentence-transformer encoders whose ids do NOT contain "embed" —
-    # all-MiniLM-L6-v2 is served by the M4 on the chat port too, and picking it
-    # as a generator fails deep in the run with a shape error, not a clear one
-    "minilm",
-    "sentence-transformers",
-    "bge-",
-    "gte-",
-    "e5-",
-)
-
-
-def json_object(text: str) -> dict:
-    """Parse one JSON object out of an LLM reply.
-
-    Servers that honour `response_format` return bare JSON, but the same model
-    behind a server that ignores it wraps the object in ```json fences and
-    sometimes prefaces it with a sentence. Falling back to the first balanced
-    {...} keeps one backend working against both instead of failing on syntax.
-    """
-    s = text.strip()
-    if s.startswith("```"):
-        s = s.split("\n", 1)[-1] if "\n" in s else s
-        s = s.rsplit("```", 1)[0].strip()
-        if s.lower().startswith("json"):
-            s = s[4:].lstrip()
-    try:
-        return json.loads(s)
-    except json.JSONDecodeError:
-        pass
-    start = s.find("{")
-    if start < 0:
-        raise ValueError(f"no JSON object in reply: {text[:200]!r}")
-    depth, in_str, esc = 0, False, False
-    for i in range(start, len(s)):
-        ch = s[i]
-        if in_str:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_str = False
-            continue
-        if ch == '"':
-            in_str = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return json.loads(s[start : i + 1])
-    raise ValueError(f"unbalanced JSON in reply: {text[:200]!r}")
-
-
-def _openai_list_models(host: str, api_key: str | None = None) -> list[str]:
-    """Model ids advertised by an OpenAI-compatible server ([] if unreachable).
-
-    Split out from _openai_pick_model because the PINNED path must compare
-    against this raw list itself: the picker's substring fallback below is
-    exactly the "close enough" match that a pinned identity forbids.
-    """
-    req = urllib.request.Request(f"{host.rstrip('/')}/v1/models")
-    if api_key:
-        req.add_header("Authorization", f"Bearer {api_key}")
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return [m["id"] for m in json.load(r).get("data", [])]
-    except Exception:
-        return []
-
-
-def _openai_pick_model(host: str, preferred: str, api_key: str | None = None) -> str | None:
-    """Resolve a chat model id on an OpenAI-compatible server, or None."""
-    ids = _openai_list_models(host, api_key)
-    if not ids:
-        return None
-    if preferred and preferred in ids:
-        return preferred
-    # a caller-supplied fragment ("qwen") should still resolve rather than
-    # silently falling through to an unrelated model
-    if preferred:
-        for i in ids:
-            if preferred.lower() in i.lower():
-                return i
-    chat = [i for i in ids if not any(h in i.lower() for h in _NON_CHAT_HINTS)]
-    return chat[0] if chat else None
-
-
-def _chat_openai(
-    host: str,
-    model: str,
-    system: str,
-    user: str,
-    schema: dict,
-    schema_name: str,
-    api_key: str | None = None,
-    max_tokens: int = 2000,
-    timeout: float = 300.0,
-) -> dict:
-    """One structured chat completion against an OpenAI-compatible server.
-
-    Reasoning models put their scratchpad in a separate `reasoning_content`
-    field, so `content` is already clean — but json_object() still guards the
-    servers that inline the fences.
-
-    Those same models spend max_tokens on the scratchpad BEFORE emitting any
-    content, and how much is unpredictable — 300-700 tokens for identical-shaped
-    prompts here, but a distilled reasoner burned through 8192 on one ordinary
-    12-concept expansion. A budget sized for the answer alone therefore truncates
-    mid-fence and surfaces as a bogus JSON error, so a `length` finish doubles
-    the budget and retries. Retries are only ever paid on an actual truncation,
-    so the ceiling is set where a genuinely stuck model stops, not where a
-    verbose one does.
-    """
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    budget = max(_MIN_CHAT_TOKENS, max_tokens)
-    for attempt in (1, 2, 3):
-        body = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "max_tokens": budget,
-            "temperature": 0.2,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": schema_name, "strict": True, "schema": schema},
-            },
-        }
-        req = urllib.request.Request(
-            f"{host.rstrip('/')}/v1/chat/completions",
-            data=json.dumps(body).encode(),
-            headers=headers,
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            payload = json.load(r)
-        if "choices" not in payload:
-            raise RuntimeError(f"{host} returned no choices: {str(payload)[:200]}")
-        choice = payload["choices"][0]
-        if choice.get("finish_reason") == "length" and attempt < 3:
-            budget *= 2
-            continue
-        content = choice["message"].get("content") or ""
-        if choice.get("finish_reason") == "length":
-            raise ChatTruncated(
-                f"{model} truncated its reply at {budget} tokens (reasoning "
-                "scratchpad consumed the budget) — raise max_tokens or use a "
-                "smaller batch"
-            )
-        return json_object(content)
-    raise AssertionError("unreachable")
-
 
 def _name_with_openai(
     reps: dict[int, list[str]],
@@ -728,7 +283,7 @@ def _name_with_openai(
     cids = sorted(reps)
     for start in range(0, len(cids), batch_size):
         batch = cids[start : start + batch_size]
-        got = _chat_openai(
+        got = llm.chat_openai(
             host,
             model,
             _SYSTEM,
@@ -799,7 +354,7 @@ def _ingest_titles(text: str, titles: dict[int, str]) -> bool:
     """Merge a CLI reply's titles in place; True if it contributed any."""
     before = len(titles)
     try:
-        for item in json_object(str(text)).get("titles", []):
+        for item in llm.json_object(str(text)).get("titles", []):
             cid, title = item.get("id"), str(item.get("title", "")).strip()
             if cid is not None and title:
                 titles[int(cid)] = title
@@ -1158,10 +713,10 @@ def name_clusters(
     namer: str = "auto",
     openrouter_model: str = "openai/gpt-oss-120b:free",
     ollama_model: str = "liquidai/lfm2.5-1.2b-instruct",
-    ollama_host: str = _DEFAULT_OLLAMA_HOST,
+    ollama_host: str = llm.DEFAULT_OLLAMA_HOST,
     anthropic_model: str = "claude-opus-5",
     env_file: str | None = None,
-    llm_host: str = _DEFAULT_LLM_HOST,
+    llm_host: str = llm.DEFAULT_LLM_HOST,
     llm_model: str = "",
     llm_api_key: str | None = None,
     claude_cli_model: str = "",
@@ -1206,7 +761,7 @@ def name_clusters(
         """(titles, label, exact model id that answered) for one backend."""
         if backend in ("openrouter", "hf"):
             if pinned:
-                s = corpus_entry(pinned)
+                s = llm.corpus_entry(pinned)
                 if backend == "hf" and s is not None and s.hf_endpoint is None:
                     raise RuntimeError(
                         f"no HF inference provider serves {s.key} "
@@ -1224,7 +779,7 @@ def name_clusters(
                         "--namer hf needs a model: pass --namer-model (pinned) "
                         "or --hf-model"
                     )
-            cost_gate(target, n, max_cost_usd)
+            llm.cost_gate(target, n, max_cost_usd)
             fn = _name_with_openrouter if backend == "openrouter" else _name_with_hf
             titles = fn(
                 reps,
@@ -1238,17 +793,17 @@ def name_clusters(
         if backend == "ollama":
             if pinned:
                 served = next(
-                    (t for t in _ollama_tags(ollama_host) if _serves_pin(t, pinned)),
+                    (t for t in llm.ollama_tags(ollama_host) if llm.serves_pin(t, pinned)),
                     None,
                 )
                 if served is None:
-                    have = _ollama_tags(ollama_host)
+                    have = llm.ollama_tags(ollama_host)
                     raise RuntimeError(
                         f"ollama at {ollama_host} serves no build of {pinned!r} "
                         f"(has: {have[:6] or 'nothing reachable'})"
                     )
             else:
-                served = _ollama_pick_model(ollama_host, ollama_model)
+                served = llm.ollama_pick_model(ollama_host, ollama_model)
             # the *tag* is stamped, not the pin: a q4 build is what answered
             return (
                 _name_with_ollama(reps, ollama_host, served or ollama_model),
@@ -1258,17 +813,17 @@ def name_clusters(
 
         if backend == "openai":
             if pinned:
-                # exact only. _openai_pick_model's substring fallback would
+                # exact only. llm.openai_pick_model's substring fallback would
                 # happily return a neighbour, which is the substitution bug.
-                ids = _openai_list_models(llm_host, llm_api_key)
-                served = next((i for i in ids if _serves_pin(i, pinned)), None)
+                ids = llm.openai_list_models(llm_host, llm_api_key)
+                served = next((i for i in ids if llm.serves_pin(i, pinned)), None)
                 if served is None:
                     raise RuntimeError(
                         f"{llm_host} does not serve {pinned!r} "
                         f"(it lists: {ids[:6] or 'nothing reachable'})"
                     )
             else:
-                served = _openai_pick_model(llm_host, llm_model, llm_api_key)
+                served = llm.openai_pick_model(llm_host, llm_model, llm_api_key)
                 if served is None:
                     raise RuntimeError(
                         f"no chat model on {llm_host} (unreachable, or it serves "
@@ -1300,7 +855,7 @@ def name_clusters(
 
         if backend == "anthropic":
             target = pinned or anthropic_model
-            cost_gate(target, n, max_cost_usd)
+            llm.cost_gate(target, n, max_cost_usd)
             titles = _name_with_anthropic(reps, target)
             # the batch path can come back short if individual requests
             # errored; say so in the namer rather than letting a map look
@@ -1332,7 +887,7 @@ def name_clusters(
             )
             continue
         stamp_identity(
-            units.meta, backend, used, identity, actual_cost(used, usage), usage
+            units.meta, backend, used, identity, llm.actual_cost(used, usage), usage
         )
         return titles, label
 

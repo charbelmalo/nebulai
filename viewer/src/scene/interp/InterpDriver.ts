@@ -7,9 +7,9 @@
  *  Kept separate from SceneDriver because interp drivers take an overlay host
  *  for their tooltip/labels and are keyed to a model id (not a Dataset). */
 
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import type { InterpSelection } from "../../app/store";
-import type { StatTile } from "../../chrome/StatStrip";
+import type { StatTile } from "@psychix/viz/StatStrip";
 
 export interface InterpDriver {
   /** When false, the host skips the per-frame RAF entirely — the view is static

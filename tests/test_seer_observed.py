@@ -867,7 +867,7 @@ class TestInstallerArgumentParsing:
     """`install` with no agent named means every agent, and must parse.
 
     argparse runs a `nargs="*"` positional's *default* through its own choices
-    check, so a `default=[]` made the bare `nebulai seer install --apply` die
+    check, so a `default=[]` made the bare `seer install --apply` die
     with `invalid choice: '[]'` — the one invocation the help text implies is
     normal. The command bodies always read "no agents" as "all of them"; only
     the parser stood in the way.

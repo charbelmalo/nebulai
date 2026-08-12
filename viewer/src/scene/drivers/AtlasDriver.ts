@@ -6,7 +6,7 @@
  *  to other drivers directly. */
 
 import * as THREE from "three/webgpu";
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { appStore, type Selection } from "../../app/store";
 import { clusterDegrees, clusterNeighbors, formatCount, knnNeighbors } from "../../data/edges";
 import type { Dataset } from "../../data/loader";

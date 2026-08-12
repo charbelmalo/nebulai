@@ -14,7 +14,7 @@
  *  deck.gl (WebGL2), camera off, static. Source: tuned.json (+ trace slug). */
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import {
   type TunedBundle,
   type TunedCurvePoint,
@@ -22,8 +22,8 @@ import {
   isLiveTrace,
   loadTuned,
 } from "../../data/interp";
-import { ACCENT, dashedSegment, HOT, withAlpha } from "./chart-theme";
-import { InterpTooltip, type TipRow } from "./chart-tooltip";
+import { ACCENT, dashedSegment, HOT, withAlpha } from "@psychix/viz/chart-theme";
+import { InterpTooltip, type TipRow } from "@psychix/viz/chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");

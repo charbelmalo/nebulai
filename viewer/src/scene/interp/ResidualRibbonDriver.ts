@@ -30,14 +30,14 @@
  *     a sheet stretched over this grid would put shaded pixels at (layer,
  *     token) pairs that were never sampled. */
 
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { loadTrace, type TraceBundle } from "../../data/interp";
 import { ChartStage, type BarData, type ChartStageLook } from "./chart-stage";
-import { decadeOn, logSpan } from "./logscale";
-import { InterpTooltip } from "./chart-tooltip";
-import type { RGB } from "./chart-theme";
+import { decadeOn, logSpan } from "@psychix/viz/logscale";
+import { InterpTooltip } from "@psychix/viz/chart-tooltip";
+import type { RGB } from "@psychix/viz/chart-theme";
 import type { InterpDriver } from "./InterpDriver";
-import type { StatTile } from "../../chrome/StatStrip";
+import type { StatTile } from "@psychix/viz/StatStrip";
 
 /** World layout: one lattice cell is 1 unit, the footprint leaves a gap so
  *  neighbouring columns read as separate measurements rather than a ridge. */

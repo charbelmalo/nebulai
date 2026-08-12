@@ -33,7 +33,7 @@ import { appStore } from "../../src/app/store";
 const BASE = "http://seer.test:8125";
 
 beforeEach(() => {
-  appStore.getState().setProbing("seerUrl", BASE);
+  appStore.getState().setSeerConfig("serverUrl", BASE);
   $link.value = "unknown";
   $linkError.value = null;
 });
@@ -70,7 +70,7 @@ describe("fidelity marks", () => {
 
 describe("URL building", () => {
   it("tolerates a trailing slash in the configured base", () => {
-    appStore.getState().setProbing("seerUrl", `${BASE}///`);
+    appStore.getState().setSeerConfig("serverUrl", `${BASE}///`);
     expect(seerBase()).toBe(BASE);
     expect(exportUrl("run_1")).toBe(`${BASE}/seer/export?run_id=run_1&format=jsonl`);
   });
@@ -121,7 +121,7 @@ describe("fetching", () => {
   });
 
   it("refuses to guess a base URL when none is configured", async () => {
-    appStore.getState().setProbing("seerUrl", "");
+    appStore.getState().setSeerConfig("serverUrl", "");
     await expect(fetchRuns()).rejects.toThrow(/no seer server/);
   });
 });

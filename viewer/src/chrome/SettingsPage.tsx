@@ -28,6 +28,7 @@ import {
   $loading,
   $probing,
   $progress,
+  $seer,
   $sessions,
   $settings,
   $settingsOpen,
@@ -38,7 +39,7 @@ import {
   clearSessionAnalyses as clearPersistedSessions,
   deleteSessionAnalysis,
 } from "./sessionStore";
-import { ColorRow, RadioRow, SelectRow, SliderRow, Tabs, TextRow, ToggleRow } from "./controls";
+import { ColorRow, RadioRow, SelectRow, SliderRow, Tabs, TextRow, ToggleRow } from "@psychix/viz/controls";
 import { CATEGORY_ORDER } from "./sessionlog";
 import type { SessionsAppearance, SessionsAxisMode } from "../scene/sessions/appearance";
 
@@ -653,6 +654,11 @@ function SessionsAppearanceControls(props: { a: SessionsAppearance }) {
 
 function ProbingTab() {
   const p = $probing.value;
+  // Seer's collector endpoint is the one row on this tab that is NOT Nebulai's
+  // — it moved to its own slice when Seer got its own entry (slices/seer.ts).
+  // The Settings overlay itself stays shared by both instruments, so the row
+  // stays here rather than being duplicated into a second settings page.
+  const seer = $seer.value;
   const pg = $progress.value;
   const bm = $buildModels.value;
   const health = $buildHealth.value;
@@ -979,10 +985,10 @@ function ProbingTab() {
         <TextRow
           label="SessionSeer server"
           type="url"
-          value={p.seerUrl}
+          value={seer.serverUrl}
           placeholder="http://127.0.0.1:8125"
-          onChange={(v) => appStore.getState().setProbing("seerUrl", v)}
-          hint="Sessions → Seer — nebulai seer serve"
+          onChange={(v) => appStore.getState().setSeerConfig("serverUrl", v)}
+          hint="Seer → Live — seer serve"
         />
       </SettingsSection>
 
@@ -1104,7 +1110,7 @@ function SnapshotTab() {
     <>
       <SettingsSection
         title="Topic presets"
-        hint="Each preset is a case-insensitive keyword list the Snapshot Map watches for. Edit inline; changes apply immediately."
+        hint="Each preset is a case-insensitive keyword list the Topics page watches for. Edit inline; changes apply immediately."
       >
         <ul class="settings-preset-list">
           {snap.topics.map((t) => (

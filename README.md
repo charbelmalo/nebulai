@@ -336,17 +336,18 @@ scripts/probe_endpoints.py                        # corpus reachability + cost m
 
 ## SessionSeer — the agent's trajectory, not the model's concept space
 
-The four front-ends above map what a *model* knows. `nebulai seer` maps what an
+The four front-ends above map what a *model* knows. `seer` maps what an
 *agent* did: it captures Codex, Claude Code and Hermes sessions into one event
 vocabulary and reports on them live. It shares the viewer shell and the
 provenance rules, and shares none of the reduce → cluster → name back-end — a
-trajectory is already low-dimensional and ordered.
+trajectory is already low-dimensional and ordered. It is its own command, not
+a `nebulai` subcommand: `nebulai` never imports it.
 
 ```sh
-uv run nebulai seer run codex "fix the failing test"     # drive one agent and capture it
-uv run nebulai seer run codex "…" --compare-with claude hermes   # same prompt, three agents
-uv run nebulai seer install claude --apply    # hooks, to capture what you run yourself
-uv run nebulai seer serve --watch             # HTTP + SSE for the viewer's Seer page
+uv run seer run codex "fix the failing test"     # drive one agent and capture it
+uv run seer run codex "…" --compare-with claude hermes   # same prompt, three agents
+uv run seer install claude --apply    # hooks, to capture what you run yourself
+uv run seer serve --watch             # HTTP + SSE for the viewer's Seer page
 ```
 
 Every value it reports is labelled `native | deterministic | estimated |

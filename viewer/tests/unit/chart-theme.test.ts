@@ -17,8 +17,8 @@ import {
   rampRgb,
   seriesAlpha,
   withAlpha,
-} from "../../src/scene/interp/chart-theme";
-import { RAMP } from "../../src/styles/tokens";
+} from "@psychix/viz/chart-theme";
+import { RAMP } from "@psychix/viz/tokens";
 
 describe("palette", () => {
   it("hexToRgb parses to 0–255 tuples", () => {

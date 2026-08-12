@@ -14,7 +14,7 @@
  *  deck.gl (WebGL2), camera off, static. Source: sae_acts.json. */
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { appStore, type InterpSelection } from "../../app/store";
 import {
   type SAEActsBundle,
@@ -33,8 +33,8 @@ import {
   type RGB,
   type Seg as ThemeSeg,
   withAlpha,
-} from "./chart-theme";
-import { InterpTooltip, type TipRow } from "./chart-tooltip";
+} from "@psychix/viz/chart-theme";
+import { InterpTooltip, type TipRow } from "@psychix/viz/chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");

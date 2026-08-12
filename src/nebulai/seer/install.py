@@ -225,8 +225,8 @@ def _write_json(p: Path, cfg: dict[str, Any]) -> None:
 # ── Codex ────────────────────────────────────────────────────────────────────
 
 _CODEX_BLOCK = """
-# --- {tag} (added by `nebulai seer install codex`) ---
-# Remove this block, or run `nebulai seer uninstall codex`, to stop capturing.
+# --- {tag} (added by `seer install codex`) ---
+# Remove this block, or run `seer uninstall codex`, to stop capturing.
 [hooks]
 enabled = true
 {entries}
@@ -254,7 +254,7 @@ def _codex_plan(root: Path, config: Path) -> Plan:
         )
         plan.changes.clear()
         plan.manual.append(
-            "Append the block from `nebulai seer install codex --print-block` to"
+            "Append the block from `seer install codex --print-block` to"
             f" {config} yourself, merging it into the [hooks] table already there."
         )
     plan.preserved.append(f"{len(text.splitlines())} existing config lines")
@@ -331,7 +331,7 @@ def hermes_block(root: Path) -> str:
         f'    - command: "{shim_path(root)} hermes {e}"' for e in hook_events("hermes")
     )
     return (
-        f"# --- {TAG} (added by `nebulai seer install hermes`) ---\n"
+        f"# --- {TAG} (added by `seer install hermes`) ---\n"
         "hooks:\n"
         "  shell:\n"
         f"{entries}\n"
@@ -363,7 +363,7 @@ def _hermes_plan(root: Path, config: Path, allowlist: Path) -> Plan:
         )
         plan.changes.clear()
         plan.manual.append(
-            "Merge the block from `nebulai seer install hermes --print-block` into"
+            "Merge the block from `seer install hermes --print-block` into"
             f" the existing `hooks:` block in {config} yourself."
         )
     return plan
@@ -439,7 +439,7 @@ def uninstall(
 
     Removes by tag rather than restoring the backup: a hook the user added after
     installing is not ours to delete, and a wholesale restore would delete it.
-    The backups stay on disk — `nebulai seer install --show-backups` lists them
+    The backups stay on disk — `seer install --show-backups` lists them
     for the case where a config needs to go back exactly.
     """
     cfg = config or CONFIGS[agent]

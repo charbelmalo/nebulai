@@ -25,6 +25,7 @@ import json
 import numpy as np
 import pytest
 
+from nebulai import llm as llm_mod
 from nebulai.backend import name as name_mod
 from nebulai.units import Units
 
@@ -82,8 +83,8 @@ def _no_network(monkeypatch, tmp_path):
     monkeypatch.setattr(name_mod.urllib.request, "urlopen", forbidden)
     for var in ("OPENROUTER_API_KEY", "HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setattr(name_mod, "_HF_TOKEN_FILE", str(tmp_path / "absent-token"))
-    monkeypatch.setattr(name_mod, "_DEFAULT_ENV_FILE", str(tmp_path / "absent.env"))
+    monkeypatch.setattr(llm_mod, "HF_TOKEN_FILE", str(tmp_path / "absent-token"))
+    monkeypatch.setattr(llm_mod, "DEFAULT_ENV_FILE", str(tmp_path / "absent.env"))
 
 
 # --- what counts as the same model ----------------------------------------
@@ -93,13 +94,13 @@ def test_same_model_accepts_case_and_an_ollama_tag_but_nothing_else():
     # measured: the HF router serves `google/gemma-4-26B-A4B-it` while the
     # corpus writes it lowercase — one repo, so a case-exact compare would
     # refuse a model that IS being served
-    assert name_mod.same_model("google/gemma-4-26B-A4B-it", "google/gemma-4-26b-a4b-it")
+    assert llm_mod.same_model("google/gemma-4-26B-A4B-it", "google/gemma-4-26b-a4b-it")
     # a quantisation is a build of the model, not another model
-    assert name_mod.same_model("mistral-nemo:q4_K_M", "mistral-nemo")
+    assert llm_mod.same_model("mistral-nemo:q4_K_M", "mistral-nemo")
     # and these are the substitutions a pin exists to forbid
-    assert not name_mod.same_model("qwen3.6-35b-instruct", "qwen")
-    assert not name_mod.same_model("google/gemma-4-12b-it", "google/gemma-4-26b-a4b-it")
-    assert not name_mod.same_model("", "anything")
+    assert not llm_mod.same_model("qwen3.6-35b-instruct", "qwen")
+    assert not llm_mod.same_model("google/gemma-4-12b-it", "google/gemma-4-26b-a4b-it")
+    assert not llm_mod.same_model("", "anything")
 
 
 def test_a_corpus_model_is_recognised_under_every_one_of_its_spellings():
@@ -111,8 +112,8 @@ def test_a_corpus_model_is_recognised_under_every_one_of_its_spellings():
         "meta-models/Muse-Glimmer-30B",
         "meta/muse-glimmer-30b",
     ):
-        assert name_mod.corpus_entry(spelling).key == "muse-glimmer-30b"
-    assert name_mod.corpus_entry("some/model-nobody-mapped") is None
+        assert llm_mod.corpus_entry(spelling).key == "muse-glimmer-30b"
+    assert llm_mod.corpus_entry("some/model-nobody-mapped") is None
 
 
 # --- pinning refuses rather than substituting ------------------------------
@@ -126,9 +127,9 @@ def test_a_pin_no_backend_serves_refuses_and_never_names_with_another_model(
     labelled Glimmer and titled by something else."""
     answered: list[str] = []
 
-    monkeypatch.setattr(name_mod, "_ollama_tags", lambda host: ["llama3.2:3b"])
+    monkeypatch.setattr(llm_mod, "ollama_tags", lambda host: ["llama3.2:3b"])
     monkeypatch.setattr(
-        name_mod, "_openai_list_models", lambda host, key=None: ["Qwen3.6-35B-A3B"]
+        llm_mod, "openai_list_models", lambda host, key=None: ["Qwen3.6-35B-A3B"]
     )
     # both would have happily produced titles if they were ever reached
     monkeypatch.setattr(
@@ -171,7 +172,7 @@ def test_hf_refuses_a_corpus_model_no_provider_serves(monkeypatch, tmp_path):
     invitation to route the request to whatever the provider does serve."""
     tok = tmp_path / "token"
     tok.write_text("hf_test\n")
-    monkeypatch.setattr(name_mod, "_HF_TOKEN_FILE", str(tok))
+    monkeypatch.setattr(llm_mod, "HF_TOKEN_FILE", str(tok))
 
     units, cids = _units(2)
     with pytest.raises(name_mod.NamerIdentityError) as exc:
@@ -184,10 +185,10 @@ def test_a_pin_the_local_server_does_serve_runs_and_stamps_the_served_id(
 ):
     """The positive control: the same pin, on a box that has it, must actually
     run — otherwise the refusal above proves nothing."""
-    monkeypatch.setattr(name_mod, "_ollama_tags", lambda host: ["nope:1b"])
+    monkeypatch.setattr(llm_mod, "ollama_tags", lambda host: ["nope:1b"])
     monkeypatch.setattr(
-        name_mod,
-        "_openai_list_models",
+        llm_mod,
+        "openai_list_models",
         lambda host, key=None: ["meta-models/Muse-Glimmer-30B"],
     )
     seen: dict = {}
@@ -217,7 +218,7 @@ def test_a_pinned_ollama_build_stamps_the_TAG_that_answered(monkeypatch):
     """`mistral-nemo:q4_K_M` is the model, at a quantisation. The quantisation
     is part of what produced the titles, so the tag is what gets recorded — not
     the tidier string the human typed."""
-    monkeypatch.setattr(name_mod, "_ollama_tags", lambda host: ["mistral-nemo:q4_K_M"])
+    monkeypatch.setattr(llm_mod, "ollama_tags", lambda host: ["mistral-nemo:q4_K_M"])
     monkeypatch.setattr(
         name_mod, "_name_with_ollama", lambda reps, h, m: {cid: "t" for cid in reps}
     )
@@ -234,9 +235,9 @@ def test_a_pinned_ollama_build_stamps_the_TAG_that_answered(monkeypatch):
 def test_auto_still_falls_through_and_stamps_the_identity_that_answered(
     monkeypatch, capsys
 ):
-    monkeypatch.setattr(name_mod, "_ollama_tags", lambda host: [])
+    monkeypatch.setattr(llm_mod, "ollama_tags", lambda host: [])
     monkeypatch.setattr(
-        name_mod, "_openai_list_models", lambda host, key=None: ["Qwen3.6-35B-A3B"]
+        llm_mod, "openai_list_models", lambda host, key=None: ["Qwen3.6-35B-A3B"]
     )
     monkeypatch.setattr(
         name_mod,
@@ -258,8 +259,8 @@ def test_auto_still_falls_through_and_stamps_the_identity_that_answered(
 def test_even_the_centroid_fallback_stamps_an_identity(monkeypatch):
     """A map titled by no model at all must say so in the same field a real
     namer would have filled — an absent stamp reads as 'nobody checked'."""
-    monkeypatch.setattr(name_mod, "_ollama_tags", lambda host: [])
-    monkeypatch.setattr(name_mod, "_openai_list_models", lambda host, key=None: [])
+    monkeypatch.setattr(llm_mod, "ollama_tags", lambda host: [])
+    monkeypatch.setattr(llm_mod, "openai_list_models", lambda host, key=None: [])
 
     units, cids = _units(2)
     _, label = name_mod.name_clusters(units, cids, namer="auto")
@@ -277,10 +278,10 @@ def test_the_gate_passes_at_realistic_sizes():
     """Measured reference points: a 250-cluster map on Glimmer is ~$0.019 and a
     17-map corpus re-name ~$0.33, both well under the $1.00 default. A gate that
     tripped here would be unusable, so pin the numbers."""
-    assert name_mod.cost_gate("meta/muse-glimmer-30b", 250, 1.00) == pytest.approx(
+    assert llm_mod.cost_gate("meta/muse-glimmer-30b", 250, 1.00) == pytest.approx(
         0.0191, abs=5e-4
     )
-    assert name_mod.cost_gate("meta/muse-glimmer-30b", 4250, 1.00) == pytest.approx(
+    assert llm_mod.cost_gate("meta/muse-glimmer-30b", 4250, 1.00) == pytest.approx(
         0.3195, abs=5e-4
     )
 
@@ -288,14 +289,14 @@ def test_the_gate_passes_at_realistic_sizes():
 def test_a_free_endpoint_skips_the_gate_entirely():
     """Gemma-4 is the only genuinely $0 corpus endpoint. A million clusters at a
     $0.00 ceiling still passes, because zero times anything is zero."""
-    assert name_mod.cost_gate("google/gemma-4-26b-a4b-it:free", 1_000_000, 0.0) == 0.0
+    assert llm_mod.cost_gate("google/gemma-4-26b-a4b-it:free", 1_000_000, 0.0) == 0.0
     # recognised through the HF spelling and its casing too
-    assert name_mod.cost_gate("google/gemma-4-26B-A4B-it", 1_000_000, 0.0) == 0.0
+    assert llm_mod.cost_gate("google/gemma-4-26B-A4B-it", 1_000_000, 0.0) == 0.0
 
 
 def test_the_gate_refuses_over_budget_and_names_alternatives_without_picking_one():
-    with pytest.raises(name_mod.NamerBudgetError) as exc:
-        name_mod.cost_gate("meta/muse-glimmer-30b", 20_000, 1.00)
+    with pytest.raises(llm_mod.BudgetError) as exc:
+        llm_mod.cost_gate("meta/muse-glimmer-30b", 20_000, 1.00)
     msg = str(exc.value)
 
     assert "$1.5008" in msg and "$1.00 ceiling" in msg
@@ -314,10 +315,10 @@ def test_over_budget_refuses_the_run_instead_of_downgrading_or_falling_back(
 ):
     """End to end: the gate must be terminal. Falling through to centroid would
     hide the refusal; falling through to a cheaper model would BE the bug."""
-    monkeypatch.setattr(name_mod, "_load_openrouter_key", lambda env: "sk-test")
+    monkeypatch.setattr(llm_mod, "load_openrouter_key", lambda env: "sk-test")
     units, cids = _units(3)
 
-    with pytest.raises(name_mod.NamerBudgetError):
+    with pytest.raises(llm_mod.BudgetError):
         name_mod.name_clusters(
             units,
             cids,
@@ -332,7 +333,7 @@ def test_over_budget_refuses_the_run_instead_of_downgrading_or_falling_back(
 def test_an_unpriceable_model_is_flagged_rather_than_silently_gated(capsys):
     """Most OpenRouter slugs have no corpus row, so the ceiling genuinely cannot
     be enforced for them. Saying so beats both blocking them and pretending."""
-    assert name_mod.cost_gate("some/unmapped-model", 500, 1.00) is None
+    assert llm_mod.cost_gate("some/unmapped-model", 500, 1.00) is None
     assert "no corpus price" in capsys.readouterr().out
 
 
@@ -342,7 +343,7 @@ def test_an_unpriceable_model_is_flagged_rather_than_silently_gated(capsys):
 def test_the_hf_backend_builds_the_router_request(monkeypatch, tmp_path):
     tok = tmp_path / "token"
     tok.write_text("hf_abc123\n")
-    monkeypatch.setattr(name_mod, "_HF_TOKEN_FILE", str(tok))
+    monkeypatch.setattr(llm_mod, "HF_TOKEN_FILE", str(tok))
     seen: dict = {}
 
     def fake(req, timeout=None):
@@ -374,8 +375,8 @@ def test_hf_and_openrouter_send_the_identical_body(monkeypatch, tmp_path):
     comparison stops being a comparison of models."""
     tok = tmp_path / "token"
     tok.write_text("hf_abc\n")
-    monkeypatch.setattr(name_mod, "_HF_TOKEN_FILE", str(tok))
-    monkeypatch.setattr(name_mod, "_load_openrouter_key", lambda env: "sk-test")
+    monkeypatch.setattr(llm_mod, "HF_TOKEN_FILE", str(tok))
+    monkeypatch.setattr(llm_mod, "load_openrouter_key", lambda env: "sk-test")
     bodies: list[dict] = []
 
     def fake(req, timeout=None):
@@ -395,7 +396,7 @@ def test_a_router_that_answers_as_a_different_model_is_rejected(monkeypatch, tmp
     the pinned model's."""
     tok = tmp_path / "token"
     tok.write_text("hf_abc\n")
-    monkeypatch.setattr(name_mod, "_HF_TOKEN_FILE", str(tok))
+    monkeypatch.setattr(llm_mod, "HF_TOKEN_FILE", str(tok))
     monkeypatch.setattr(
         name_mod.urllib.request,
         "urlopen",
@@ -418,16 +419,16 @@ def test_a_router_that_answers_as_a_different_model_is_rejected(monkeypatch, tmp
 def test_actual_cost_is_priced_from_the_reported_usage():
     usage = {"prompt_tokens": 1500, "completion_tokens": 400}
     # 1500 * $0.35/M + 400 * $1.50/M
-    assert name_mod.actual_cost("meta/muse-glimmer-30b", usage) == pytest.approx(
+    assert llm_mod.actual_cost("meta/muse-glimmer-30b", usage) == pytest.approx(
         0.001125
     )
     # a provider's own number wins over our arithmetic when it reports one
-    assert name_mod.actual_cost("meta/muse-glimmer-30b", {**usage, "cost": 0.002}) == (
+    assert llm_mod.actual_cost("meta/muse-glimmer-30b", {**usage, "cost": 0.002}) == (
         0.002
     )
     # unpriceable stays honest rather than defaulting to zero
-    assert name_mod.actual_cost("some/unmapped-model", usage) is None
-    assert name_mod.actual_cost("meta/muse-glimmer-30b", {}) is None
+    assert llm_mod.actual_cost("some/unmapped-model", usage) is None
+    assert llm_mod.actual_cost("meta/muse-glimmer-30b", {}) is None
 
 
 def test_the_stamped_cost_is_the_measured_one_not_the_estimate(monkeypatch, tmp_path):
@@ -436,11 +437,11 @@ def test_the_stamped_cost_is_the_measured_one_not_the_estimate(monkeypatch, tmp_
     the tenth is what lands in meta."""
     tok = tmp_path / "token"
     tok.write_text("hf_abc\n")
-    monkeypatch.setattr(name_mod, "_HF_TOKEN_FILE", str(tok))
+    monkeypatch.setattr(llm_mod, "HF_TOKEN_FILE", str(tok))
     monkeypatch.setattr(
-        name_mod, "_openai_list_models", lambda host, key=None: []
+        llm_mod, "openai_list_models", lambda host, key=None: []
     )
-    monkeypatch.setattr(name_mod, "_ollama_tags", lambda host: [])
+    monkeypatch.setattr(llm_mod, "ollama_tags", lambda host: [])
 
     def fake(req, timeout=None):
         asked = [
@@ -469,7 +470,7 @@ def test_the_stamped_cost_is_the_measured_one_not_the_estimate(monkeypatch, tmp_
     assert units.meta["namer_tokens"] == {"prompt": 150, "completion": 40}
     # 150 * 0.35/M + 40 * 1.50/M = 0.0001125, a tenth of the $0.001125 estimate
     assert units.meta["namer_cost_usd"] == pytest.approx(0.0001125)
-    assert units.meta["namer_cost_usd"] < name_mod.estimate_naming_cost(
+    assert units.meta["namer_cost_usd"] < llm_mod.estimate_naming_cost(
         3, "muse-glimmer-30b"
     )
 
@@ -477,7 +478,7 @@ def test_the_stamped_cost_is_the_measured_one_not_the_estimate(monkeypatch, tmp_
 def test_usage_accumulates_across_batches(monkeypatch, tmp_path):
     tok = tmp_path / "token"
     tok.write_text("hf_abc\n")
-    monkeypatch.setattr(name_mod, "_HF_TOKEN_FILE", str(tok))
+    monkeypatch.setattr(llm_mod, "HF_TOKEN_FILE", str(tok))
 
     def fake(req, timeout=None):
         asked = [

@@ -154,7 +154,7 @@ _SHIM_TEMPLATE = """#!{interpreter}
 #
 # Appends one JSON line to the spool and exits 0, always. Deleting the spool
 # directory disables it without touching any agent's configuration, which is
-# what `nebulai seer uninstall` relies on.
+# what `seer uninstall` relies on.
 #
 # clock: {clock}   resolution: {resolution}s
 d="${{NEBULAI_SEER_SPOOL:-{spool}}}"

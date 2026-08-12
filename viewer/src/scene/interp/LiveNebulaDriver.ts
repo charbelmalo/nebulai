@@ -16,9 +16,9 @@
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
 import { appStore } from "../../app/store";
-import type { GpuTier } from "../../app/capabilities";
-import { HOT, MARKER_HOT } from "./chart-theme";
-import { InterpTooltip } from "./chart-tooltip";
+import type { GpuTier } from "@psychix/viz/capabilities";
+import { HOT, MARKER_HOT } from "@psychix/viz/chart-theme";
+import { InterpTooltip } from "@psychix/viz/chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");

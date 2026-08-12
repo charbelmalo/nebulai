@@ -27,9 +27,9 @@ import {
 import type { DatasetEntry } from "../data/schema";
 import type { InterpDriver, InterpGroup } from "../scene/interp/InterpDriver";
 import { GROUP_LABEL, INTERP_FEATURES, findFeature } from "../scene/interp/registry";
-import { SelectRow } from "./controls";
-import { ChartCard } from "./ChartCard";
-import type { StatTile } from "./StatStrip";
+import { SelectRow } from "@psychix/viz/controls";
+import { ChartCard } from "@psychix/viz/ChartCard";
+import type { StatTile } from "@psychix/viz/StatStrip";
 import {
   $capabilities,
   $datasetId,

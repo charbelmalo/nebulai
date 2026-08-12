@@ -22,7 +22,7 @@ import {
   type ToolCategory,
   type ToolOutcome,
 } from "./sessionlog";
-import { Stat } from "./StatStrip";
+import { Stat } from "@psychix/viz/StatStrip";
 import { SessionFieldDriver, type PlaybackState } from "../scene/sessions/SessionFieldDriver";
 import { categoryColor } from "../scene/sessions/appearance";
 import { asinhScale, suggestK } from "../scene/sessions/scales";
@@ -1112,7 +1112,8 @@ function shortModel(m: string): string {
     .replace(/-(\d)$/, ".$1");
 }
 
-/* `Stat` now lives in ./StatStrip — the interp charts needed the same tile. */
+/* `Stat` now lives in @psychix/viz/StatStrip — the interp charts needed the
+ * same tile, and chrome/ isn't the place for a component both use. */
 
 // ── helpers ────────────────────────────────────────────────────────────────
 

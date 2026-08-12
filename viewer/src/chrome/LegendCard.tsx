@@ -5,7 +5,7 @@
 import { requestViewMode } from "../app/actions";
 import type { ViewMode } from "../app/store";
 import { $dataset, $legendCollapsed, $toggles, $viewMode, openPanel } from "./state";
-import { RadioRow } from "./controls";
+import { RadioRow } from "@psychix/viz/controls";
 
 export function LegendCard() {
   if (!$toggles.value.legend) return null;

@@ -38,7 +38,7 @@ import {
 } from "../../data/compare";
 import { createBloomPipeline, type BloomPipeline } from "../post/bloom";
 import { GestureRecognizer } from "../gestures";
-import { BG } from "../../styles/tokens";
+import { BG } from "@psychix/viz/tokens";
 
 const STATE_TWEEN_MS = 900;
 const REDUCED_TWEEN_MS = 150;

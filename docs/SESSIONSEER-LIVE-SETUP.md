@@ -14,7 +14,7 @@ Nothing here needs a GPU, a network, or an API key. The one optional piece
 Everything on the Seer page comes from one process:
 
 ```bash
-uv run nebulai seer serve --watch
+uv run seer serve --watch
 ```
 
 HTTP + SSE on `127.0.0.1:8125`. `--watch` folds the hook-spool collector into
@@ -35,8 +35,10 @@ is shedding subscribers and the live view will be missing events.
 cd viewer && npm run dev
 ```
 
-Then open the **Seer** tab. The page talks to whatever `seerUrl` says, which
-defaults to `http://127.0.0.1:8125` and is editable in **Settings → probing**.
+Then open Seer at `seer.html` (its own app entry — from Nebulai, use the
+`Seer ↗` link in the top bar) and pick the **Live** page. It talks to whatever
+`seer.serverUrl` says, which defaults to `http://127.0.0.1:8125` and is editable
+in **Settings → probing**.
 For a build, set it at build time:
 
 ```bash
@@ -44,7 +46,7 @@ VITE_SEER_URL=http://127.0.0.1:8125 npm run build
 ```
 
 Point it at a blank string deliberately and the page says it is not configured —
-but note the offline hint still suggests starting `nebulai seer serve`, which is
+but note the offline hint still suggests starting `seer serve`, which is
 wrong advice for a deliberately-blank endpoint. Known wart.
 
 ## 3. Getting runs into it
@@ -56,9 +58,9 @@ honest-absence state you will be looking at.**
 ### driven — you launch the agent
 
 ```bash
-uv run nebulai seer run codex "fix the failing test"
-uv run nebulai seer run claude "…" --keep-reasoning
-uv run nebulai seer run codex "…" --compare-with claude
+uv run seer run codex "fix the failing test"
+uv run seer run claude "…" --keep-reasoning
+uv run seer run codex "…" --compare-with claude
 ```
 
 Highest fidelity. Every event arrives live, so the chart, the field and the
@@ -67,8 +69,8 @@ thought rail all fill in as it goes.
 ### attached — Codex through its app-server
 
 ```bash
-uv run nebulai seer attach "fix the failing test"   # drive it
-uv run nebulai seer attach                          # or just watch
+uv run seer attach "fix the failing test"   # drive it
+uv run seer attach                          # or just watch
 ```
 
 More of the session than `run` sees, including per-call native durations.
@@ -76,20 +78,20 @@ More of the session than `run` sees, including per-call native durations.
 ### observed — your own sessions, via hooks
 
 ```bash
-uv run nebulai seer install --status          # what is installed
-uv run nebulai seer install --apply           # merge hooks into agent configs
-uv run nebulai seer install --print-block     # for a config we will not edit
+uv run seer install --status          # what is installed
+uv run seer install --apply           # merge hooks into agent configs
+uv run seer install --print-block     # for a config we will not edit
 ```
 
 `install` backs up each config first and leaves entries it did not write alone.
-After that, `serve --watch` (or a separate `nebulai seer watch`) turns the spool
+After that, `serve --watch` (or a separate `seer watch`) turns the spool
 into runs as you work.
 
 ### reconciled — Codex sessions that already happened
 
 ```bash
-uv run nebulai seer reconcile --limit 50
-uv run nebulai seer reconcile --since-days 7 --only-cwd "$PWD"
+uv run seer reconcile --limit 50
+uv run seer reconcile --since-days 7 --only-cwd "$PWD"
 ```
 
 Imports thread history without double-counting: a thread whose
@@ -191,7 +193,7 @@ Seer page depends on it.
 
 | symptom | cause | fix |
 |---|---|---|
-| page says no seer server | `seerUrl` empty or wrong | Settings → probing, or `VITE_SEER_URL` |
+| page says no seer server | `seer.serverUrl` empty or wrong | Settings → probing, or `VITE_SEER_URL` |
 | link dot never goes green | `serve` not running, or a port clash | `curl …/seer/health` |
 | runs appear but never update | SSE dropped | check `sse_clients_dropped`; reload the tab |
 | field pill disabled | no WebGPU on this device | nothing to fix; the chart is complete without it |
@@ -203,9 +205,9 @@ Seer page depends on it.
 ## 9. Stopping
 
 ```bash
-uv run nebulai seer uninstall            # remove the hooks
-uv run nebulai seer uninstall --purge     # …and the spool with them
-uv run nebulai seer delete <run_id> --yes # remove one run: log, dir, index rows
+uv run seer uninstall            # remove the hooks
+uv run seer uninstall --purge     # …and the spool with them
+uv run seer delete <run_id> --yes # remove one run: log, dir, index rows
 ```
 
 `delete` needs `--yes`; without it the run is described and kept. Over HTTP it

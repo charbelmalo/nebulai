@@ -4,10 +4,10 @@
 
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import * as tokens from "../../src/styles/tokens";
+import * as tokens from "@psychix/viz/tokens";
 
 const css = readFileSync(
-  new URL("../../src/styles/tokens.css", import.meta.url),
+  new URL("../../src/viz/tokens.css", import.meta.url),
   "utf8",
 );
 

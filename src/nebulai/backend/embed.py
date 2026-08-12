@@ -47,7 +47,7 @@ class EmbedIdentityError(RuntimeError):
     host that ignores the `model` field and serves whatever it has loaded (the
     multi-model OpenAI-compatible servers do exactly this) would yield a map
     stamped `mxbai-embed-large` and positioned by something else. Same rule as
-    backend.name.NamerIdentityError, applied to the embedder.
+    llm.IdentityError, applied to the embedder.
     """
 
 

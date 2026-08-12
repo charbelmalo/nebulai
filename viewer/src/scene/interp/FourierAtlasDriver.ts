@@ -17,7 +17,7 @@
  *  decorative motion. deck.gl (WebGL2), camera off, framing from canvas size. */
 
 import type { Deck, OrthographicView } from "@deck.gl/core";
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { loadFourier, type FourierBundle } from "../../data/interp";
 import {
   dashedSegment,
@@ -27,8 +27,8 @@ import {
   markerPoly,
   type Vec2,
   withAlpha,
-} from "./chart-theme";
-import { InterpTooltip, type TipRow } from "./chart-tooltip";
+} from "@psychix/viz/chart-theme";
+import { InterpTooltip, type TipRow } from "@psychix/viz/chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");

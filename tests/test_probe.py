@@ -13,8 +13,8 @@ import json
 import numpy as np
 import pytest
 
+from nebulai import llm as llm_mod
 from nebulai.backend import embed as embed_mod
-from nebulai.backend import name as name_mod
 from nebulai.frontends import probe as probe_mod
 from nebulai.frontends.probe import _clean, _norm, load_probe_units
 
@@ -168,7 +168,7 @@ def test_probe_maps_get_a_readable_label_in_the_metrics_table():
 
 
 def test_a_rambling_generator_is_kept_not_retired(monkeypatch, capsys):
-    from nebulai.backend.name import ChatTruncated
+    from nebulai.llm import ChatTruncated
 
     calls: list[str] = []
 
@@ -178,8 +178,9 @@ def test_a_rambling_generator_is_kept_not_retired(monkeypatch, capsys):
             raise ChatTruncated("m truncated its reply at 16384 tokens")
         return ["a", "b"]
 
-    # _make_expander imports the picker inside the function, so patch the source
-    monkeypatch.setattr(name_mod, "_openai_pick_model", lambda *a, **k: "m")
+    # _make_expander calls the picker through the shared llm module, so patch
+    # it where it lives
+    monkeypatch.setattr(llm_mod, "openai_pick_model", lambda *a, **k: "m")
     monkeypatch.setattr(probe_mod, "_expand_openai", fake_expand)
     expand, label = probe_mod._make_expander(
         "openai", "http://o", "", "orm", "am", None, llm_host="http://h"
@@ -190,8 +191,9 @@ def test_a_rambling_generator_is_kept_not_retired(monkeypatch, capsys):
 
 
 def test_a_generator_that_cannot_generate_is_still_retired(monkeypatch):
-    # _make_expander imports the picker inside the function, so patch the source
-    monkeypatch.setattr(name_mod, "_openai_pick_model", lambda *a, **k: "m")
+    # _make_expander calls the picker through the shared llm module, so patch
+    # it where it lives
+    monkeypatch.setattr(llm_mod, "openai_pick_model", lambda *a, **k: "m")
     monkeypatch.setattr(
         probe_mod,
         "_expand_openai",
@@ -206,8 +208,9 @@ def test_a_generator_that_cannot_generate_is_still_retired(monkeypatch):
 def test_the_availability_probe_uses_a_concrete_term(monkeypatch):
     # "test" gives a reasoning model nothing to expand and it spirals
     seen: list[str] = []
-    # _make_expander imports the picker inside the function, so patch the source
-    monkeypatch.setattr(name_mod, "_openai_pick_model", lambda *a, **k: "m")
+    # _make_expander calls the picker through the shared llm module, so patch
+    # it where it lives
+    monkeypatch.setattr(llm_mod, "openai_pick_model", lambda *a, **k: "m")
     monkeypatch.setattr(
         probe_mod,
         "_expand_openai",
@@ -232,17 +235,17 @@ def _no_probe_network(monkeypatch, tmp_path):
     'nothing serves it' test into a live call."""
     for var in ("OPENROUTER_API_KEY", "HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setattr(name_mod, "_HF_TOKEN_FILE", str(tmp_path / "absent-token"))
-    monkeypatch.setattr(name_mod, "_DEFAULT_ENV_FILE", str(tmp_path / "absent.env"))
+    monkeypatch.setattr(llm_mod, "HF_TOKEN_FILE", str(tmp_path / "absent-token"))
+    monkeypatch.setattr(llm_mod, "DEFAULT_ENV_FILE", str(tmp_path / "absent.env"))
 
 
 def test_a_pinned_generator_no_backend_serves_refuses(monkeypatch):
     """Every backend is up — for a different model — which is exactly when the
     fall-through chain would grow a cloud and mislabel whose it is."""
     ran: list[str] = []
-    monkeypatch.setattr(name_mod, "_ollama_tags", lambda host: ["llama3.2:3b"])
+    monkeypatch.setattr(llm_mod, "ollama_tags", lambda host: ["llama3.2:3b"])
     monkeypatch.setattr(
-        name_mod, "_openai_list_models", lambda host, key=None: ["Qwen3.6-35B"]
+        llm_mod, "openai_list_models", lambda host, key=None: ["Qwen3.6-35B"]
     )
     monkeypatch.setattr(
         probe_mod,
@@ -255,7 +258,7 @@ def test_a_pinned_generator_no_backend_serves_refuses(monkeypatch):
         lambda *a, **k: (ran.append("openai"), ["a", "b"])[1],
     )
 
-    with pytest.raises(name_mod.NamerIdentityError) as exc:
+    with pytest.raises(llm_mod.IdentityError) as exc:
         probe_mod._make_expander(
             "auto",
             "http://o",
@@ -274,10 +277,10 @@ def test_a_pinned_generator_no_backend_serves_refuses(monkeypatch):
 
 def test_a_pinned_generator_that_is_served_runs_and_is_stamped(monkeypatch):
     """The positive control for the refusal above."""
-    monkeypatch.setattr(name_mod, "_ollama_tags", lambda host: [])
+    monkeypatch.setattr(llm_mod, "ollama_tags", lambda host: [])
     monkeypatch.setattr(
-        name_mod,
-        "_openai_list_models",
+        llm_mod,
+        "openai_list_models",
         lambda host, key=None: ["meta-models/Muse-Glimmer-30B"],
     )
     asked: list[str] = []
@@ -310,11 +313,11 @@ def test_the_probe_cost_gate_refuses_a_big_expansion_without_downgrading(monkeyp
     """A depth-3 breadth-20 probe is 1 + 20 + 400 BFS calls plus the one
     throwaway availability probe = 422. The gate must be able to trip on that,
     and must not quietly pick the free model instead."""
-    monkeypatch.setattr(name_mod, "_ollama_tags", lambda host: [])
-    monkeypatch.setattr(name_mod, "_openai_list_models", lambda host, key=None: [])
+    monkeypatch.setattr(llm_mod, "ollama_tags", lambda host: [])
+    monkeypatch.setattr(llm_mod, "openai_list_models", lambda host, key=None: [])
 
     assert probe_mod.expansion_calls(3, 20) == 1 + 20 + 400 + 1
-    with pytest.raises(name_mod.NamerBudgetError) as exc:
+    with pytest.raises(llm_mod.BudgetError) as exc:
         probe_mod._make_expander(
             "openrouter",
             "http://o",
@@ -404,7 +407,7 @@ def test_the_hf_expander_posts_to_the_router_with_the_shared_prompt(
 ):
     tok = tmp_path / "token"
     tok.write_text("hf_xyz\n")
-    monkeypatch.setattr(name_mod, "_HF_TOKEN_FILE", str(tok))
+    monkeypatch.setattr(llm_mod, "HF_TOKEN_FILE", str(tok))
     seen: dict = {}
 
     class _Resp:
@@ -460,7 +463,7 @@ def test_the_hf_expander_posts_to_the_router_with_the_shared_prompt(
 def test_a_router_serving_another_model_is_rejected_not_stamped(monkeypatch, tmp_path):
     tok = tmp_path / "token"
     tok.write_text("hf_xyz\n")
-    monkeypatch.setattr(name_mod, "_HF_TOKEN_FILE", str(tok))
+    monkeypatch.setattr(llm_mod, "HF_TOKEN_FILE", str(tok))
 
     class _Resp:
         def __enter__(self):
@@ -480,7 +483,7 @@ def test_a_router_serving_another_model_is_rejected_not_stamped(monkeypatch, tmp
             ).encode()
 
     monkeypatch.setattr(probe_mod.urllib.request, "urlopen", lambda *a, **k: _Resp())
-    with pytest.raises(name_mod.NamerIdentityError, match="answered as"):
+    with pytest.raises(llm_mod.IdentityError, match="answered as"):
         probe_mod._expand_hf(
             "ocean",
             5,

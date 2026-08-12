@@ -5,7 +5,7 @@
 
 import * as THREE from "three/webgpu";
 import type { ClusterHull } from "../../data/hulls";
-import { BG_RAISE, TEXT } from "../../styles/tokens";
+import { BG_RAISE, TEXT } from "@psychix/viz/tokens";
 
 /** Minimal position+index merge. The addons BufferGeometryUtils would pull a
  *  second copy of three core (it imports bare `three`, we use `three/webgpu`),

@@ -1,6 +1,6 @@
 /** The shared RAMP sampler for the `three/webgpu` stack.
  *
- *  `styles/tokens.ts` owns the ramp itself (amber → orange → pink → magenta →
+ *  `viz/tokens.ts` owns the ramp itself (amber → orange → pink → magenta →
  *  violet) and can bake it to a 256×1 RGBA buffer. Every GPU driver that wanted
  *  to sample it was repeating the same four lines — build a `DataTexture`, set
  *  `needsUpdate`, sample it at `vec2(t, 0.5)`, remember to dispose it — which is
@@ -12,7 +12,7 @@
 
 import * as THREE from "three/webgpu";
 import { texture, vec2 } from "three/tsl";
-import { rampTextureData } from "../styles/tokens";
+import { rampTextureData } from "@psychix/viz/tokens";
 
 let shared: THREE.DataTexture | null = null;
 

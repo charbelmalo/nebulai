@@ -1,0 +1,20 @@
+/* nebulai.css — Nebulai's stylesheet barrel (entry: src/main.ts).
+   Carries no rules of its own: everything lives in the per-product partials
+   in this directory. Vite inlines `@import` at build time, so a barrel costs
+   nothing extra over one big file.
+
+   This is the sheet chrome.css became when Seer got its own entry. The
+   partition landed in step 5 with exactly this in mind — "so a future per-app
+   entry point can import only its own sheet" — and this is that entry: the
+   Seer partials (snapshot / sessions / live) are NOT here, and Seer's barrel
+   (seer.css) does not carry the map or Internals partials.
+
+   Import order matters for the cascade — see each partial's own header for
+   which original chrome.css sections it absorbed, and keep
+   chrome.responsive.css LAST (it deliberately overrides earlier rules). */
+
+@import "./chrome.base.css";
+@import "./chrome.primitives.css";
+@import "./nebulai.map.css";
+@import "./nebulai.interp.css";
+@import "./chrome.responsive.css";

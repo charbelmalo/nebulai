@@ -12,7 +12,7 @@
  *  deck.gl (WebGL2), camera off, static. Source: sae_web.json ⋈ sae.json. */
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { appStore, type InterpSelection } from "../../app/store";
 import { type SAEBundle, type SAEWebBundle, loadSAE, loadSAEWeb } from "../../data/interp";
 import {
@@ -24,8 +24,8 @@ import {
   type RGB,
   type Vec2,
   withAlpha,
-} from "./chart-theme";
-import { InterpTooltip, type TipRow } from "./chart-tooltip";
+} from "@psychix/viz/chart-theme";
+import { InterpTooltip, type TipRow } from "@psychix/viz/chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");

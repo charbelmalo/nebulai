@@ -1,16 +1,31 @@
-/** Top-left brand mark, matching the video's logo + wordmark anatomy. The
- *  mark is a tiny nebula: three ramp-colored dots in orbit. A center nav
- *  switches between the semantic-cloud viewer and the Snapshot Map page.
+/** Top-left brand mark + wordmark, matching the video's logo anatomy. A center
+ *  nav switches between the three pages of whichever instrument is running.
  *  Top-right hosts share/export tools and the global gear that opens the
- *  full Settings page. */
+ *  full Settings page.
+ *
+ *  Everything instrument-specific arrives as the `app` prop (see
+ *  chrome/apps/nav.ts): the mark, the wordmark, the three pills and their
+ *  labels, and the single link across to the other instrument. Nothing about
+ *  Nebulai or Seer is hardcoded here — this bar renders in both documents, and
+ *  the branding in particular must not claim Seer is nebul.ai. Nebulai keeps
+ *  the nebula mark; Seer flies its own.
+ *
+ *  The cross-instrument link is a plain anchor after a divider, NOT a fourth
+ *  pill: it leaves this document for the other one. In a hub deploy a second
+ *  such anchor points up at psychiX (`app.hub`, absent in the combined build
+ *  where no hub document exists). Both stay subordinate: a person who has just
+ *  learned that these are two instruments should not have to re-learn it every
+ *  time their eye crosses the nav. */
 
 import { useSignal } from "@preact/signals";
 import { appStore, type Page } from "../app/store";
+import type { MarkId, SiblingLink } from "./apps/nav";
+import type { AppShell } from "./apps/types";
 import { downloadStagePng } from "./exportPng";
 import { $page } from "./state";
 import { shareUrl } from "./urlState";
 
-export function TopBar() {
+export function TopBar({ app }: { app: AppShell }) {
   const page = $page.value;
   const copied = useSignal(false);
   const saving = useSignal(false);
@@ -45,22 +60,19 @@ export function TopBar() {
   return (
     <>
       <header class="topbar">
-        <svg class="topbar-mark" viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="9" cy="13" r="4.2" fill="#ea4f86" opacity="0.9" />
-          <circle cx="15.5" cy="9" r="2.8" fill="#f5c33b" opacity="0.9" />
-          <circle cx="16" cy="16" r="1.8" fill="#8b3bf0" opacity="0.95" />
-        </svg>
-        <span class="topbar-word">
-          nebul<span class="topbar-word-dim">.ai</span>
+        <BrandMark mark={app.mark} />
+        <span class="topbar-word" title={app.tagline}>
+          {app.wordmark.head}
+          {app.wordmark.tail && <span class="topbar-word-dim">{app.wordmark.tail}</span>}
         </span>
       </header>
       <nav class="topnav" aria-label="Primary">
-        <NavPill label="Semantic map" pageId="map" active={page} />
-        <NavPill label="Internals" pageId="interp" active={page} />
-        <NavPill label="Guide" pageId="guide" active={page} />
-        <NavPill label="Snapshot Map" pageId="snapshot" active={page} />
-        <NavPill label="Sessions" pageId="sessions" active={page} />
-        <NavPill label="Seer" pageId="seer" active={page} />
+        {app.nav.map((item) => (
+          <NavPill key={item.page} label={item.label} pageId={item.page} active={page} />
+        ))}
+        <span class="topnav-sep" aria-hidden="true" />
+        <CrossLink link={app.sibling} />
+        {app.hub && <CrossLink link={app.hub} />}
       </nav>
       <div class="topbar-tools">
         <button
@@ -134,6 +146,52 @@ export function TopBar() {
         <span>Settings</span>
       </button>
     </>
+  );
+}
+
+/** A link that LEAVES this document — the other instrument, or the psychiX
+ *  hub above both. Same treatment for both: subordinate to the pills, arrow
+ *  included, `href` supplied by apps/nav.ts (relative in the combined build,
+ *  an absolute sub-path in a per-app deploy — this component never decides). */
+function CrossLink({ link }: { link: SiblingLink }) {
+  return (
+    <a class="topnav-cross" href={link.href} title={link.title}>
+      {link.label}
+      <span class="topnav-cross-arrow" aria-hidden="true">
+        ↗
+      </span>
+    </a>
+  );
+}
+
+/** The two brand marks, drawn here rather than in apps/nav.ts so that module
+ *  stays data-only. Both live in the shared chunk; they are a few hundred
+ *  bytes of path data and splitting them per entry would buy nothing.
+ *
+ *  `nebula` is three ramp-coloured dots in orbit — the semantic cloud in
+ *  miniature. `eye` is a lens with a gold iris, matching seer.html's favicon:
+ *  the instrument watches a run rather than mapping a space. */
+function BrandMark({ mark }: { mark: MarkId }) {
+  if (mark === "eye") {
+    return (
+      <svg class="topbar-mark" viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M2.4 12c3-5.2 6.7-7.8 9.6-7.8S18.6 6.8 21.6 12c-3 5.2-6.7 7.8-9.6 7.8S5.4 17.2 2.4 12z"
+          fill="none"
+          stroke="#46c8eb"
+          stroke-width="1.7"
+          stroke-linejoin="round"
+        />
+        <circle cx="12" cy="12" r="3.3" fill="#f5c33b" />
+      </svg>
+    );
+  }
+  return (
+    <svg class="topbar-mark" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="9" cy="13" r="4.2" fill="#ea4f86" opacity="0.9" />
+      <circle cx="15.5" cy="9" r="2.8" fill="#f5c33b" opacity="0.9" />
+      <circle cx="16" cy="16" r="1.8" fill="#8b3bf0" opacity="0.95" />
+    </svg>
   );
 }
 

@@ -7,7 +7,7 @@
  *  These tests are what holds that. */
 
 import { describe, expect, it } from "vitest";
-import { decadeOn, logSpan } from "../../src/scene/interp/logscale";
+import { decadeOn, logSpan } from "@psychix/viz/logscale";
 import { decadeAt, logNorm } from "../../src/scene/interp/rollout";
 
 describe("logSpan", () => {

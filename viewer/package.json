@@ -6,10 +6,16 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:nebulai": "PSYCHIX_ENTRY=nebulai VITE_BASE=/psychiX/nebulai-maps/ VITE_NEBULAI_APP_URL=/psychiX/nebulai-maps/ VITE_SEER_APP_URL=/psychiX/seer/ VITE_HUB_URL=/psychiX/ VITE_LIVE_URL= VITE_BUILD_URL= VITE_EMBED_HOST= VITE_SEER_URL= vite build --outDir dist/nebulai",
+    "build:seer": "PSYCHIX_ENTRY=seer VITE_BASE=/psychiX/seer/ VITE_NEBULAI_APP_URL=/psychiX/nebulai-maps/ VITE_SEER_APP_URL=/psychiX/seer/ VITE_HUB_URL=/psychiX/ VITE_LIVE_URL= VITE_BUILD_URL= VITE_EMBED_HOST= VITE_SEER_URL= vite build --outDir dist/seer",
+    "build:hub": "PSYCHIX_ENTRY=hub VITE_BASE=/psychiX/ vite build --outDir dist/hub",
+    "build:deploy": "npm run build:nebulai && npm run build:seer && npm run build:hub",
     "preview": "vite preview",
     "test": "vitest run",
     "report": "node --experimental-strip-types scripts/session-report.ts",
     "e2e": "playwright test",
+    "e2e:nebulai": "playwright test tests/e2e/nebulai",
+    "e2e:seer": "playwright test tests/e2e/seer",
     "e2e:update": "playwright test --update-snapshots",
     "typecheck": "tsc --noEmit"
   },

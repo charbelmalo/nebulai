@@ -7,7 +7,7 @@
 import { requestCompareTour } from "../app/actions";
 import { appStore } from "../app/store";
 import { $compare, $compareCollapsed, $compareData, $compareTour, openPanel } from "./state";
-import { RadioRow, ToggleRow } from "./controls";
+import { RadioRow, ToggleRow } from "@psychix/viz/controls";
 
 const STATE_LABELS: Record<string, string> = {
   native: "Native clouds",

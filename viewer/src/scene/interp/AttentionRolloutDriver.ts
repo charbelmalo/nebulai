@@ -29,13 +29,13 @@
  *  No interpolated surface is drawn between columns: every pixel of every bar
  *  belongs to one measured pair. */
 
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { loadTrace, type TraceBundle } from "../../data/interp";
 import { ChartStage, type BarData, type ChartStageLook } from "./chart-stage";
 import { causalCells, computeRollouts, decadeAt, logNorm, type RollCell } from "./rollout";
-import { InterpTooltip } from "./chart-tooltip";
+import { InterpTooltip } from "@psychix/viz/chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
-import type { StatTile } from "../../chrome/StatStrip";
+import type { StatTile } from "@psychix/viz/StatStrip";
 
 const LOG_FLOOR = 1e-4; // colour + height floor: values at or below map to 0
 const STEP_MS = 640; // auto-play cadence (one real layer per step — no interpolation)

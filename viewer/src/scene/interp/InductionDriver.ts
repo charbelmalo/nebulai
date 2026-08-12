@@ -14,11 +14,11 @@
  *  deck.gl (WebGL2), camera off, static. Source: induction.json. */
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { appStore, type InterpSelection } from "../../app/store";
 import { type InductionBundle, loadInduction } from "../../data/interp";
-import { AXIS_RGBA, dashedSegment, HOT, MARKER_HOT, type RGB, withAlpha } from "./chart-theme";
-import { InterpTooltip, type TipRow } from "./chart-tooltip";
+import { AXIS_RGBA, dashedSegment, HOT, MARKER_HOT, type RGB, withAlpha } from "@psychix/viz/chart-theme";
+import { InterpTooltip, type TipRow } from "@psychix/viz/chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");
