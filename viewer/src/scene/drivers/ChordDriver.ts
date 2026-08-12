@@ -28,7 +28,7 @@ import {
   vec2,
   vec3,
 } from "three/tsl";
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { appStore, type Selection } from "../../app/store";
 import type { Dataset } from "../../data/loader";
 import { rampNode } from "../ramp";

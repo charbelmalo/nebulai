@@ -9,13 +9,37 @@
  *  active page are written, so links stay short and honest. The legacy
  *  `?view=` search param (e2e + `nebulai compare` handoff) is untouched. */
 
-import { appStore, type Page, type ViewMode } from "../app/store";
+import { APP_PAGES, appStore, type Page, type ViewMode } from "../app/store";
 import { requestViewMode } from "../app/actions";
-import { isLiveTrace } from "../data/interp";
-import { findFeature } from "../scene/interp/registry";
 
-const PAGES: readonly Page[] = ["map", "snapshot", "interp", "guide", "sessions", "seer"];
 const VIEWS: readonly ViewMode[] = ["atlas", "chord", "hierarchy", "compare"];
+
+/** The two Internals-only hash keys (`feature`, `trace`) can only be validated
+ *  by things that live on Nebulai's side of the split: `feature` against the
+ *  25-driver interp registry, `trace` against the live-trace prefix in
+ *  data/interp. Importing either here would drag the whole Internals gallery
+ *  — and three.js with it — into Seer's bundle, for a permalink key Seer's
+ *  three pages cannot even express. So the app that owns those pages injects
+ *  the validators at boot (src/main.ts) and this module stays instrument-
+ *  neutral. Unregistered means "reject", which is the correct answer on Seer:
+ *  an interp permalink opened there is not a link it can honour.
+ *
+ *  Everything else about the permalink stays shared and single. */
+export interface InterpUrlHooks {
+  /** is this a feature id the Internals rail actually ships? */
+  knownFeature(id: string): boolean;
+  /** may this trace slug go in a shareable URL? Live traces exist only in the
+   *  tab that captured them, so a link to one would land on an honest error. */
+  shareableTrace(slug: string): boolean;
+}
+
+const NO_INTERP: InterpUrlHooks = { knownFeature: () => false, shareableTrace: () => false };
+let interpHooks: InterpUrlHooks = NO_INTERP;
+
+/** Called by the entry that owns the Internals page, before `readUrlState`. */
+export function registerInterpUrlHooks(hooks: InterpUrlHooks): void {
+  interpHooks = hooks;
+}
 
 export interface UrlState {
   page?: Page;
@@ -32,14 +56,18 @@ export interface UrlState {
 export function readUrlState(): UrlState {
   const p = new URLSearchParams(location.hash.replace(/^#/, ""));
   const out: UrlState = {};
+  // only the running instrument's own three pages are addressable: a
+  // `#page=seer` on Nebulai's document names a page that is not in this
+  // bundle, so it is dropped here rather than half-applied downstream
+  const pages = APP_PAGES[appStore.getState().app] as readonly string[];
   const page = p.get("page");
-  if (page && (PAGES as readonly string[]).includes(page)) out.page = page as Page;
+  if (page && pages.includes(page)) out.page = page as Page;
   const model = p.get("model");
   if (model) out.model = model;
   const feature = p.get("feature");
-  if (feature && findFeature(feature)) out.feature = feature;
+  if (feature && interpHooks.knownFeature(feature)) out.feature = feature;
   const trace = p.get("trace");
-  if (trace && !isLiveTrace(trace)) out.trace = trace;
+  if (trace && interpHooks.shareableTrace(trace)) out.trace = trace;
   const view = p.get("view");
   if (view && (VIEWS as readonly string[]).includes(view)) out.view = view as ViewMode;
   const dims = p.get("dims");
@@ -76,7 +104,7 @@ function buildHash(): string {
     p.set("feature", st.interp.featureId);
     // live traces exist only in this tab's memory — a permalink to one would
     // land on an honest error, so they're never written into the hash
-    if (st.interp.traceSlug && !isLiveTrace(st.interp.traceSlug))
+    if (st.interp.traceSlug && interpHooks.shareableTrace(st.interp.traceSlug))
       p.set("trace", st.interp.traceSlug);
   }
   return `#${p.toString()}`;

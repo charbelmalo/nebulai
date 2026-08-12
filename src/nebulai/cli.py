@@ -894,8 +894,8 @@ def _run_rename(args: argparse.Namespace) -> None:
     points here were built once and are correct, while the namer that titled
     them has been replaced twice. Rebuilding to fix only the titles would
     re-run UMAP over 50k vectors to land back on the same coordinates."""
-    from .backend.name import NamerBudgetError, NamerIdentityError
     from .backend.rename import rename_map, sync_index
+    from .llm import BudgetError, IdentityError
 
     out_root = Path(args.out)
     if len(args.datasets) == 1 and args.datasets[0] == "all":
@@ -928,7 +928,7 @@ def _run_rename(args: argparse.Namespace) -> None:
                 codex_cli_model=args.codex_cli_model,
                 env_file=args.env_file,
             )
-        except (NamerIdentityError, NamerBudgetError) as e:
+        except (IdentityError, BudgetError) as e:
             # NOT a per-map skip: an unservable pin or a blown budget will hold
             # for every remaining map too, so skipping would print the same
             # refusal N times and still exit 0 with nothing renamed
@@ -1690,12 +1690,6 @@ def main() -> None:
     c.add_argument("--embed-model", default="mxbai-embed-large")
     c.add_argument("--seed", type=int, default=42)
     c.set_defaults(fn=_run_compare)
-
-    # SessionSeer lives in its own module — it has its own sub-subcommands and
-    # shares nothing with the map pipeline above except the `nebulai` prefix.
-    from .seer.cli import add_parser as _seer_parser
-
-    _seer_parser(sub)
 
     args = p.parse_args()
     args.fn(args)

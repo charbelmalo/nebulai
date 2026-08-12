@@ -231,7 +231,13 @@ class TestRestartMidRun:
     def test_the_cli_sweeps_and_says_so(self, tmp_path):
         """Through the real entry point, in a real subprocess — the sweep is
         wired into `run()`, and a wiring test that calls the function directly
-        would pass with the wiring removed."""
+        would pass with the wiring removed.
+
+        Seer is its own command, not a `nebulai` subcommand (`nebulai` never
+        imports `nebulai.seer`), so the entry point under test is seer's own
+        `main()` — `python -m nebulai.seer.cli`, the module-level equivalent
+        of the installed `seer` console script — rather than `-m nebulai
+        seer`, which no longer exists."""
         root = tmp_path / "seer"
         s = EventStore(root)
         half_a_run(s)
@@ -239,7 +245,7 @@ class TestRestartMidRun:
 
         env = {**os.environ, "PYTHONPATH": str(Path(__file__).parent.parent / "src")}
         proc = subprocess.run(
-            [sys.executable, "-m", "nebulai", "seer", "--root", str(root), "list"],
+            [sys.executable, "-m", "nebulai.seer.cli", "--root", str(root), "list"],
             capture_output=True, text=True, timeout=60, env=env,
         )
         assert proc.returncode == 0, proc.stderr

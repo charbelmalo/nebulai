@@ -1,0 +1,269 @@
+/* hub.css — the only stylesheet the psychiX landing page loads (entry:
+   ../../hub.html, built by `npm run build:hub` into dist/hub/).
+
+   It imports the REAL tokens rather than restating any colour: --bg,
+   --bg-raise, --hairline, --text/-dim/-faint, --accent and the type stack all
+   come from @psychix/viz/tokens.css, which is the same sheet both instruments
+   load. If the chrome's ground changes, this page changes with it — there is
+   no second palette here to fall out of sync.
+
+   What it does NOT import is chrome.base.css: that sheet pins html/body to
+   `overflow: hidden` for a full-viewport canvas app, which is exactly wrong
+   for a page that scrolls. The handful of resets a document page needs are
+   restated below, and nothing else. */
+
+@import "@psychix/viz/tokens.css";
+@import "@psychix/viz/craft-tokens.css";
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  /* the page is a column of text: it may scroll down, never sideways */
+  overflow-x: hidden;
+}
+
+body {
+  /* the chrome's scene vignette, flattened for a page with no canvas under it.
+     The colour is restated beside the image on purpose: a `background`
+     shorthand here would reset background-color to transparent, and the page
+     would then be relying on <html>'s colour propagating to the canvas — true
+     today, invisible to anyone reading this rule, and one refactor from a
+     white flash. */
+  background-color: var(--bg);
+  background-image: radial-gradient(
+    120% 70% at 50% 0%,
+    var(--bg-raise) 0%,
+    var(--bg) 58%,
+    #090a0c 100%
+  );
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.hub {
+  max-width: 1040px;
+  /* the side padding is the only thing between the text and a phone's edge —
+     it is why this page cannot scroll horizontally at 320px */
+  margin: 0 auto;
+  padding: clamp(48px, 9vw, 104px) clamp(20px, 5vw, 48px) 96px;
+}
+
+/* ── head ─────────────────────────────────────────────────────────────── */
+
+.hub-kicker {
+  margin: 0 0 14px;
+  font: 650 11px/1 var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.hub-title {
+  margin: 0 0 20px;
+  /* fluid rather than a media query: one type ramp, no step where a two-line
+     headline becomes a four-line one */
+  font-size: clamp(28px, 5.2vw, 44px);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.028em;
+  color: var(--text);
+  text-wrap: balance;
+}
+
+.hub-lede {
+  margin: 0 0 16px;
+  max-width: 68ch;
+  font-size: clamp(14.5px, 1.6vw, 16px);
+  line-height: 1.65;
+  color: var(--text-dim);
+}
+
+.hub-lede em {
+  font-style: normal;
+  color: var(--text);
+}
+
+/* the one claim the whole system is built on, set apart by a rule rather than
+   by colour — it is a statement, not a warning */
+.hub-rule {
+  margin: 0;
+  padding-left: 14px;
+  border-left: 2px solid var(--hairline-strong);
+  max-width: 68ch;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+/* ── the two instruments ──────────────────────────────────────────────── */
+
+.hub-grid {
+  display: grid;
+  /* two up when there is room for two readable columns, one up below that.
+     auto-fit + minmax means no breakpoint has to be guessed. */
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+  margin: 56px 0 64px;
+}
+
+.hub-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 26px 24px 22px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--bg-raise);
+  box-shadow: var(--shadow-card);
+  color: inherit;
+  text-decoration: none;
+  /* the whole card is the target, not the "Open" line — 44px is the floor and
+     this clears it many times over */
+  transition:
+    transform var(--t-med) var(--ease-out),
+    border-color var(--t-med) var(--ease-out),
+    box-shadow var(--t-med) var(--ease-out);
+}
+
+.hub-card:hover,
+.hub-card:focus-visible {
+  transform: translateY(-2px);
+  border-color: var(--hairline-strong);
+  box-shadow: var(--shadow-float);
+}
+
+.hub-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.hub-card-top {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.hub-mark {
+  width: 24px;
+  height: 24px;
+  /* baseline-aligned with the wordmark, matching the top bar's anatomy */
+  align-self: center;
+  flex: 0 0 auto;
+}
+
+.hub-card-name {
+  font: 650 19px/1 var(--font-ui);
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.hub-card-name-dim {
+  color: var(--text-faint);
+}
+
+.hub-card-tag {
+  font-size: 12.5px;
+  line-height: 1.2;
+  color: var(--text-faint);
+}
+
+.hub-card-what {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.hub-card-pages {
+  margin: 0;
+  padding: 14px 0 0;
+  list-style: none;
+  border-top: 1px solid var(--hairline);
+  display: grid;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+/* Hanging indent, so a description that wraps reads as a continuation of its
+   own page rather than as the next one: the first line starts flush (padding
+   minus an equal negative indent) and every line after it is inset. A grid
+   with the terms in their own column would align the descriptions perfectly,
+   but it needs `display: contents` on the <li>, which still drops list
+   semantics in some screen readers — not worth trading for the alignment. */
+.hub-card-pages li {
+  padding-left: 14px;
+  text-indent: -14px;
+}
+
+.hub-card-pages b {
+  display: inline;
+  margin-right: 6px;
+  font-weight: 650;
+  color: var(--text-dim);
+}
+
+.hub-card-go {
+  margin-top: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 4px;
+  font: 600 12.5px/1.2 var(--font-ui);
+  color: var(--accent);
+}
+
+.hub-card:hover .hub-card-arrow {
+  transform: translate(2px, -2px);
+}
+
+.hub-card-arrow {
+  font-size: 11px;
+  transition: transform var(--t-fast) var(--ease-out);
+}
+
+/* ── foot ─────────────────────────────────────────────────────────────── */
+
+.hub-foot {
+  padding-top: 24px;
+  border-top: 1px solid var(--hairline);
+}
+
+.hub-foot p {
+  margin: 0;
+  max-width: 72ch;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-faint);
+}
+
+/* Respect a reduced-motion preference: the lift and the arrow nudge are
+   decoration, and the hover state still reads through border and shadow. */
+@media (prefers-reduced-motion: reduce) {
+  .hub-card,
+  .hub-card-arrow {
+    transition: none;
+  }
+  .hub-card:hover,
+  .hub-card:focus-visible {
+    transform: none;
+  }
+  .hub-card:hover .hub-card-arrow {
+    transform: none;
+  }
+}

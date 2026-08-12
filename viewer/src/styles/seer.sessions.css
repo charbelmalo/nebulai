@@ -1,0 +1,1044 @@
+/* seer.sessions.css — Seer: Sessions (3-D plotter)
+   Owner: Seer (sessions). Imported after seer.snapshot.css by seer.css only
+   — not in Nebulai's sheet.
+   Absorbed from chrome.css, in original order:
+     - Sessions page (3-D plotter)
+     - context utilization (#4)  [judgement call: this section's content is
+       .ctx-* / .pace-* / .sessions-auth* / .sessions-stat-note* /
+       .session-axis-label / .session-tooltip / .session-tt-* — all styling
+       the Sessions 3-D plotter card and its hover tooltip, not shared with
+       Nebulai or with SessionSeer. Despite the "(#4)" heading not naming
+       "Sessions", it is Sessions-only by what it styles, so it is placed
+       here rather than in chrome.primitives.css. Includes the "pace: the
+       gap before each step" sub-block, which is part of the same section
+       (no banner of its own).] */
+
+/* ── Sessions page (3-D plotter) ──────────────────────────────────────── */
+
+.sessions-page {
+  position: fixed;
+  inset: 60px 0 0 0;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.sessions-shell {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 328px 1fr;
+  gap: 20px;
+  padding: 24px 32px 24px;
+  min-height: 0;
+}
+
+.sessions-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.sessions-side-block {
+  padding: 20px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--bg-raise);
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sessions-side-block h3 {
+  margin: 0;
+  font: 650 10.5px/1.2 var(--font-ui);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sessions-count {
+  font-size: 10px;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.sessions-hint {
+  margin: 0;
+  font: 400 11px/1.6 var(--font-ui);
+  color: var(--text-dim);
+}
+.sessions-hint code,
+.sessions-empty code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.sessions-drop {
+  transition:
+    border-color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+.sessions-drop.is-drag {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-raise));
+}
+
+.sessions-drop-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.sessions-paste {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-form-ctl);
+  background: var(--bg);
+  color: var(--text);
+  font: 400 11px/1.45 var(--font-mono);
+  padding: 10px 12px;
+  box-sizing: border-box;
+}
+
+.sessions-error {
+  margin: 0;
+  font: 400 11px/1.45 var(--font-ui);
+  color: var(--danger);
+}
+
+.sessions-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sessions-list li {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.sessions-item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-ctl);
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  cursor: pointer;
+  text-align: left;
+  opacity: 0.62;
+  transition:
+    opacity var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out);
+}
+.sessions-list li.is-active .sessions-item {
+  opacity: 1;
+  border-color: var(--hairline);
+  background: var(--bg-pill);
+}
+.sessions-item:hover {
+  opacity: 1;
+}
+
+.sessions-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3.5px;
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4) inset;
+}
+.sessions-list li:not(.is-active) .sessions-swatch {
+  filter: grayscale(1);
+}
+
+.sessions-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.sessions-item-name {
+  font: 600 12px/1.25 var(--font-ui);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sessions-item-meta {
+  font: 400 10px/1.3 var(--font-ui);
+  color: var(--text-faint);
+}
+
+.sessions-item-x {
+  flex: 0 0 auto;
+  width: 26px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  transition:
+    color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+.sessions-item-x:hover {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.sessions-persist-note {
+  margin: 2px 0 0;
+  font: 400 10px/1.3 var(--font-ui);
+  color: var(--text-faint);
+}
+
+/* stage + canvas — the plot is the hero card of this page */
+.sessions-stage {
+  position: relative;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  background: linear-gradient(180deg, #0a0b0e 0%, #0d0e12 100%);
+  box-shadow: var(--shadow-card);
+  min-height: 0;
+}
+.sessions-canvas-host {
+  position: absolute;
+  inset: 0;
+}
+/* req 10 — keyboard focus ring on the 3-D plot host (keyboard focus only). */
+.sessions-canvas-host:focus {
+  outline: none;
+}
+.sessions-canvas-host:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.sessions-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none; /* pointer gestures own pan/zoom, like the other scene canvases */
+}
+.sessions-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.sessions-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  text-align: center;
+  padding: 40px;
+}
+.sessions-empty h2 {
+  margin: 0;
+  font: 650 24px/1.2 var(--font-ui);
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.sessions-empty p {
+  margin: 0;
+  max-width: 460px;
+  font: 400 13px/1.65 var(--font-ui);
+  color: var(--text-dim);
+}
+
+/* legend (top-left over the plot) — transient overlay: glass allowed */
+.sessions-legend {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card-sm);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  pointer-events: none;
+  max-width: 248px;
+}
+.sessions-legend-title {
+  font: 650 9px/1 var(--font-ui);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 9px;
+}
+.sessions-legend-keys {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.sessions-legend-keys li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font: 400 11px/1.25 var(--font-ui);
+}
+.sessions-key-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 0;
+  flex: 0 0 auto;
+}
+.sessions-key-label {
+  color: var(--text);
+  font-weight: 600;
+  width: 52px;
+}
+.sessions-key-help {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+.sessions-legend-axes {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--hairline);
+  font: 400 10px/1.5 var(--font-ui);
+  color: var(--text-dim);
+}
+
+/* Measured at 375x812: the legend is 344px tall on a stage that is only ~380px,
+   so it stops overlaying the plot and starts replacing it — and its lower ~94px
+   sat under the transport regardless. This prose block is 166px of that 344.
+
+   Dropping the axis prose and keeping the colour keys is the deliberate half to
+   cut: the keys ARE the encoding legend (which colour means which turn
+   category — unrecoverable from the plot itself), while this block restates the
+   axis meanings that the axis labels on the stage already carry. Title + keys
+   come to ~157px, which clears the transport with room to spare.
+
+   Not `display:none` on the whole legend: the colour mapping is the one piece of
+   this card a reader cannot reconstruct from anything else on screen. */
+@media (max-width: 720px) {
+  .sessions-legend-axes {
+    display: none;
+  }
+}
+
+/* the "this axis is eased" disclosure — only rendered when the driver actually
+   curved an axis, so it stays a statement of fact rather than boilerplate */
+.sessions-legend-scale {
+  display: inline-block;
+  margin-top: 6px;
+  color: var(--text-faint);
+}
+
+.sessions-legend-hint {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+/* legend keys are toggles: click dims that category in the plot (alpha only —
+   nodes stay pickable, no information loss). The legend card itself is
+   pointer-events:none so orbit-drag works around it; re-enable on the keys. */
+.sessions-key {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 1px 2px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+  border-radius: 6px;
+}
+
+.sessions-key:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.sessions-key.is-off {
+  opacity: 0.38;
+}
+
+.sessions-key.is-off .sessions-key-label {
+  text-decoration: line-through;
+}
+
+/* turn inspector — pinned dissection of one clicked response (top-right).
+   Solid surface, not glass: it's a reading panel, and prose on glass smears. */
+.sessions-inspect {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  width: 312px;
+  max-height: calc(100% - 36px);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card-sm);
+  background: var(--bg-raise);
+  box-shadow: var(--shadow-card);
+}
+
+@media (max-width: 720px) {
+  .sessions-inspect {
+    left: 12px;
+    right: 12px;
+    width: auto;
+  }
+}
+
+.sessions-inspect-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 13px 14px 8px;
+}
+
+.sessions-inspect-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sessions-inspect-name {
+  font: 650 12.5px/1.25 var(--font-ui);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessions-inspect-turn {
+  font: 500 10.5px/1.2 var(--font-mono);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.sessions-inspect-nav {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.sessions-inspect-btn {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: none;
+  color: var(--text-dim);
+  font: 500 13px/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.sessions-inspect-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+}
+
+.sessions-inspect-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.sessions-inspect-cat {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px 9px;
+  font: 600 11px/1.2 var(--font-ui);
+  color: var(--text);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.sessions-inspect-cathelp {
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.sessions-inspect-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding: 11px 14px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.sessions-inspect-quote {
+  padding: 8px 10px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.sessions-inspect-quote.is-response {
+  border-left-color: var(--text-faint);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.sessions-inspect-quote-l {
+  display: block;
+  margin-bottom: 3px;
+  font: 650 9px/1 var(--font-ui);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.sessions-inspect-quote p {
+  margin: 0;
+  font: 400 11.5px/1.55 var(--font-ui);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.sessions-inspect-note {
+  margin: 0;
+  font: 400 11px/1.5 var(--font-ui);
+  color: var(--text-faint);
+}
+
+.sessions-inspect-l {
+  display: block;
+  margin-bottom: 5px;
+  font: 650 9px/1 var(--font-ui);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.sessions-inspect-files ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sessions-inspect-files li {
+  font: 500 10.5px/1.4 var(--font-mono);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.sessions-inspect-meta {
+  display: flex;
+  gap: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--hairline);
+  font: 500 10px/1.2 var(--font-mono);
+  color: var(--text-faint);
+}
+
+/* stat cards (bottom-right over the plot) — KPI anatomy:
+   name → LARGE number → tiny uppercase label → detail chips */
+/* Bottom-anchored HUD, but BOUNDED at the top and scrollable. Unbounded, a
+   third card tall enough to overflow pushed the newest analysis off the top of
+   the stage with nothing to say it was there — the one card you most want after
+   loading a file. `margin-top: auto` on the first child keeps the stack hugging
+   the bottom while it fits, without the flex-end + overflow combination that
+   makes the first item unreachable. */
+.sessions-stats {
+  position: absolute;
+  right: 18px;
+  top: 18px;
+  bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 312px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  /* the empty track stays click-through so the scene behind it still orbits;
+     the cards themselves opt back in, which is also what makes their tooltips
+     reachable at all */
+  pointer-events: none;
+}
+.sessions-stats > :first-child {
+  margin-top: auto;
+}
+.sessions-stat-card {
+  padding: 14px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card-sm);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-card);
+  pointer-events: auto;
+}
+.sessions-stat-name {
+  font: 600 12px/1.25 var(--font-ui);
+  color: var(--text);
+  margin-bottom: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.sessions-stat-fmt {
+  flex: none;
+  font: 500 9px/1.2 var(--font-mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 5px;
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+}
+/* ── context utilization (#4) ───────────────────────────────────────────────
+   Columns are stacked bottom-up, so the flex column is REVERSED and the
+   segments are emitted cheapest-first. Colour is ordered by what a token
+   costs: muted for cache the turn merely re-read, accent for cache it wrote,
+   hot for tokens sent uncached. A tall pale column is a big cheap window; gold
+   at the top is what you actually paid full price for. */
+.ctx-util {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+.ctx-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 12px;
+  margin-bottom: 7px;
+  font: 400 9.5px/1.35 var(--font-mono);
+  color: var(--text-faint);
+}
+.ctx-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ctx-key::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: currentcolor;
+}
+.ctx-key b {
+  color: var(--text);
+  font-weight: 600;
+}
+.ctx-key.is-reused {
+  color: var(--text-faint);
+}
+.ctx-key.is-written {
+  color: var(--accent);
+}
+.ctx-key.is-fresh {
+  color: var(--data-hot);
+}
+/* the peak is a number, not a band — no swatch to key it to */
+.ctx-key.is-peak::before {
+  display: none;
+}
+/* what the three numbers are OF; without it they read as session totals */
+.ctx-scope {
+  flex: 1 0 100%;
+  color: var(--text-faint);
+  opacity: 0.75;
+}
+.ctx-cols {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 46px;
+  padding-bottom: 1px;
+  border-bottom: 1px solid var(--hairline-strong);
+  overflow: hidden;
+}
+.ctx-col {
+  display: flex;
+  flex-direction: column-reverse;
+  flex: 1 1 0;
+  min-width: 1px;
+  border-radius: 1px 1px 0 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+.ctx-seg {
+  width: 100%;
+  min-height: 1px; /* a few hundred tokens beside a 90k window still exist */
+}
+.ctx-seg.is-reused {
+  background: color-mix(in srgb, var(--text-faint) 62%, transparent);
+}
+.ctx-seg.is-written {
+  background: var(--accent);
+}
+.ctx-seg.is-fresh {
+  background: var(--data-hot);
+}
+/* a turn whose window shrank — marked on the column itself, since the sentence
+   below names turn numbers and the eye needs somewhere to put them */
+.ctx-col.is-compacted {
+  box-shadow: inset 0 -2px 0 0 var(--danger);
+}
+.ctx-growth {
+  margin: 7px 0 0;
+  font: 400 9.5px/1.5 var(--font-ui);
+  color: var(--text-faint);
+}
+.ctx-growth b {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+/* --- pace: the gap before each step -------------------------------------
+   Deliberately quieter than the context columns above it. Those are a
+   partition of a token count and earn saturated colour; this is one scalar per
+   step, and its job is to let the eye find the few tall cells. The tallest one
+   gets the accent, because "which step was the slow one" is the question the
+   strip exists to answer. */
+.pace-util {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+.ctx-key.is-pace {
+  color: var(--accent);
+}
+.ctx-key.is-pace-sum::before {
+  display: none; /* a total, not a band */
+}
+.pace-cells {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 26px;
+  padding-bottom: 1px;
+  border-bottom: 1px solid var(--hairline-strong);
+  overflow: hidden;
+}
+.pace-cell {
+  flex: 1 1 0;
+  min-width: 1px;
+  min-height: 1px;
+  border-radius: 1px 1px 0 0;
+  background: color-mix(in srgb, var(--text-faint) 55%, transparent);
+}
+.pace-cell.is-slowest {
+  background: var(--accent);
+}
+
+.sessions-auth {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+  font: 500 10px/1.35 var(--font-mono);
+  color: var(--text-dim);
+}
+.sessions-auth-tag {
+  font: 650 8px/1.2 var(--font-ui);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 5px;
+  color: var(--bg);
+  background: var(--accent);
+}
+.sessions-auth-models {
+  color: var(--text);
+}
+.sessions-stat-note {
+  margin: 8px 0 0;
+  font: 400 9.5px/1.5 var(--font-ui);
+  color: var(--text-faint);
+}
+.sessions-stat-note b {
+  color: var(--text);
+  font-weight: 600;
+}
+/* when the note stands in for the outcome bars it takes their divider too */
+.sessions-stat-note-top {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+.sessions-stat-note code {
+  font: 400 9px/1.5 var(--font-mono);
+  color: var(--text-dim);
+}
+
+/* Axis tick labels for the emissive field. Positioned by the driver in CSS
+   pixels via `translate` (never `transform` — the tooltip's entrance animation
+   owns transform, and these share the overlay). `top/left: 0` puts the
+   translate origin at the overlay's corner so the driver can hand us projected
+   coordinates directly. Quiet enough to read as calibration, not as data. */
+.session-axis-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  font: 500 9px/1 var(--font-mono);
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  white-space: nowrap;
+  pointer-events: none;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+  z-index: 10;
+}
+
+/* hover tooltip — transient: glass */
+.session-tooltip {
+  position: absolute;
+  /* anchor the translate origin to the overlay corner — the driver hands us
+     projected CSS-pixel coordinates and moves us with `translate` */
+  top: 0;
+  left: 0;
+  z-index: 20;
+  min-width: 180px;
+  max-width: 280px;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card-sm);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  pointer-events: none;
+  box-shadow: var(--shadow-float);
+}
+.session-tt-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+.session-tt-name {
+  font: 600 12px/1.25 var(--font-ui);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-tt-turn {
+  font: 400 10px/1.2 var(--font-ui);
+  color: var(--text-faint);
+  flex: 0 0 auto;
+}
+.session-tt-cat {
+  display: inline-block;
+  margin: 6px 0;
+  font: 650 9px/1 var(--font-ui);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  color: #0b0c0f;
+}
+.session-tt-cat[data-cat="orient"] { background: rgb(92, 198, 236); }
+.session-tt-cat[data-cat="plan"] { background: rgb(245, 190, 92); }
+.session-tt-cat[data-cat="edit"] { background: rgb(126, 222, 150); }
+.session-tt-cat[data-cat="exec"] { background: rgb(198, 130, 240); }
+.session-tt-cat[data-cat="deliver"] { background: rgb(240, 120, 150); }
+.session-tt-cat[data-cat="reflect"] { background: rgb(150, 158, 180); }
+.session-tt-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 12px;
+  margin: 0;
+}
+.session-tt-grid dt {
+  font: 400 10px/1.45 var(--font-ui);
+  color: var(--text-dim);
+}
+.session-tt-grid dd {
+  margin: 0;
+  font: 500 11px/1.45 var(--font-mono);
+  color: var(--text);
+  text-align: right;
+}
+
+@media (max-width: 900px) {
+  .sessions-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .sessions-side {
+    max-height: 38vh;
+  }
+  .sessions-stats {
+    display: none;
+  }
+  .sessions-transport {
+    right: 12px;
+    left: 12px;
+    bottom: 12px;
+    gap: 8px;
+  }
+}
+
+/* ── Sessions tool chips + tool outcomes ──────────────────────────────────
+   Moved here from chrome.primitives.css's "stat tiles (shared)" section,
+   which flagged it for this step: the classes sat under a "(shared)" banner
+   but are used by exactly one component, chrome/SessionsPage.tsx. With the
+   two instruments on separate entries "shared" costs Nebulai a sheet for a
+   page it cannot navigate to, so the flag is resolved the honest way — they
+   are Seer's, and they live in Seer's sheet.
+   The product-neutral .stat-row/.stat/.stat-strip they were interleaved with
+   stayed behind; nothing here overrides those, it only extends the tile they
+   sit inside, so the later position in the cascade changes no computed
+   style. */
+
+.sessions-stat-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+.sessions-tool-chip {
+  font: 400 10px/1.35 var(--font-mono);
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text-dim);
+}
+.sessions-tool-chip b {
+  color: var(--text);
+}
+/* Per-tool outcome bars. One row per tool, stacked ok → failed → unresolved on
+   a track shared across the whole card, so bar length is a count you can read
+   between rows and not a per-row percentage. The three colours are the only
+   place in the card where hue carries meaning, so they are the token trio and
+   nothing else borrows them here. */
+.tool-outcomes {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+.tool-outcome-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 12px;
+  margin-bottom: 7px;
+  font: 400 9.5px/1.35 var(--font-mono);
+  color: var(--text-faint);
+}
+.tool-outcome-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+/* the swatch, so the legend keys to the bars without a separate shape */
+.tool-outcome-key::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: currentcolor;
+}
+.tool-outcome-key b {
+  color: var(--text);
+  font-weight: 600;
+}
+.tool-outcome-key.is-ok {
+  color: var(--accent);
+}
+.tool-outcome-key.is-failed {
+  color: var(--danger);
+}
+.tool-outcome-key.is-unresolved {
+  color: var(--warn);
+}
+.tool-outcome-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.tool-outcome-row {
+  display: grid;
+  grid-template-columns: minmax(0, 84px) minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 8px;
+}
+.tool-outcome-name {
+  font: 400 10px/1.35 var(--font-mono);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-outcome-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.tool-outcome-seg {
+  height: 100%;
+  min-width: 1px; /* a single call still has to be visible */
+}
+.tool-outcome-seg.is-ok {
+  background: var(--accent);
+}
+.tool-outcome-seg.is-failed {
+  background: var(--danger);
+}
+.tool-outcome-seg.is-unresolved {
+  background: var(--warn);
+}
+.tool-outcome-n {
+  font: 500 10px/1.35 var(--font-mono);
+  color: var(--text);
+  text-align: right;
+}
+/* the tools past the row budget, said in words rather than pooled into a bar */
+.tool-outcome-rest {
+  margin: 6px 0 0;
+  font: 400 9.5px/1.5 var(--font-ui);
+  color: var(--text-faint);
+}
+.tool-outcome-rest b {
+  color: var(--text-dim);
+  font-weight: 600;
+}

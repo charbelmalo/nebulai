@@ -30,10 +30,10 @@
  *  Source: embed.json → PCA of W_E computed offline in float64 (eigendecomp of
  *  the 768×768 covariance; coords = Wc·V). */
 
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { type EmbedBundle, loadEmbed } from "../../data/interp";
 import { EmissiveField2D, FieldMarker, rankNormalize, type Field2DLook } from "./field2d";
-import { InterpTooltip, type TipRow } from "./chart-tooltip";
+import { InterpTooltip, type TipRow } from "@psychix/viz/chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 const GL = 60; // px gutters (axis captions + anchor labels)

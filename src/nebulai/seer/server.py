@@ -695,7 +695,7 @@ def serve(host: str = "127.0.0.1", port: int = DEFAULT_PORT,
         print(
             f"[seer] watching {d}"
             if d.is_dir()
-            else f"[seer] no spool at {d} — run `nebulai seer install` to capture "
+            else f"[seer] no spool at {d} — run `seer install` to capture "
                  "your own sessions"
         )
     try:

@@ -26,9 +26,9 @@ clear. §6 tracks what has actually landed.
 | Premium stack | `viewer/src/scene/drivers/` + `scene/sessions/` + `scene/seer/` — 8 driver/field files importing `three/webgpu` (16 modules total, counting `scene/layers/`, `picking.ts`, `post/bloom.ts`, `InterpPage.tsx`) |
 | Flat stack | `viewer/src/scene/interp/` — 23 deck.gl drivers + `registry.ts` (25 registry features; the other 2 drivers are WebGPU) |
 | The bridge | `viewer/src/scene/interp/field2d.ts` — WebGPU emissive field under a deck chart |
-| Chart aesthetic | `viewer/src/scene/interp/chart-theme.ts` |
+| Chart aesthetic | `viewer/src/viz/chart-theme.ts` |
 | Bloom | `viewer/src/scene/post/bloom.ts` |
-| Design tokens | `viewer/src/styles/tokens.ts` ⟷ `tokens.css` (guarded by `tokens-sync.test.ts`) |
+| Design tokens | `viewer/src/viz/tokens.ts` ⟷ `tokens.css` (guarded by `tokens-sync.test.ts`) |
 | Session data | `viewer/src/chrome/sessionlog.ts` — the fold that already computes tool/error tallies |
 
 ---
@@ -316,7 +316,7 @@ it drift.
 
 ### Tier 1.1 — `<StatStrip>`, as built
 
-`chrome/StatStrip.tsx` exports `Stat`, `StatStrip` and the `StatTile` type.
+`viz/StatStrip.tsx` exports `Stat`, `StatStrip` and the `StatTile` type.
 `.sessions-stat*` generalised to `.stat*`; SessionsPage now imports the shared
 tile. The strip needed a **new channel on the driver contract** — the draft
 assumed the numbers were already lying around in each chart's header, and they
@@ -349,7 +349,7 @@ evidence failure the registry notes exist to prevent.
 
 ### Tier 1.2 — `<ChartCard>`, as built
 
-`chrome/ChartCard.tsx` frames every Internals chart: a header **in flow above**
+`viz/ChartCard.tsx` frames every Internals chart: a header **in flow above**
 the canvas (feature number, title, model tag, subtitle, controls), the plot, and
 the stat strip below it. The download and legend-collapse buttons moved into the
 header, and the floating card was cut down to what actually has to sit next to
@@ -760,7 +760,7 @@ Two further corrections the first version needed:
   hide-not-clamp rule drops it — an axis clear of every column and missing its
   largest tick.
 
-`logSpan`/`decadeOn` were extracted to `scene/interp/logscale.ts` because the
+`logSpan`/`decadeOn` were extracted to `viz/logscale.ts` because the
 second chart needed a different span; `rollout.ts`'s `logNorm`/`decadeAt` now
 delegate and their 15 tests pass unchanged. 8 new tests cover decade spacing,
 tick agreement, clamping, `!(v > 0)` for zero/negative/**NaN** (a NaN height is

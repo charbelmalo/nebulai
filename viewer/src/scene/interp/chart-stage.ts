@@ -40,10 +40,10 @@ import {
   vec3,
 } from "three/tsl";
 import { appStore } from "../../app/store";
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { GestureRecognizer } from "../gestures";
 import { createBloomPipeline, type BloomOptions, type BloomPipeline } from "../post/bloom";
-import { BG } from "../../styles/tokens";
+import { BG } from "@psychix/viz/tokens";
 import type { Inset } from "./field2d";
 
 /** Per-view look. Required except where marked, for the same reason

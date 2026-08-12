@@ -35,11 +35,11 @@ import * as THREE from "three/webgpu";
 import { float, instancedBufferAttribute, mix, uniform, uv, vec3 } from "three/tsl";
 
 import { appStore } from "../../app/store";
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { Camera2D } from "../camera2d";
 import { PointPicker } from "../picking";
 import { createBloomPipeline, type BloomOptions, type BloomPipeline } from "../post/bloom";
-import { BG } from "../../styles/tokens";
+import { BG } from "@psychix/viz/tokens";
 
 /** Per-view look. Deliberately all required except bloom: these are not taste
  *  knobs with sane defaults — the right value depends on how densely the view's

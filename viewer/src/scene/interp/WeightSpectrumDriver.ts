@@ -11,7 +11,7 @@
  *  with its built-in picking, camera off (framing derived from canvas size). */
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { loadWeights, type SpectrumMatrix, type WeightsBundle } from "../../data/interp";
 import {
   ACCENT,
@@ -22,10 +22,10 @@ import {
   markerPoly,
   type Vec2,
   withAlpha,
-} from "./chart-theme";
-import { InterpTooltip } from "./chart-tooltip";
+} from "@psychix/viz/chart-theme";
+import { InterpTooltip } from "@psychix/viz/chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
-import type { StatTile } from "../../chrome/StatStrip";
+import type { StatTile } from "@psychix/viz/StatStrip";
 
 type LayersModule = typeof import("@deck.gl/layers");
 

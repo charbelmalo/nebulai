@@ -14,7 +14,7 @@
  *  deck.gl (WebGL2), camera off, static. Source: cofire.json ⋈ sae.json. */
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import type { InterpSelection } from "../../app/store";
 import {
   type CofireBundle,
@@ -23,8 +23,8 @@ import {
   loadCofire,
   loadSAE,
 } from "../../data/interp";
-import { ACCENT, AXIS_RGBA, crosshair, dashedSegment, MARKER_HOT, withAlpha } from "./chart-theme";
-import { InterpTooltip, type TipRow } from "./chart-tooltip";
+import { ACCENT, AXIS_RGBA, crosshair, dashedSegment, MARKER_HOT, withAlpha } from "@psychix/viz/chart-theme";
+import { InterpTooltip, type TipRow } from "@psychix/viz/chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 import { LAYER_COLORS } from "./NeuronFieldDriver";
 

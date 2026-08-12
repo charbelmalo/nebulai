@@ -14,11 +14,11 @@
  *  deck.gl (WebGL2), camera off, static. Source: ablation.json. */
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { appStore, type InterpSelection } from "../../app/store";
 import { type AblationBundle, loadAblation } from "../../data/interp";
-import { AXIS_RGBA, dashedSegment, MARKER_HOT, withAlpha } from "./chart-theme";
-import { InterpTooltip, type TipRow } from "./chart-tooltip";
+import { AXIS_RGBA, dashedSegment, MARKER_HOT, withAlpha } from "@psychix/viz/chart-theme";
+import { InterpTooltip, type TipRow } from "@psychix/viz/chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");

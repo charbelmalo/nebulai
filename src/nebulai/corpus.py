@@ -12,8 +12,9 @@ Two facts about every entry below were measured, not assumed (2026-08-12):
 2. **The chat endpoint serves that exact model.** `endpoint` is a pinned model
    id, never a family or an alias. A cheaper endpoint that serves a *different*
    model is not a fallback — it is a different model, and reporting its titles
-   as this model's would be a fabrication. `backend/name.py` therefore refuses
-   rather than substitutes; see `NamerIdentityError`.
+   as this model's would be a fabrication. `llm.py` therefore refuses rather
+   than substitutes; see `IdentityError` — the refusal is enforced there now, so
+   every caller of the shared client inherits it, not just the namer.
 
 `tie_word_embeddings` decides whether the W_E↔W_U experiment is even askable:
 a tied model has one matrix serving both roles, so "does it read tokens the way

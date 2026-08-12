@@ -11,7 +11,7 @@
     {
       "name": "seer-server",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "python", "-m", "nebulai", "seer", "serve", "--watch"],
+      "runtimeArgs": ["run", "seer", "serve", "--watch"],
       "port": 8125
     },
     {

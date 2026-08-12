@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="psychiX — two instruments for looking inside machine work: Nebul.AI maps what a model knows, Seer maps what an agent did."
+    />
+    <!-- The hub's own mark: the nebula's dot and the seer's lens in one glyph,
+         so the tab icon says "both" rather than borrowing either instrument's. -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='11' cy='12' r='6.5' fill='%23ea4f86'/%3E%3Ccircle cx='22' cy='20' r='7' fill='none' stroke='%2346c8eb' stroke-width='2.4'/%3E%3Ccircle cx='22' cy='20' r='2.6' fill='%23f5c33b'/%3E%3C/svg%3E"
+    />
+    <title>psychiX — instruments for model and agent work</title>
+    <!-- No script tag, deliberately. The hub is one page of text and two
+         links; it has nothing to boot, and the cheapest way to keep it cheap
+         is for it to have no runtime at all. Vite still processes this sheet
+         (hashing it and rewriting the href against `base`), so the built tree
+         is a plain index.html + one CSS asset. -->
+    <link rel="stylesheet" href="/src/hub/hub.css" />
+  </head>
+  <body>
+    <main class="hub">
+      <header class="hub-head">
+        <p class="hub-kicker">psychiX</p>
+        <h1 class="hub-title">Two instruments for looking inside the work.</h1>
+        <p class="hub-lede">
+          One of them maps what a language model has <em>learned</em>; the other maps what
+          an agent <em>did</em>. Both are static, client-side viewers over measurements
+          that were computed ahead of time — nothing is calculated on a server when you
+          open a page, and nothing is invented to fill a gap.
+        </p>
+        <p class="hub-rule">
+          A measurement that is missing is drawn as missing, never as a zero.
+        </p>
+      </header>
+
+      <div class="hub-grid">
+        <!-- Relative hrefs, and correct here for the reason they are WRONG in
+             the instruments' own top bars: the hub is the PARENT of both
+             deploy trees (/psychiX/ over /psychiX/nebulai-maps/ and
+             /psychiX/seer/), not their sibling. So these resolve wherever the
+             three trees are mounted together, with no build-time base to
+             thread through. -->
+        <a class="hub-card" href="nebulai-maps/">
+          <span class="hub-card-top">
+            <svg class="hub-mark" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="9" cy="13" r="4.2" fill="#ea4f86" opacity="0.9" />
+              <circle cx="15.5" cy="9" r="2.8" fill="#f5c33b" opacity="0.9" />
+              <circle cx="16" cy="16" r="1.8" fill="#8b3bf0" opacity="0.95" />
+            </svg>
+            <span class="hub-card-name">
+              nebul<span class="hub-card-name-dim">.ai</span>
+            </span>
+            <span class="hub-card-tag">map what a model knows</span>
+          </span>
+          <p class="hub-card-what">
+            Model cartography. Every token, sparse-autoencoder feature or MLP neuron is
+            placed by the model's own vector for it, reduced to two dimensions, clustered
+            and named — so a model's vocabulary becomes a map you can read.
+          </p>
+          <ul class="hub-card-pages">
+            <li><b>Semantic map</b> the atlas itself, plus chord, hierarchy and A/B compare views</li>
+            <li><b>Internals</b> panels measured from stored weights and single forward passes</li>
+            <li><b>Guide</b> what each view measures, the math, and where the numbers came from</li>
+          </ul>
+          <span class="hub-card-go">Open Nebul.AI<span class="hub-card-arrow" aria-hidden="true">↗</span></span>
+        </a>
+
+        <a class="hub-card" href="seer/">
+          <span class="hub-card-top">
+            <svg class="hub-mark" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M2.4 12c3-5.2 6.7-7.8 9.6-7.8S18.6 6.8 21.6 12c-3 5.2-6.7 7.8-9.6 7.8S5.4 17.2 2.4 12z"
+                fill="none"
+                stroke="#46c8eb"
+                stroke-width="1.7"
+                stroke-linejoin="round"
+              />
+              <circle cx="12" cy="12" r="3.3" fill="#f5c33b" />
+            </svg>
+            <span class="hub-card-name">seer</span>
+            <span class="hub-card-tag">map what an agent did</span>
+          </span>
+          <p class="hub-card-what">
+            Agent observability. A coding agent's run is a long transcript nobody reads;
+            Seer turns one into a shape — tokens, tools, context and cost over time — and
+            refuses to compare two runs on a number their agents do not count the same way.
+          </p>
+          <ul class="hub-card-pages">
+            <li><b>Live</b> a run as it happens, from a capture server you point it at</li>
+            <li><b>Transcripts</b> drop a session log; it flies as a path through time, context and output</li>
+            <li><b>Topics</b> which subjects a conversation actually circled, turn by turn</li>
+          </ul>
+          <span class="hub-card-go">Open Seer<span class="hub-card-arrow" aria-hidden="true">↗</span></span>
+        </a>
+      </div>
+
+      <footer class="hub-foot">
+        <p>
+          Both instruments render in the browser — WebGPU where the device has it, WebGL2
+          everywhere else. Nebul.AI reads a pre-baked artifact tree served beside it. Seer
+          reads only what you give it: a transcript you drop in, or a capture server you
+          name yourself. Neither sends your data anywhere.
+        </p>
+      </footer>
+    </main>
+  </body>
+</html>

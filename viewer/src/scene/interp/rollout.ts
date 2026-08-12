@@ -7,7 +7,7 @@
  *  the paper guarantees — row-stochastic, causal, monotone in depth — is a
  *  property of THIS file and is asserted against it. */
 
-import { decadeOn, logSpan } from "./logscale";
+import { decadeOn, logSpan } from "@psychix/viz/logscale";
 
 /** One causal (source, destination) pair. */
 export interface RollCell {

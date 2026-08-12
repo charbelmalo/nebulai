@@ -16,12 +16,12 @@
  *  a small map of the model's heads. deck.gl (WebGL2), camera off. */
 
 import type { Deck, OrthographicView } from "@deck.gl/core";
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { loadTrace, type TraceBundle } from "../../data/interp";
-import { HOT } from "./chart-theme";
-import { InterpTooltip, type TipRow } from "./chart-tooltip";
+import { HOT } from "@psychix/viz/chart-theme";
+import { InterpTooltip, type TipRow } from "@psychix/viz/chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
-import type { StatTile } from "../../chrome/StatStrip";
+import type { StatTile } from "@psychix/viz/StatStrip";
 
 type LayersModule = typeof import("@deck.gl/layers");
 

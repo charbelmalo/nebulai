@@ -17,7 +17,7 @@
  *  d_head×d_head, verified == full 768×768 eigendecomposition). */
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { appStore, type InterpSelection } from "../../app/store";
 import { type OVEigsBundle, loadOVEigs } from "../../data/interp";
 import {
@@ -29,8 +29,8 @@ import {
   type RGB,
   type Vec2,
   withAlpha,
-} from "./chart-theme";
-import { InterpTooltip, type TipRow } from "./chart-tooltip";
+} from "@psychix/viz/chart-theme";
+import { InterpTooltip, type TipRow } from "@psychix/viz/chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 import { LAYER_COLORS } from "./NeuronFieldDriver";
 

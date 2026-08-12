@@ -16,7 +16,7 @@ import {
   vec3,
 } from "three/tsl";
 import type { Columns } from "../../data/columns";
-import { rampColor } from "../../styles/tokens";
+import { rampColor } from "@psychix/viz/tokens";
 
 // additive blending: dense cores must not saturate to white, so alphas stay low
 const NOISE_RGB: [number, number, number] = [0.42, 0.38, 0.47];

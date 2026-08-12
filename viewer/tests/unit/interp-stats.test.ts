@@ -1,4 +1,4 @@
-/** The footer stat strip (chrome/StatStrip.tsx) is fed by each interp driver's
+/** The footer stat strip (viz/StatStrip.tsx) is fed by each interp driver's
  *  optional `stats()`. These guard the two properties that make a tile honest
  *  rather than decorative — both of which were live bugs caught in review, not
  *  hypotheticals:

@@ -88,8 +88,8 @@ flowchart TD
 
     subgraph D5 ["5 · Your own conversations"]
         direction TB
-        D5a["Drop a JSON log"] --> D5b["Snapshot Map<br/>topics over time"]
-        D5b --> D5c["Sessions<br/>agent transcripts"]
+        D5a["Drop a JSON log"] --> D5b["Topics<br/>topics over time"]
+        D5b --> D5c["Transcripts<br/>agent transcripts"]
         D5c --> H6{{"⚠ your data stays<br/>in your browser"}}
     end
 

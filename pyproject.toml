@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 nebulai = "nebulai.cli:main"
+seer = "nebulai.seer.cli:main"
 
 [dependency-groups]
 dev = ["pytest"]

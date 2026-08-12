@@ -1,20 +1,42 @@
-/** Boot: probe GPU tier → discover datasets → load through the worker →
- *  hand the canvas to the AtlasDriver and run the frame loop. The status pill
- *  doubles as the MetaLine — dataset provenance stays visible in every mode. */
+/** Nebulai's entry — the instrument that maps what a model knows
+ *  (Semantic map · Internals · Guide). Seer's entry is `src/seer-main.ts`;
+ *  the two share `app/boot-shell.ts`, the chrome and @psychix/viz, and share
+ *  no page components or drivers at all.
+ *
+ *  Boot happens in two phases, because the shell must not depend on the atlas.
+ *
+ *  `bootShell()` (shared, see app/boot-shell.ts) is unconditional — probe the
+ *  GPU tier, mount the Preact chrome, read the permalink. Nothing in it can be
+ *  starved by missing data. `bootAtlas()` below holds everything that needs
+ *  baked artifacts: discover datasets, load one through the worker, hand the
+ *  canvas to the AtlasDriver, wire the view manager and run the frame loop. It
+ *  returns quietly when there is nothing to render, rather than taking the
+ *  page down with it.
+ *
+ *  The split exists because a second instrument — Seer, the agent-run
+ *  observability app — shares this shell and runs with ZERO atlas artifacts in
+ *  `out/`. Under the old linear boot a missing out/index.json aborted before a
+ *  single pixel of chrome appeared, which held every non-map page hostage to a
+ *  dataset it never reads. It is still worth keeping now that Seer boots from
+ *  its own HTML: a Nebulai checkout with nothing built yet lands on a standing
+ *  page that says so. The status pill doubles as the MetaLine — dataset
+ *  provenance stays visible in every mode. */
 
-import "./styles/tokens.css";
-import "./styles/craft-tokens.css";
-import "./styles/chrome.css";
+import "@psychix/viz/tokens.css";
+import "@psychix/viz/craft-tokens.css";
+import "./styles/nebulai.css";
 
 import { registerActions } from "./app/actions";
-import { probeCapabilities } from "./app/capabilities";
+import { bootShell, finishShellBoot, type BootedShell } from "./app/boot-shell";
 import { appStore, type ViewMode } from "./app/store";
-import { mountChrome } from "./chrome/mount";
+import { NEBULAI_APP } from "./chrome/apps/nebulai";
 import { $compareTour } from "./chrome/state";
-import { applyUrlState, readUrlState, startUrlSync } from "./chrome/urlState";
+import { registerInterpUrlHooks } from "./chrome/urlState";
 import { loadCompare } from "./data/compare";
 import { evictDataset, loadDataset, loadIndex } from "./data/loader";
 import { DATA_BASE } from "./data/base";
+import { isLiveTrace } from "./data/interp";
+import { findFeature } from "./scene/interp/registry";
 import { AtlasDriver } from "./scene/drivers/AtlasDriver";
 import { ChordDriver } from "./scene/drivers/ChordDriver";
 import { CompareDriver } from "./scene/drivers/CompareDriver";
@@ -22,8 +44,6 @@ import { HierarchyDriver } from "./scene/drivers/HierarchyDriver";
 
 declare global {
   interface Window {
-    __perf: { parseMs?: number; bootMs?: number; p95FrameMs?: number };
-    __store: typeof appStore;
     __driver?: AtlasDriver;
     __compareDriver?: CompareDriver;
     __chordDriver?: ChordDriver;
@@ -32,22 +52,15 @@ declare global {
   }
 }
 
-window.__perf = {};
-window.__store = appStore; // e2e tests read state through this
+// The permalink layer is instrument-neutral by design; the two Internals-only
+// hash keys are validated by things only this entry may import (the 25-driver
+// registry, the live-trace prefix). Registered before bootShell reads the
+// hash. See chrome/urlState.ts.
+registerInterpUrlHooks({
+  knownFeature: (id) => !!findFeature(id),
+  shareableTrace: (slug) => !isLiveTrace(slug),
+});
 
-const chrome = document.getElementById("chrome")!;
-const progress = document.createElement("div");
-progress.className = "boot-progress";
-const status = document.createElement("div");
-status.className = "boot-status";
-// the MetaLine truncates to one line on compact viewports (see chrome.css);
-// tapping it reveals the full provenance string instead of leaving it clipped
-status.addEventListener("click", () => status.classList.toggle("is-expanded"));
-chrome.append(progress, status);
-
-function say(text: string) {
-  status.textContent = text;
-}
 
 /** The honesty line: dataset provenance stays visible in every mode. */
 export function metaLine(): string {
@@ -78,16 +91,40 @@ export function metaLine(): string {
 
 async function boot() {
   const t0 = performance.now();
-  const caps = await probeCapabilities();
-  appStore.getState().setCapabilities(caps);
-  say(`gpu: ${caps.tier} — loading datasets…`);
+  const shell = await bootShell(NEBULAI_APP);
+  shell.say(`gpu: ${shell.caps.tier} — loading datasets…`);
 
-  const index = await loadIndex();
-  appStore.getState().setDatasets(index.datasets);
-  // permalink: `#model=` picks the boot dataset; the rest of the hash state is
-  // applied after the app shell is wired (applyUrlState below)
-  const urlState = readUrlState();
-  const first = index.datasets.find((d) => d.id === urlState.model) ?? index.datasets[0];
+  // A dead atlas must not be a dead page — Internals and Guide owe it nothing,
+  // and neither does a fresh checkout with an empty out/. Report the failure on
+  // the status pill and carry on with the shell standing.
+  try {
+    await bootAtlas(shell, t0);
+  } catch (e) {
+    console.error(e);
+    shell.say(`atlas failed: ${e instanceof Error ? e.message : e}`);
+  }
+
+  // permalink: apply the remaining hash state now that actions are registered,
+  // then keep the hash mirroring the store so every view is shareable. This
+  // sits here rather than inside bootAtlas so it runs exactly once on every
+  // path — atlas, no-atlas and failed-atlas alike — and still lands after
+  // registerActions, which bootAtlas reaches before it resolves.
+  finishShellBoot(shell.urlState);
+}
+
+async function bootAtlas(shell: BootedShell, t0: number) {
+  const { caps, urlState, progress, say } = shell;
+  // out/index.json is genuinely optional: a Seer-only checkout has no baked
+  // artifacts at all. A missing or empty index is a fact to report, not a
+  // failure to throw — the shell is already up and every non-map page works
+  // without a single atlas byte.
+  const index = await loadIndex().catch((e) => {
+    console.warn("[nebulai] no dataset index —", e instanceof Error ? e.message : e);
+    return null;
+  });
+  const datasets = index?.datasets ?? [];
+  appStore.getState().setDatasets(datasets);
+  const first = datasets.find((d) => d.id === urlState.model) ?? datasets[0];
   if (!first) {
     say("no datasets in out/index.json — run `uv run nebulai tokens` first");
     return;
@@ -234,8 +271,6 @@ async function boot() {
     say(`${metaLine()} · gpu: ${caps.tier}`);
   }
 
-  mountChrome(chrome);
-
   /** Load a dataset entry and hand it to every live driver. `noCache` skips
    *  both the in-memory column cache and the browser HTTP cache — used after
    *  a rebuild overwrites the artifact on disk. */
@@ -338,11 +373,6 @@ async function boot() {
     switchViewMode(deepView).catch(() => void 0);
   }
 
-  // permalink: apply the remaining hash state now that actions are registered,
-  // then keep the hash mirroring the store so every view is shareable
-  applyUrlState(urlState);
-  startUrlSync();
-
   window.__perf.bootMs = performance.now() - t0;
   console.info(
     `[nebulai] boot ${window.__perf.bootMs.toFixed(0)}ms, worker parse ${ds.parseMs.toFixed(0)}ms, ` +
@@ -380,6 +410,14 @@ async function boot() {
 }
 
 boot().catch((e) => {
+  // bootShell itself failed (or something after the try/catch did): the pill
+  // may not exist yet, so fall back to creating one rather than losing the
+  // only report of why the page is blank.
   console.error(e);
-  say(`boot failed: ${e instanceof Error ? e.message : e}`);
+  const status =
+    document.querySelector<HTMLElement>(".boot-status") ??
+    document.getElementById("chrome")!.appendChild(
+      Object.assign(document.createElement("div"), { className: "boot-status" }),
+    );
+  status.textContent = `boot failed: ${e instanceof Error ? e.message : e}`;
 });

@@ -1,5 +1,5 @@
 /** SeerPage — SessionSeer's viewer. Live capture and honest comparison of
- *  Codex / Claude / Hermes runs, served by `nebulai seer serve` on :8125.
+ *  Codex / Claude / Hermes runs, served by `seer serve` on :8125.
  *
  *  Two rules shape everything on this page, and both are about refusing to
  *  flatter the data:
@@ -304,7 +304,7 @@ function ObservingStatus() {
       <div class="seer-observing is-off">
         <span class="seer-observing-label">not watching your sessions</span>
         <span class="seer-note">
-          <code>nebulai seer install</code>, then <code>serve --watch</code>
+          <code>seer install</code>, then <code>seer serve --watch</code>
         </span>
       </div>
     );
@@ -373,7 +373,7 @@ function LinkStatus() {
       )}
       {link === "down" && (
         <span class="seer-link-hint" title={$linkError.value ?? undefined}>
-          start it with <code>nebulai seer serve</code>
+          start it with <code>seer serve</code>
         </span>
       )}
     </div>
@@ -658,11 +658,11 @@ function SeerEmpty() {
         all three, and refused where it cannot honestly be answered.
       </p>
       <p class="seer-note">
-        Start the collector with <code>nebulai seer serve</code>, then launch a run on the left, or
+        Start the collector with <code>seer serve</code>, then launch a run on the left, or
         pick one already captured. Select two to compare them.
       </p>
       <p class="seer-note">
-        It can also watch the sessions you drive yourself: <code>nebulai seer install</code> adds a
+        It can also watch the sessions you drive yourself: <code>seer install</code> adds a
         hook to each agent's own config — merged, backed up, and removable — and{" "}
         <code>seer serve --watch</code> turns what those hooks write into runs. Hooks see actions and
         timing, never token usage; those runs say so rather than reporting zero.

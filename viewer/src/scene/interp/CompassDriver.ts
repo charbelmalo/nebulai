@@ -14,7 +14,7 @@
  *  deck.gl (WebGL2), camera off, static. Source: compass.json ⋈ sae.json. */
 
 import type { Deck, OrthographicView, PickingInfo } from "@deck.gl/core";
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { appStore, type InterpSelection } from "../../app/store";
 import { type CompassBundle, type SAEBundle, loadCompass, loadSAE } from "../../data/interp";
 import {
@@ -31,8 +31,8 @@ import {
   type Seg as ThemeSeg,
   type Vec2,
   withAlpha,
-} from "./chart-theme";
-import { InterpTooltip, type TipRow } from "./chart-tooltip";
+} from "@psychix/viz/chart-theme";
+import { InterpTooltip, type TipRow } from "@psychix/viz/chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 import { LAYER_COLORS } from "./NeuronFieldDriver";
 

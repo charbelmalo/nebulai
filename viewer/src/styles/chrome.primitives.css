@@ -1,0 +1,1349 @@
+/* chrome.primitives.css — shared chrome
+   Owner: shared (Nebulai + Seer). Imported after chrome.base.css by BOTH
+   app barrels (nebulai.css, seer.css).
+   Absorbed from chrome.css, in original order:
+     - Chrome (M2): topbar, sidebar, legend
+     - Top-right settings entry
+     - Settings page (overlay)
+     - Top nav switcher
+     - chart card (shared)
+     - stat tiles (shared)
+     - transport (shared)
+     - cross-instrument link (added with the second entry: the topnav's
+       one link out to the other instrument, next to the nav switcher)
+   Resolved seam: "stat tiles (shared)" used to also carry
+   .sessions-stat-tools / .sessions-tool-chip / .tool-outcomes /
+   .tool-outcome-*, sitting under a "(shared)" banner they did not earn —
+   chrome/SessionsPage.tsx is their only user. They moved to
+   seer.sessions.css when the two instruments got separate sheets; the
+   product-neutral .stat-row/.stat/.stat-strip they were interleaved with
+   are genuinely shared and stayed. */
+
+/* ── Chrome (M2): topbar, sidebar, legend ─────────────────────────────── */
+
+.topbar {
+  position: absolute;
+  top: 24px;
+  left: 32px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  user-select: none;
+}
+
+.topbar-mark {
+  width: 26px;
+  height: 26px;
+}
+
+.topbar-word {
+  font: 650 16px/1 var(--font-ui);
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.topbar-word-dim {
+  color: var(--text-faint);
+}
+
+.sidebar {
+  position: absolute;
+  top: 76px;
+  left: 32px;
+  width: 280px;
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-card);
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.sidebar-collapse,
+.legend-collapse {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 15px;
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+
+.sidebar-collapse:hover,
+.legend-collapse:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-pill) 80%, transparent);
+}
+
+.sidebar-fab {
+  position: absolute;
+  top: 76px;
+  left: 32px;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--hairline);
+  border-radius: 0;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-card);
+  color: var(--text-dim);
+  font-size: 17px;
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease-out);
+}
+
+.sidebar-fab:hover {
+  color: var(--text);
+}
+
+@media (max-width: 720px) {
+  .sidebar {
+    left: 12px;
+    right: 12px;
+    width: auto;
+  }
+  .sidebar-fab {
+    left: 12px;
+  }
+}
+
+.sidebar-body {
+  padding: 12px 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-sep,
+.legend-sep {
+  height: 1px;
+  margin: 10px 0;
+  background: var(--hairline);
+}
+
+/* control rows */
+
+.ctl-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+}
+
+.ctl-label {
+  color: var(--text-dim);
+  font: 500 12px/1.4 var(--font-ui);
+  white-space: nowrap;
+}
+
+.ctl-hint {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.ctl-value {
+  margin-left: 8px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.ctl-select {
+  max-width: 148px;
+  padding: 6px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-form-ctl);
+  background: var(--bg-pill);
+  color: var(--text);
+  font: 500 12px/1.2 var(--font-ui);
+  transition: border-color var(--t-fast) var(--ease-out);
+}
+
+.ctl-select:hover {
+  border-color: var(--hairline-strong);
+}
+
+.ctl-select:focus-visible,
+.ctl-switch:focus-visible,
+.ctl-slider:focus-visible,
+.ctl-tab:focus-visible,
+.sidebar-fab:focus-visible,
+.legend-fab:focus-visible,
+.sidebar-collapse:focus-visible,
+.legend-collapse:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ctl-switch {
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 21px;
+  padding: 2px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-form-pill);
+  background: var(--bg-pill);
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out);
+}
+
+/* 36×21 visual, but the hit target must reach the 24px AA floor */
+.ctl-switch::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+}
+
+.ctl-switch[aria-checked="true"] {
+  background: var(--accent);
+  border-color: transparent;
+}
+
+.ctl-switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ctl-switch-thumb {
+  display: block;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--text);
+  transition: transform var(--t-fast) var(--ease-out);
+}
+
+.ctl-switch[aria-checked="true"] .ctl-switch-thumb {
+  transform: translateX(15px);
+  background: #fff;
+}
+
+.ctl-row-slider {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 5px 0;
+}
+
+.ctl-row-slider .ctl-label {
+  display: flex;
+  justify-content: space-between;
+}
+
+.ctl-slider {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.ctl-tabs {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: var(--radius-form-pill);
+  background: color-mix(in srgb, var(--bg-pill) 65%, transparent);
+}
+
+.ctl-tab {
+  padding: 5px 13px;
+  border: none;
+  border-radius: var(--radius-form-pill);
+  background: transparent;
+  color: var(--text-dim);
+  font: 600 12px/1.2 var(--font-ui);
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+
+.ctl-tab:hover {
+  color: var(--text);
+}
+
+/* active segment inverts — monochrome hierarchy, no accent spent */
+.ctl-tab.is-active {
+  color: var(--bg);
+  background: var(--text);
+}
+
+.ctl-radios {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ctl-radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* rows are ~17px of text; pad the label to a ≥24px hit target */
+  padding: 4px 0;
+  margin: -4px 0;
+  color: var(--text-dim);
+  font: 500 12px/1.4 var(--font-ui);
+  cursor: pointer;
+}
+
+.ctl-radio input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ctl-radio-dot {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border: 1.5px solid var(--text-faint);
+  border-radius: 50%;
+  transition: border-color var(--t-fast) var(--ease-out);
+}
+
+.ctl-radio input:checked + .ctl-radio-dot {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 0 4px, transparent 5px);
+}
+
+.ctl-radio input:checked ~ span {
+  color: var(--text);
+}
+
+.ctl-radio input:focus-visible + .ctl-radio-dot {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ctl-radio.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* legend card */
+
+.legend {
+  position: absolute;
+  right: 32px;
+  bottom: 80px;
+  width: 256px;
+  padding: 16px 18px 18px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-card);
+}
+
+.legend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.legend-title {
+  margin: 0;
+  font: 650 11px/1.4 var(--font-ui);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.legend-fab {
+  position: absolute;
+  right: 32px;
+  bottom: 80px;
+  padding: 9px 18px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-card);
+  color: var(--text-dim);
+  font: 600 11px/1.2 var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease-out);
+}
+
+.legend-fab:hover {
+  color: var(--text);
+}
+
+@media (max-width: 720px) {
+  .legend {
+    left: 12px;
+    right: 12px;
+    width: auto;
+  }
+  .legend-fab {
+    right: 12px;
+  }
+}
+
+/* the ramp bar is the DATA legend — the one saturated element on this card */
+.legend-ramp {
+  height: 8px;
+  margin-top: 12px;
+  border-radius: var(--radius-pill);
+  background: var(--ramp);
+}
+
+.legend-ticks {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  color: var(--text-faint);
+  font: 400 10px/1.4 var(--font-ui);
+  font-variant-numeric: tabular-nums;
+}
+
+.legend-caption,
+.legend-empty {
+  margin: 10px 0 0;
+  color: var(--text-dim);
+  font: 400 11px/1.55 var(--font-ui);
+}
+
+.legend-empty code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text);
+}
+
+/* ── Top-right settings entry ─────────────────────────────────────────── */
+
+.topbar-settings {
+  position: absolute;
+  top: 24px;
+  right: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px 8px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  color: var(--text-dim);
+  font: 500 12px/1.2 var(--font-ui);
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out);
+}
+
+.topbar-settings:hover,
+.topbar-settings:focus-visible {
+  color: var(--text);
+  border-color: var(--hairline-strong);
+}
+
+.topbar-settings:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* share/export tools — icon pills left of the settings entry */
+.topbar-tools {
+  position: absolute;
+  top: 24px;
+  right: 138px;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.topbar-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 33px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out);
+}
+
+.topbar-tool:hover,
+.topbar-tool:focus-visible {
+  color: var(--text);
+  border-color: var(--hairline-strong);
+}
+
+.topbar-tool:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.topbar-tool.is-flash {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.topbar-tool:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.sidebar-more {
+  padding: 8px 12px;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--text-dim);
+  font: 500 12px/1.4 var(--font-ui);
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out);
+}
+
+.sidebar-more:hover,
+.sidebar-more:focus-visible {
+  color: var(--text);
+  border-color: var(--text-faint);
+  outline: none;
+}
+
+/* ── Settings page (overlay) ──────────────────────────────────────────── */
+
+.settings-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 40px;
+  background: rgba(4, 5, 7, 0.6);
+  backdrop-filter: blur(8px);
+}
+
+.settings-panel {
+  width: min(1120px, 100%);
+  max-height: calc(100vh - 80px);
+  display: grid;
+  grid-template-columns: 232px 1fr;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "head head"
+    "nav  body";
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--bg-raise);
+  box-shadow: var(--shadow-float);
+  overflow: hidden;
+}
+
+.settings-head {
+  grid-area: head;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 32px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.settings-head-title h1 {
+  margin: 4px 0 0;
+  font: 650 22px/1.2 var(--font-ui);
+  letter-spacing: -0.015em;
+  color: var(--text);
+}
+
+.settings-eyebrow {
+  font: 650 10px/1 var(--font-ui);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.settings-close {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--hairline);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out);
+}
+
+.settings-close:hover {
+  color: var(--text);
+  border-color: var(--hairline-strong);
+}
+
+.settings-nav {
+  grid-area: nav;
+  padding: 20px 12px;
+  border-right: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.settings-nav-item {
+  padding: 9px 14px;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--text-dim);
+  font: 500 13px/1.2 var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+
+.settings-nav-item:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-pill) 60%, transparent);
+}
+
+.settings-nav-item.is-active {
+  color: var(--text);
+  background: var(--bg-pill);
+}
+
+.settings-body {
+  grid-area: body;
+  padding: 28px 36px 40px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.settings-section {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card-sm);
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+}
+
+.settings-section-head {
+  padding: 18px 22px 10px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.settings-section-head h2 {
+  margin: 0;
+  font: 650 14px/1.2 var(--font-ui);
+  letter-spacing: -0.005em;
+  color: var(--text);
+}
+
+.settings-section-head p {
+  margin: 5px 0 8px;
+  color: var(--text-dim);
+  font: 400 11.5px/1.55 var(--font-ui);
+}
+
+.settings-section-body {
+  padding: 10px 22px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-subtabs {
+  padding: 4px 4px 16px;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 10px;
+  padding: 12px 0 4px;
+  flex-wrap: wrap;
+}
+
+.btn-primary,
+.btn-ghost {
+  padding: 8px 18px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  font: 600 12px/1.2 var(--font-ui);
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out),
+    transform var(--t-fast) var(--ease-out);
+}
+
+/* primary action inverts — the reference's black "Add" pill, flipped for dark */
+.btn-primary {
+  background: var(--text);
+  color: var(--bg);
+  border-color: transparent;
+}
+
+.btn-primary:hover {
+  background: #fff;
+  transform: translateY(-1px);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--hairline-strong);
+}
+
+.btn-primary:disabled,
+.btn-ghost:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.ctl-row-text {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  padding: 7px 0;
+}
+
+.ctl-row-text .ctl-label {
+  display: flex;
+  justify-content: space-between;
+}
+
+.ctl-input {
+  padding: 8px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-form-ctl);
+  background: var(--bg-pill);
+  color: var(--text);
+  font: 500 12px/1.2 var(--font-mono);
+  transition: border-color var(--t-fast) var(--ease-out);
+}
+
+.ctl-input:hover {
+  border-color: var(--hairline-strong);
+}
+
+.ctl-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* colour picker row — swatch + live hex readout */
+.ctl-color-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ctl-color-hex {
+  color: var(--text-dim);
+  font: 500 11px/1.2 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-transform: uppercase;
+}
+
+.ctl-color {
+  width: 28px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-form-ctl);
+  background: none;
+  cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease-out);
+}
+
+.ctl-color:hover {
+  border-color: var(--accent);
+}
+
+.ctl-color:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* normalise the native swatch chrome across engines */
+.ctl-color::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+.ctl-color::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+.ctl-color::-moz-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+.settings-empty {
+  color: var(--text-dim);
+  font: 400 12px/1.55 var(--font-ui);
+  margin: 10px 0 4px;
+}
+
+/* provenance readout — small gray keys, prominent values */
+.settings-dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px 24px;
+  margin: 0;
+}
+
+.settings-dl > div {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-dl dt {
+  color: var(--text-faint);
+  font: 600 10px/1.2 var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.settings-dl dd {
+  margin: 5px 0 0;
+  color: var(--text);
+  font: 600 15px/1.3 var(--font-ui);
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Top nav switcher ─────────────────────────────────────────────────── */
+
+.topnav {
+  position: absolute;
+  top: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-card);
+}
+
+.topnav-pill {
+  padding: 7px 16px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-dim);
+  font: 600 12.5px/1.2 var(--font-ui);
+  letter-spacing: -0.005em;
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+
+.topnav-pill:hover {
+  color: var(--text);
+}
+
+/* the active page inverts — the strongest monochrome signal on screen */
+.topnav-pill.is-active {
+  color: var(--bg);
+  background: var(--text);
+}
+
+/* ── cross-instrument link ────────────────────────────────────────────────
+   Nebulai → seer.html, Seer → index.html. Deliberately NOT a pill: it leaves
+   the document, and reading as a fourth page is exactly the "six products"
+   confusion the two entries exist to end. Subordinate by three separate cues
+   — a hairline divider before it, a smaller/lighter type size, and no pill
+   ground even on hover — while keeping --text-dim, the same colour the
+   inactive pills use, so it still clears contrast. */
+
+.topnav-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 4px 4px 4px 6px;
+  background: var(--hairline);
+}
+
+.topnav-cross {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 12px 7px 8px;
+  border-radius: var(--radius-pill);
+  color: var(--text-dim);
+  font: 500 11.5px/1.2 var(--font-ui);
+  letter-spacing: -0.005em;
+  text-decoration: none;
+  transition: color var(--t-fast) var(--ease-out);
+}
+
+.topnav-cross:hover {
+  color: var(--text);
+}
+
+/* the arrow inherits `color` rather than dimming with opacity: an opacity here
+   would drop it below the contrast floor the pills clear, and it is the cue
+   that says "this leaves the page" */
+.topnav-cross-arrow {
+  font-size: 10px;
+}
+
+/* Hide the driver stage while a non-map page owns the viewport. */
+body.page-snapshot #stage,
+body.page-interp #stage,
+body.page-guide #stage,
+body.page-sessions #stage,
+body.page-seer #stage {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* ── chart card (shared) ─────────────────────────────────────────────────────
+   Owned by viz/ChartCard.tsx. Header in flow above the plot, canvas, footer
+   strip. The header never floats: it is the one place a chart states what it
+   is showing, and a floating version could be collapsed or screenshotted away.
+   Column layout with the canvas as the only flexible row, so the header and
+   strip keep their intrinsic heights and the plot absorbs the remainder. */
+.chart-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+/* The plot area, and the positioning context for the caller's floating
+   overlays (legend, status, tour bar) — see the note in ChartCard.tsx. It is
+   the flex child that absorbs the leftover height, so the header and the stat
+   strip take exactly the space their content needs and the plot gets the rest. */
+.chart-card-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chart-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+.chart-card-id {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.chart-card-title {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font: 600 15px/1.25 var(--font-ui);
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.chart-card-n {
+  font: 600 10px/1.2 var(--font-mono);
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+.chart-card-tag {
+  font: 500 9px/1.2 var(--font-mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 5px;
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+}
+.chart-card-sub {
+  margin: 3px 0 0;
+  font: 400 11.5px/1.4 var(--font-ui);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chart-card-controls {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── stat tiles (shared) ─────────────────────────────────────────────────────
+   Owned by viz/StatStrip.tsx. Used by the Sessions cards (packed 3-up in
+   .stat-row) and by the footer strip under every interp chart (.stat-strip).
+   Tabular figures are load-bearing: these sit in a row and re-render during
+   playback, and proportional digits make the column edges shimmer. */
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.stat-v {
+  font: 650 19px/1.15 var(--font-ui);
+  letter-spacing: -0.02em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stat-l {
+  margin-top: 2px;
+  font: 500 9px/1.3 var(--font-ui);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The full-width footer strip under a chart. Tiles share the row evenly and
+   are separated by hairlines — the reference comp's "4–5 labeled metrics"
+   anatomy. Scrolls rather than wrapping on narrow stages so the strip stays
+   exactly one row tall and never pushes the canvas. */
+.stat-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border-top: 1px solid var(--hairline);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.stat-strip::-webkit-scrollbar {
+  display: none;
+}
+.stat-strip .stat {
+  flex: 1 1 0;
+  min-width: 92px;
+  padding: 10px 14px;
+  border-left: 1px solid var(--hairline);
+}
+.stat-strip .stat:first-child {
+  border-left: none;
+  padding-left: 0;
+}
+.stat-strip .stat-v {
+  font-size: 17px;
+}
+
+/* ── transport (shared) ────────────────────────────────────────────────────
+   The play/scrub/speed bar. Shared deliberately: the app grew three of these
+   independently (sessions timeline, snapshot scrubber, attention rollout) and
+   they drifted apart visually. `.transport` is the look; each view adds a
+   positioning modifier (`.sessions-transport`, `.compare-transport`). What
+   the scrubber MEANS is per-view — a clock in sessions, a position in a
+   presentation in compare — so only the chrome is shared, never the readout.
+   Interactive, so it opts back into pointer events over the canvas. */
+/* The shell carries LOOK ONLY — no positioning. Two of the three transports
+   float over a full-bleed canvas and one sits in a page footer; baking
+   `position:absolute` in here meant the in-flow one had to undo it. */
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-card);
+}
+
+/* On a phone this single row does not fit, and the overflow is silent: the
+   stage clips it. Measured on the sessions timeline at 375px — the transport
+   has 283px of content box and its children need 349px, so `.tp-speed` (the
+   LAST child, and `flex:none`) ran to x395 and was simply cut off. The playback
+   speed control was unreachable with no visual hint it existed.
+
+   Fixed on the shared shell rather than on `.sessions-transport`, because the
+   row is identical in all three transports — compare has more room today only
+   because it goes full-bleed, which is luck, not design.
+
+   Wrapping alone would drop `.tp-speed` onto its own line and leave the scrub a
+   60px stub. Sending the scrub to its own full-width row instead fixes both
+   problems at once: every control stays reachable, and the scrubber — the one
+   control you actually drag — becomes a full-width touch target. */
+@media (max-width: 720px) {
+  .transport {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .transport .tp-scrub {
+    order: 1;
+    flex: 1 1 100%;
+  }
+}
+
+/* the two that float over a canvas */
+.sessions-transport,
+.compare-transport {
+  position: absolute;
+  z-index: 3;
+  pointer-events: auto;
+}
+/* clears the inspector/stats column on the right (344px) so it never underlaps */
+.sessions-transport {
+  left: 18px;
+  right: 344px;
+  bottom: 18px;
+}
+.snapshot-transport.is-disabled {
+  opacity: 0.6;
+}
+.tp-btn:disabled,
+.tp-scrub:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.tp-btn:disabled:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+/* Clears the right-hand legend rail (right:32 + width:256 = 288) and sits ABOVE
+   the centred status/MetaLine pill at bottom:32 — the map views keep dataset
+   provenance visible at all times and the transport must not cover it. */
+.compare-transport {
+  left: 18px;
+  right: 336px;
+  bottom: 74px;
+}
+@media (max-width: 720px) {
+  /* desktop's right:336px leaves ~21px of usable width on a 375px phone —
+     the compare panel is collapsed-by-default here (see ComparePanel.tsx),
+     so the transport can safely span the full width.
+
+     bottom:80px is measured, not guessed. On mobile the MetaLine wraps to
+     `white-space: nowrap` at 36px tall over its bottom:32px, so it owns the
+     bottom 68px of the viewport — and the transport is 48px tall. The first
+     pass used bottom:64px (carried over from desktop's shorter pill) and put
+     the transport's lower edge at 64px, 4px INSIDE the MetaLine. 68 + 12px of
+     breathing room is the real floor. */
+  .compare-transport {
+    left: 12px;
+    right: 12px;
+    bottom: 80px;
+  }
+}
+.tp-btn {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 0;
+  border: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+.tp-btn:hover {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+.tp-btn:active {
+  transform: scale(0.94);
+}
+.tp-play {
+  background: var(--accent);
+  border-color: transparent;
+  color: #061018;
+  font-size: 13px;
+}
+.tp-play:hover {
+  background: color-mix(in srgb, var(--accent) 86%, white);
+}
+.tp-scrub {
+  flex: 1 1 auto;
+  min-width: 60px;
+  height: 4px;
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  border-radius: 0;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0%,
+    var(--accent) var(--tp-progress, 0%),
+    color-mix(in srgb, var(--text) 16%, transparent) var(--tp-progress, 0%),
+    color-mix(in srgb, var(--text) 16%, transparent) 100%
+  );
+  cursor: pointer;
+}
+.tp-scrub::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 0;
+  background: #fff;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 55%, transparent);
+  cursor: grab;
+}
+.tp-scrub::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 0;
+  background: #fff;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 55%, transparent);
+  cursor: grab;
+}
+.tp-scrub:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+/* Discrete-stop variant: the tick gradient rides ON TOP of the fill gradient,
+   so the ticks stay put while the fill sweeps. Tick positions come from the
+   driver (--tp-ticks) — never hard-coded here, or they'd drift the moment the
+   dwell/transition weighting changed. */
+.tp-scrub-ticked {
+  --tp-tick: color-mix(in srgb, var(--text) 42%, transparent);
+  height: 6px;
+  background-image: var(--tp-ticks, none),
+    linear-gradient(
+      to right,
+      var(--accent) 0%,
+      var(--accent) var(--tp-progress, 0%),
+      color-mix(in srgb, var(--text) 16%, transparent) var(--tp-progress, 0%),
+      color-mix(in srgb, var(--text) 16%, transparent) 100%
+    );
+}
+.tp-time {
+  flex: none;
+  font: 500 11px/1 var(--font-mono);
+  color: var(--text);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+/* Compare's readout: layout NAMES, never a clock — the view has no time axis. */
+.tp-stage {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  min-width: 0;
+  font: 500 11px/1 var(--font-mono);
+  color: var(--text);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.tp-stage .tp-now {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tp-sep {
+  color: var(--text-faint);
+  margin: 0 3px;
+}
+.tp-total {
+  color: var(--text-dim);
+}
+.tp-count {
+  flex: none;
+  font: 600 11px/1 var(--font-mono);
+  color: var(--accent);
+  white-space: nowrap;
+}
+.tp-count i {
+  color: var(--text-faint);
+  font-style: normal;
+  font-weight: 500;
+}
+.tp-speed {
+  flex: none;
+  display: flex;
+}
+.tp-speed select {
+  font: 500 11px/1 var(--font-mono);
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  padding: 5px 6px;
+  cursor: pointer;
+}
+
+/* Sessions settings tab bits */
+.settings-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.settings-kv-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font: 400 12px/1.45 var(--font-ui);
+  color: var(--text-dim);
+  padding: 5px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.settings-kv-row b {
+  color: var(--text);
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+.settings-session-name {
+  flex: 1;
+  font: 600 12px/1.25 var(--font-ui);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.settings-session-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: 400 11px/1 var(--font-ui);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.settings-session-meta {
+  font: 400 10px/1.35 var(--font-mono);
+  color: var(--text-faint);
+}
+

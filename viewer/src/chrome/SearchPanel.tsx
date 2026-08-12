@@ -6,7 +6,7 @@
 import { requestFlyToCluster, requestFlyToPoint } from "../app/actions";
 import { appStore } from "../app/store";
 import { knnDistance, knnDistanceFloor, knnNeighbors } from "../data/edges";
-import { rampRgb } from "../scene/interp/chart-theme";
+import { rampRgb } from "@psychix/viz/chart-theme";
 import { $dataset, $mapQuery, $searchCollapsed, $selection, openPanel } from "./state";
 
 /** hard cap on rendered rows across all groups — 50K-token vocabularies can

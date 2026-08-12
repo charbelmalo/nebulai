@@ -1,19 +1,19 @@
-"""`nebulai seer …` — the command-line half of SessionSeer.
+"""`seer …` — the command-line half of SessionSeer.
 
-    nebulai seer run codex "fix the failing test"     # capture one run
-    nebulai seer run claude "…" --compare-with codex  # the same task, twice
-    nebulai seer attach "fix the failing test"        # Codex, at app-server fidelity
-    nebulai seer attach                               # …or just watch a running one
-    nebulai seer reconcile --limit 50                 # import sessions already on disk
-    nebulai seer protocol                             # is this Codex build supported?
-    nebulai seer list                                 # what has been captured
-    nebulai seer show <run_id>                        # one run, with provenance
-    nebulai seer compare <run_a> <run_b>              # and what cannot be compared
-    nebulai seer export <run_id> > run.jsonl          # the raw record
-    nebulai seer serve                                # HTTP + SSE on :8125
+    seer run codex "fix the failing test"     # capture one run
+    seer run claude "…" --compare-with codex  # the same task, twice
+    seer attach "fix the failing test"        # Codex, at app-server fidelity
+    seer attach                               # …or just watch a running one
+    seer reconcile --limit 50                 # import sessions already on disk
+    seer protocol                             # is this Codex build supported?
+    seer list                                 # what has been captured
+    seer show <run_id>                        # one run, with provenance
+    seer compare <run_a> <run_b>              # and what cannot be compared
+    seer export <run_id> > run.jsonl          # the raw record
+    seer serve                                # HTTP + SSE on :8125
 
-    nebulai seer install --apply                      # capture your *own* sessions
-    nebulai seer watch                                # …and turn them into runs
+    seer install --apply                      # capture your *own* sessions
+    seer watch                                # …and turn them into runs
 
 The printing rules are the same ones the viewer follows, because a terminal is
 where most of these numbers will first be read:
@@ -514,7 +514,7 @@ def _cmd_install(args: argparse.Namespace, store: EventStore) -> int:
             print(f"  backup: {backup}")
     print(
         f"\nShim: {store.root / 'spool'}"
-        "\nCapture starts at each agent's next session. `nebulai seer watch` turns"
+        "\nCapture starts at each agent's next session. `seer watch` turns"
         "\nthe spool into runs; without it the hooks still write, and nothing reads.\n"
     )
     return 0
@@ -536,7 +536,7 @@ def _cmd_watch(args: argparse.Namespace, store: EventStore) -> int:
     )
     if not c.reader.dir.is_dir():
         sys.stderr.write(
-            f"no spool at {c.reader.dir} — run `nebulai seer install` first\n"
+            f"no spool at {c.reader.dir} — run `seer install` first\n"
         )
         return 2
     res = c.reader.clock_resolution_s
@@ -572,15 +572,23 @@ def _cmd_import_spool(args: argparse.Namespace, store: EventStore) -> int:
 
 
 # ── wiring ───────────────────────────────────────────────────────────────────
+#
+# `_add_subcommands` is the one place the sub-subcommand table is declared.
+# It is shared by two callers that differ only in how the `seer` level of the
+# parser comes to exist:
+#   - `add_parser`, which grafts `seer` on as a subparser of someone else's
+#     top-level parser (a role now unused inside this repo, since `nebulai`
+#     no longer imports this module — kept for any other program that wants
+#     to graft SessionSeer on the way this one used to);
+#   - `main`, which *is* the top-level parser, for the standalone `seer`
+#     console script.
+# Either way, `--root` stays an argument of the `seer` level itself, parsed
+# before the sub-subcommand name (`seer --root X serve`, not
+# `serve --root X`) — that quirk falls out of `--root` being added to `p`
+# before `p.add_subparsers()` runs, regardless of which caller built `p`.
 
 
-def add_parser(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser(
-        "seer",
-        help="SessionSeer: capture and compare Codex / Claude / Hermes runs",
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
+def _add_subcommands(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--root", default=None,
         help=f"event log root (default: {DEFAULT_ROOT})",
@@ -776,6 +784,36 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(fn=run)
 
 
+def add_parser(sub: argparse._SubParsersAction) -> None:
+    """Graft `seer` on as a subparser of someone else's top-level parser."""
+    p = sub.add_parser(
+        "seer",
+        help="SessionSeer: capture and compare Codex / Claude / Hermes runs",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_subcommands(p)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point for the standalone `seer` console script — `seer` IS the
+    top-level parser here, rather than a subparser grafted onto `nebulai`'s.
+    Exits with the same status codes the `_cmd_*` functions already return:
+    `run` raises `SystemExit(code)` for a non-zero code and otherwise falls
+    through, so returning 0 below covers the success case and a non-zero
+    `SystemExit` from `run` propagates out of this function unchanged.
+    """
+    p = argparse.ArgumentParser(
+        prog="seer",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_subcommands(p)
+    args = p.parse_args(argv)
+    run(args)
+    return 0
+
+
 def run(args: argparse.Namespace) -> None:
     store = EventStore(Path(args.root) if args.root else DEFAULT_ROOT)
     # Every verb, not just `serve`: a run left `running` by a crash is wrong on
@@ -795,3 +833,7 @@ def run(args: argparse.Namespace) -> None:
             pass
     if code:
         raise SystemExit(code)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

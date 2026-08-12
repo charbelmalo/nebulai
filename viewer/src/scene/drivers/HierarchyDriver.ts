@@ -15,10 +15,10 @@
  *  pointer handlers call pickObject and write to the shared store. */
 
 import type { Deck, OrthographicView } from "@deck.gl/core";
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { appStore, type Selection } from "../../app/store";
 import type { Dataset } from "../../data/loader";
-import { rampColor } from "../../styles/tokens";
+import { rampColor } from "@psychix/viz/tokens";
 import type { SceneDriver } from "../SceneDriver";
 import { clusterColor } from "../layers/PointsLayer";
 

@@ -2,7 +2,7 @@
  *  time, and toolkits never share a GPU context. Drivers coordinate through
  *  the store and the shared camera, nothing else. */
 
-import type { GpuTier } from "../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import type { Selection } from "../app/store";
 import type { Dataset } from "../data/loader";
 

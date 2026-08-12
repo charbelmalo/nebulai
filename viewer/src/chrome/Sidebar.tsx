@@ -19,7 +19,7 @@ import {
   $viewMode,
   openPanel,
 } from "./state";
-import { SelectRow, SliderRow, Tabs, ToggleRow } from "./controls";
+import { SelectRow, SliderRow, Tabs, ToggleRow } from "@psychix/viz/controls";
 
 const TOGGLE_ROWS: { key: keyof Toggles; label: string }[] = [
   { key: "territories", label: "Territories" },

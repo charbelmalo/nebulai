@@ -311,7 +311,7 @@ export const $health = signal<SeerHealth | null>(null);
 export const $linkError = signal<string | null>(null);
 
 export function seerBase(): string {
-  return (appStore.getState().probing.seerUrl || "").replace(/\/+$/, "");
+  return (appStore.getState().seer.serverUrl || "").replace(/\/+$/, "");
 }
 
 async function getJSON<T>(path: string): Promise<T> {

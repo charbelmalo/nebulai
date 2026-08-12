@@ -140,7 +140,7 @@ Do:
 - Extend `Appearance`, `Settings`, or `Probing` in `viewer/src/app/store.ts`
   with the new field and a default value; the chrome `state.ts` signal
   bridge picks it up automatically once the store slice is added.
-- Reuse the primitives in `viewer/src/chrome/controls.tsx`
+- Reuse the primitives in `viewer/src/viz/controls.tsx` (import them as `@psychix/viz/controls`)
   (`SelectRow`, `SliderRow`, `ToggleRow`, `TextRow`) — do not invent
   bespoke inputs.
 

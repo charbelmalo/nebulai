@@ -28,6 +28,8 @@ import urllib.request
 
 import numpy as np
 
+from .. import llm
+from ..llm import BudgetError, ChatTruncated, IdentityError
 from ..units import Units
 
 _SYSTEM = (
@@ -131,13 +133,6 @@ def _expand_remote(
     they ran, so a router that quietly served a neighbour is caught here rather
     than being stamped into meta as the model that was asked for.
     """
-    from ..backend.name import (
-        NamerIdentityError,
-        _accumulate_usage,
-        json_object,
-        same_model,
-    )
-
     body = json.dumps(
         {
             "model": model,
@@ -156,14 +151,16 @@ def _expand_remote(
     with urllib.request.urlopen(req, timeout=180) as r:
         payload = json.load(r)
     served = str(payload.get("model") or "")
-    if expect_model and served and not same_model(served, expect_model):
-        raise NamerIdentityError(
+    if expect_model and served and not llm.same_model(served, expect_model):
+        raise IdentityError(
             f"asked {url} for {expect_model!r} and it answered as {served!r} — "
             "a cloud grown by a different model is a different cloud"
         )
     if usage is not None:
-        _accumulate_usage(payload, usage)
-    return json_object(payload["choices"][0]["message"]["content"]).get("concepts", [])
+        llm.accumulate_usage(payload, usage)
+    return llm.json_object(payload["choices"][0]["message"]["content"]).get(
+        "concepts", []
+    )
 
 
 def _expand_openrouter(
@@ -174,15 +171,13 @@ def _expand_openrouter(
     expect_model: str | None = None,
     usage: dict | None = None,
 ) -> list:
-    from ..backend.name import _OPENROUTER_URL, _load_openrouter_key
-
-    key = _load_openrouter_key(env_file)
+    key = llm.load_openrouter_key(env_file)
     if not key:
         raise RuntimeError("no OPENROUTER_API_KEY")
     return _expand_remote(
         term,
         n,
-        _OPENROUTER_URL,
+        llm.OPENROUTER_URL,
         {"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
         model,
         expect_model=expect_model,
@@ -204,18 +199,16 @@ def _expand_hf(
     OpenRouter slug, and a corpus row with `hf_endpoint=None` means no provider
     serves that model — which is a refusal, not a reason to reach for another.
     """
-    from ..backend.name import _HF_ROUTER_URL, _HF_TOKEN_FILE, _load_hf_token
-
-    token = _load_hf_token(env_file)
+    token = llm.load_hf_token(env_file)
     if not token:
         raise RuntimeError(
             "no HF token in HF_TOKEN / HUGGINGFACE_HUB_TOKEN, the .env file, or "
-            f"{_HF_TOKEN_FILE}"
+            f"{llm.HF_TOKEN_FILE}"
         )
     return _expand_remote(
         term,
         n,
-        _HF_ROUTER_URL,
+        llm.HF_ROUTER_URL,
         {"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
         model,
         expect_model=expect_model,
@@ -226,9 +219,7 @@ def _expand_hf(
 def _expand_openai(
     term: str, n: int, host: str, model: str, api_key: str | None
 ) -> list:
-    from ..backend.name import _chat_openai
-
-    got = _chat_openai(
+    got = llm.chat_openai(
         host,
         model,
         _SYSTEM,
@@ -275,9 +266,9 @@ def _probe_cost_gate(model_id: str, depth: int, breadth: int, max_cost_usd: floa
     than a naming batch (~200 in, ~100 out measured), so this is a genuine upper
     bound — the gate errs toward refusing, never toward overspending.
     """
-    from ..backend.name import cost_gate
-
-    return cost_gate(model_id, expansion_calls(depth, breadth), max_cost_usd, batch_size=1)
+    return llm.cost_gate(
+        model_id, expansion_calls(depth, breadth), max_cost_usd, batch_size=1
+    )
 
 
 def _make_expander(
@@ -305,27 +296,14 @@ def _make_expander(
     same substitution hazard the namer had: a probe cloud attributed to Glimmer
     but actually grown by whatever local model was up is a fabrication about
     what Glimmer associates with the seed. So under a pin only a backend that
-    serves that exact id may run, and `NamerIdentityError` is raised otherwise.
+    serves that exact id may run, and `IdentityError` is raised otherwise.
 
     `stamp`, when given, receives {backend, model, identity, cost_usd} — the
     resolved identity, for meta. The label return value stays a plain
     "backend:model" string because callers (and their tests) key off it.
     """
-    from ..backend.name import (
-        DEFAULT_MAX_COST_USD,
-        NamerBudgetError,
-        NamerIdentityError,
-        _ollama_pick_model,
-        _ollama_tags,
-        _openai_list_models,
-        _openai_pick_model,
-        _serves_pin,
-        actual_cost,
-        corpus_entry,
-    )
-
     if max_cost_usd is None:
-        max_cost_usd = DEFAULT_MAX_COST_USD
+        max_cost_usd = llm.DEFAULT_MAX_COST_USD
     pinned = (model or "").strip() or None
     identity = "pinned" if pinned else "auto"
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -355,7 +333,7 @@ def _make_expander(
                     "backend": backend,
                     "model": resolved,
                     "identity": identity,
-                    "cost_usd": actual_cost(resolved, usage),
+                    "cost_usd": llm.actual_cost(resolved, usage),
                     "usage": dict(usage),
                 }
             )
@@ -367,17 +345,21 @@ def _make_expander(
             if backend == "ollama":
                 if pinned:
                     picked = next(
-                        (t for t in _ollama_tags(ollama_host) if _serves_pin(t, pinned)),
+                        (
+                            t
+                            for t in llm.ollama_tags(ollama_host)
+                            if llm.serves_pin(t, pinned)
+                        ),
                         None,
                     )
                     if picked is None:
                         raise RuntimeError(
                             f"ollama at {ollama_host} serves no build of "
                             f"{pinned!r} (has: "
-                            f"{_ollama_tags(ollama_host)[:6] or 'nothing reachable'})"
+                            f"{llm.ollama_tags(ollama_host)[:6] or 'nothing reachable'})"
                         )
                 else:
-                    picked = _ollama_pick_model(ollama_host, ollama_model)
+                    picked = llm.ollama_pick_model(ollama_host, ollama_model)
                     if picked is None:
                         raise RuntimeError(f"ollama at {ollama_host} unreachable")
                 _expand_ollama(_PROBE_TERM, 2, ollama_host, picked)
@@ -390,15 +372,15 @@ def _make_expander(
                 if pinned:
                     # exact only — the picker's substring fallback is the
                     # substitution a pin forbids
-                    ids = _openai_list_models(llm_host, llm_api_key)
-                    picked = next((i for i in ids if _serves_pin(i, pinned)), None)
+                    ids = llm.openai_list_models(llm_host, llm_api_key)
+                    picked = next((i for i in ids if llm.serves_pin(i, pinned)), None)
                     if picked is None:
                         raise RuntimeError(
                             f"{llm_host} does not serve {pinned!r} (it lists: "
                             f"{ids[:6] or 'nothing reachable'})"
                         )
                 else:
-                    picked = _openai_pick_model(llm_host, llm_model, llm_api_key)
+                    picked = llm.openai_pick_model(llm_host, llm_model, llm_api_key)
                     if picked is None:
                         raise RuntimeError(
                             f"no chat model on {llm_host} (unreachable, or it "
@@ -406,8 +388,6 @@ def _make_expander(
                         )
                 # a truncation here is not a failed backend: the model answered,
                 # at length. Only a hard error means it can't generate.
-                from ..backend.name import ChatTruncated
-
                 try:
                     _expand_openai(_PROBE_TERM, 2, llm_host, picked, llm_api_key)
                 except ChatTruncated as trunc:
@@ -418,7 +398,7 @@ def _make_expander(
                     f"openai:{picked}",
                 )
             if backend in ("openrouter", "hf"):
-                spec = corpus_entry(pinned) if pinned else None
+                spec = llm.corpus_entry(pinned) if pinned else None
                 if pinned:
                     if backend == "hf" and spec is not None and spec.hf_endpoint is None:
                         raise RuntimeError(
@@ -456,7 +436,7 @@ def _make_expander(
                 lambda t, n: _expand_anthropic(t, n, target),
                 f"anthropic:{target}",
             )
-        except NamerBudgetError:
+        except BudgetError:
             raise  # terminal: refusing over budget must not pick a cheaper model
         except Exception as e:
             tried.append(backend)
@@ -465,7 +445,7 @@ def _make_expander(
 
     if pinned:
         reasons = "\n".join(f"  - {d}" for d in declined)
-        raise NamerIdentityError(
+        raise IdentityError(
             f"no configured backend can serve the pinned generator {pinned!r}, "
             "and a cloud grown by a different model is not this model's "
             f"cloud.\ntried {len(declined)} backend(s):\n{reasons}\n"

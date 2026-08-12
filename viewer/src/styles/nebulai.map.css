@@ -1,0 +1,857 @@
+/* nebulai.map.css — Nebulai: Map surface
+   Owner: Nebulai (map). Imported after chrome.primitives.css by nebulai.css
+   only — not in Seer's sheet.
+   Absorbed from chrome.css, in original order:
+     - Atlas overlays (M1)
+     - Beam badges (M2): rotated count pills riding the beams
+     - compare mode
+     - chord mode
+     - hierarchy mode
+     - Progress visualisation
+     - keyword search panel (atlas)
+     - ranked kNN table (atlas search panel) */
+
+/* ── Atlas overlays (M1) ─────────────────────────────────────────────── */
+
+#scene-canvas {
+  touch-action: none; /* pointer gestures own pan/zoom */
+  cursor: grab;
+}
+
+.label-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.cluster-pill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 5px 13px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  color: var(--text-dim);
+  font: 500 11px/1.4 var(--font-ui);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
+  will-change: transform;
+  transition:
+    color var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out);
+}
+
+.cluster-pill::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 0;
+  background: var(--dot, var(--text-dim));
+}
+
+.cluster-pill:hover,
+.cluster-pill:focus-visible {
+  color: var(--text);
+  border-color: var(--hairline-strong);
+}
+
+.cluster-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.cluster-pill.is-selected {
+  color: var(--text);
+  border-color: var(--dot, var(--accent));
+}
+
+.point-tooltip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  max-width: 300px;
+  padding: 12px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card-sm);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-float);
+  pointer-events: none;
+  will-change: transform, translate;
+}
+
+.point-tooltip-label {
+  color: var(--text);
+  font: 600 13px/1.4 var(--font-mono);
+  word-break: break-all;
+}
+
+.point-tooltip-cluster {
+  margin-top: 5px;
+  color: var(--text-dim);
+  font: 400 11px/1.4 var(--font-ui);
+}
+
+.point-tooltip-conf {
+  margin-top: 2px;
+  color: var(--text-faint);
+  font: 400 11px/1.4 var(--font-ui);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Beam badges (M2): rotated count pills riding the beams ───────────── */
+
+.beam-badges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.beam-badge {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 3px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  color: var(--text);
+  font: 600 11px/1.4 var(--font-ui);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+/* ── compare mode ─────────────────────────────────────────────────────────
+   #stage.mode-compare hides the atlas overlays (labels, badges, atlas
+   tooltip); outside compare the compare tooltip is hidden instead. */
+
+#stage.mode-compare .label-overlay,
+#stage.mode-compare .beam-badges,
+#stage.mode-compare .point-tooltip:not(.compare-tooltip) {
+  display: none;
+}
+
+#stage:not(.mode-compare) .compare-tooltip {
+  display: none;
+}
+
+#compare-canvas {
+  touch-action: none;
+  cursor: grab;
+}
+
+#compare-canvas:active {
+  cursor: grabbing;
+}
+
+.compare-panel {
+  max-width: 300px;
+  max-height: min(72vh, 560px);
+  overflow-y: auto;
+}
+
+@media (max-width: 720px) {
+  /* .legend's own 720px rule (left/right:12px, width:auto) already applies —
+     compare-panel just needs to sit above the compare-transport bar instead
+     of at the legend's default bottom:80px.
+
+     140px is measured: the transport now starts at bottom:80px and is 48px
+     tall, so its top edge is 128px up. Both the panel and its FAB clear that
+     by 12px. The first pass used 120/122, which put them 6–8px underneath the
+     transport once the transport's own offset was corrected. */
+  .legend.compare-panel {
+    bottom: 140px;
+    /* The desktop cap is min(72vh, 560px), which knows nothing about the nav
+       strip this width relocates to y64→118. At 812px tall that let the panel
+       grow to 560px and put its top edge at y112 — 6px UNDER the nav. This is
+       the band that is actually free: 140px reserved below (see above) plus
+       130px above (nav bottom + the same 12px gap the FAB row uses). */
+    max-height: calc(100vh - 270px);
+  }
+  .compare-fab {
+    bottom: 140px;
+  }
+}
+
+.compare-models {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+.compare-model {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--text);
+  font: 400 12px/1.4 var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease-out);
+}
+
+.compare-model:hover {
+  background: var(--bg-pill);
+}
+
+.compare-model.is-off {
+  opacity: 0.38;
+}
+
+.compare-swatch {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 0;
+  box-shadow: 0 0 6px rgb(255 255 255 / 8%);
+}
+
+.compare-model-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compare-model-n {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.compare-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0 0;
+}
+
+.compare-stat {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.compare-stat dt {
+  overflow: hidden;
+  color: var(--text-dim);
+  font: 400 11px/1.5 var(--font-ui);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compare-stat dd {
+  margin: 0;
+  color: var(--text);
+  font: 600 11px/1.5 var(--font-ui);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── chord mode ───────────────────────────────────────────────────────────
+   Same scoping pattern as compare: the stage class hides the atlas overlays;
+   outside chord the radial labels + chord tooltip are hidden instead. */
+
+#stage.mode-chord .label-overlay,
+#stage.mode-chord .beam-badges,
+#stage.mode-chord .point-tooltip:not(.chord-tooltip) {
+  display: none;
+}
+
+#stage:not(.mode-chord) .chord-labels,
+#stage:not(.mode-chord) .chord-tooltip {
+  display: none;
+}
+
+#chord-canvas {
+  touch-action: none;
+}
+
+.chord-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.chord-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: 190px;
+  overflow: hidden;
+  color: var(--text-dim);
+  font: 400 10.5px/1.2 var(--font-ui);
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* 0 0 so translate→rotate→translate(%) anchors the label's left-center
+     (or right-center when flipped) exactly on the computed rim point */
+  transform-origin: 0 0;
+  transition: opacity 200ms ease;
+  will-change: transform;
+}
+
+.chord-label.is-dim {
+  opacity: 0.22;
+}
+
+/* ── hierarchy mode ───────────────────────────────────────────────────────
+   Same scoping pattern as chord; the radial labels share the chord-label
+   anatomy (transform-origin 0 0, rotate, flip past 90°). */
+
+#stage.mode-hierarchy .label-overlay,
+#stage.mode-hierarchy .beam-badges,
+#stage.mode-hierarchy .point-tooltip:not(.hier-tooltip) {
+  display: none;
+}
+
+#stage:not(.mode-hierarchy) .hier-labels,
+#stage:not(.mode-hierarchy) .hier-tooltip {
+  display: none;
+}
+
+#hier-canvas {
+  touch-action: none;
+}
+
+.hier-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.hier-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: 190px;
+  overflow: hidden;
+  color: var(--text-dim);
+  font: 400 10.5px/1.2 var(--font-ui);
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform-origin: 0 0;
+  transition: opacity 200ms ease;
+  will-change: transform;
+}
+
+.hier-label.is-dim {
+  opacity: 0.22;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-progress,
+  .ctl-switch,
+  .ctl-switch-thumb,
+  .chord-label,
+  .hier-label {
+    transition: none;
+  }
+}
+
+/* ── Progress visualisation ───────────────────────────────────────────── */
+
+.progress-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 6px 0 4px;
+}
+
+.progress-bar {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-pill);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  transition: width 240ms var(--ease-out);
+}
+
+.progress-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font: 500 12px/1.2 var(--font-ui);
+}
+
+.progress-stage {
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-pill);
+  color: var(--text);
+  font-weight: 650;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.progress-stage[data-stage="done"] {
+  background: color-mix(in srgb, var(--success) 28%, var(--bg-pill));
+}
+
+.progress-stage[data-stage="error"] {
+  background: color-mix(in srgb, var(--danger) 35%, var(--bg-pill));
+}
+
+.progress-msg {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.progress-latency {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+.progress-stages {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+
+.progress-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-dim);
+  font: 500 11px/1.2 var(--font-ui);
+  opacity: 0.55;
+}
+
+.progress-node.is-active,
+.progress-node.is-done {
+  opacity: 1;
+  color: var(--text);
+}
+
+.progress-node-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 0;
+  background: var(--hairline-strong);
+}
+
+.progress-node.is-active .progress-node-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.progress-node.is-done .progress-node-dot {
+  background: var(--success);
+}
+
+.progress-node.is-error .progress-node-dot {
+  background: var(--danger);
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.25);
+  }
+}
+
+.progress-error {
+  padding: 10px 14px;
+  border-radius: var(--radius-ctl);
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--text);
+  font: 500 12px/1.45 var(--font-mono);
+}
+
+.progress-log {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-ctl);
+  background: color-mix(in srgb, var(--bg) 50%, transparent);
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.progress-log li {
+  display: grid;
+  grid-template-columns: 68px 90px 1fr;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  font: 500 11px/1.4 var(--font-mono);
+  color: var(--text-dim);
+}
+
+.progress-log li:hover {
+  background: color-mix(in srgb, var(--bg-pill) 60%, transparent);
+}
+
+.progress-log-time {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-log-stage {
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+}
+
+.progress-log-stage[data-stage="error"] {
+  color: var(--danger);
+}
+
+.progress-log-msg {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .settings-panel {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "head"
+      "nav"
+      "body";
+  }
+  .settings-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--hairline);
+    padding: 8px;
+  }
+  .topbar-settings span {
+    display: none;
+  }
+  .topbar-tools {
+    right: 86px;
+  }
+}
+
+/* ── keyword search panel (atlas) ─────────────────────────────────────── */
+
+.search-panel {
+  position: absolute;
+  top: 76px;
+  right: 32px;
+  display: flex;
+  flex-direction: column;
+  width: 300px;
+  max-height: calc(100vh - 320px);
+  padding: 14px 16px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-card);
+}
+
+.search-fab {
+  position: absolute;
+  top: 76px;
+  right: 32px;
+  padding: 9px 18px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-card);
+  color: var(--text-dim);
+  font: 600 11px/1.2 var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease-out);
+}
+
+.search-fab:hover {
+  color: var(--text);
+}
+
+@media (max-width: 720px) {
+  .search-panel {
+    left: 12px;
+    right: 12px;
+    width: auto;
+  }
+  .search-fab {
+    right: 12px;
+  }
+}
+
+.search-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-title {
+  margin: 0;
+  flex: 1;
+  font: 650 11px/1.4 var(--font-ui);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.search-count {
+  font: 500 10px/1.4 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.search-input {
+  margin-top: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-form-ctl);
+  background: var(--bg-pill);
+  color: var(--text);
+  font: 400 12px/1.4 var(--font-ui);
+  outline: none;
+}
+
+.search-input:focus-visible {
+  border-color: var(--text-faint);
+}
+
+.search-empty {
+  margin: 10px 0 0;
+  color: var(--text-dim);
+  font: 400 11px/1.55 var(--font-ui);
+}
+
+.search-groups {
+  margin-top: 8px;
+  overflow-y: auto;
+}
+
+.search-group {
+  margin-top: 6px;
+}
+
+.search-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--text);
+  font: 600 11px/1.4 var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease-out);
+}
+
+.search-group-head:hover {
+  background: var(--bg-pill);
+}
+
+.search-group-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-group-count {
+  flex: none;
+  font: 500 10px/1.4 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+.search-row-label {
+  display: block;
+  width: 100%;
+  padding: 3px 8px 3px 18px;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--text-dim);
+  font: 400 11px/1.5 var(--font-mono);
+  text-align: left;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
+}
+
+.search-row-label:hover {
+  background: var(--bg-pill);
+  color: var(--text);
+}
+
+.search-row.is-selected .search-row-label {
+  color: var(--text);
+  background: var(--bg-pill);
+}
+
+/* ── ranked kNN table (atlas search panel) ───────────────────────────────
+   Replaces the five neighbour chips. A chip could show a label and a number;
+   it could not show RANK, and rank is the whole point of a k-nearest list.
+   Grid columns are fixed so the score and distance digits line up down the
+   column — tabular figures do the rest. */
+.knn-table {
+  padding: 4px 8px 8px 18px;
+}
+
+.knn-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0 5px;
+}
+
+.knn-head-title {
+  font: 500 9px/1.2 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* carries the provenance tooltip: space, metric, and the global sigma */
+.knn-head-meta {
+  font: 400 9px/1.2 var(--font-mono);
+  color: var(--text-faint);
+  cursor: help;
+  border-bottom: 1px dotted var(--hairline-strong, var(--hairline));
+}
+
+.knn-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.knn-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) 56px 34px 30px;
+  align-items: center;
+  gap: 7px;
+  border-radius: 4px;
+  padding: 1px 3px;
+}
+
+.knn-row:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.knn-rank {
+  font: 400 9px/1.4 var(--font-mono);
+  color: var(--text-faint);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.knn-label {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  color: var(--text-dim);
+  font: 400 10.5px/1.5 var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease-out);
+}
+
+.knn-label:hover {
+  color: var(--text);
+}
+
+/* the DISTANCE, drawn — see the note in SearchPanel.tsx for why not the score.
+   The track is a fixed 0-to-rounding-floor extent, not one fitted to this row
+   set, so a bar means the same thing after clicking through to another point.
+   A row whose distance was rounded away fills the track in flat --hairline:
+   we know it is at least this far, and a bound should not look like a
+   measurement. */
+.knn-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  overflow: hidden;
+}
+
+.knn-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+}
+
+.knn-score,
+.knn-dist {
+  font: 400 9.5px/1.4 var(--font-mono);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.knn-score {
+  color: var(--text-dim);
+}
+
+/* the distance is the derived column — recovered by inverting the kernel, and
+   an em dash when the export's 3-decimal rounding lost it */
+.knn-dist {
+  color: var(--text-faint);
+  cursor: help;
+}
+
+.search-more {
+  margin: 2px 0 0;
+  padding-left: 18px;
+  color: var(--text-faint);
+  font: 400 10px/1.5 var(--font-ui);
+}
+

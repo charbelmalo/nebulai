@@ -16,7 +16,7 @@
  *  cell for the exact token, probability, and rank. deck.gl (WebGL2), camera off. */
 
 import type { Deck, OrthographicView } from "@deck.gl/core";
-import type { GpuTier } from "../../app/capabilities";
+import type { GpuTier } from "@psychix/viz/capabilities";
 import { loadTrace, type TraceBundle } from "../../data/interp";
 import {
   ACCENT,
@@ -27,8 +27,8 @@ import {
   MARKER_HOT,
   type Seg as ThemeSeg,
   withAlpha,
-} from "./chart-theme";
-import { InterpTooltip, type TipRow } from "./chart-tooltip";
+} from "@psychix/viz/chart-theme";
+import { InterpTooltip, type TipRow } from "@psychix/viz/chart-tooltip";
 import type { InterpDriver } from "./InterpDriver";
 
 type LayersModule = typeof import("@deck.gl/layers");

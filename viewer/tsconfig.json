@@ -3,6 +3,7 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "paths": { "@psychix/viz/*": ["./src/viz/*"] },
     "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
