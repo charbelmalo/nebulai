@@ -1,9 +1,16 @@
-# Handover — static Nebul.AI deploy at `research.elysiumsolutions.net/psychiX/nebulai-maps`
+# Handover — static Nebul.AI deploy at `research.elysiumsystems.net/psychiX/nebulai-maps`
 
-**Audience:** the agent operating the self-hosted `research.elysiumsolutions.net`
+**Audience:** the agent operating the self-hosted `research.elysiumsystems.net`
 server. **Goal:** serve the Nebul.AI viewer as a **fully static, pre-baked**
 site under the sub-path `/psychiX/nebulai-maps/` with **zero server-side
 computation** and **no "data not available" gaps** for any selection.
+
+> **Deploy host, in one line** (verified 2026-08-12): the server is the Mac mini
+> at **`192.168.0.199`** (`Digitals-Mac-mini.local`), account **`digitalcharbel`**,
+> and the live webroot is
+> `/Users/digitalcharbel/Documents/digiCharbel/data/www/research/`.
+> It is normally **already SMB-mounted on the build machine**, which makes the
+> data transfer in §4 a *local file copy* — see §4 Option A.
 
 Build from **`main`** — it is the single source of truth. There is no separate
 deploy branch: the sub-path base and the blank live-endpoint defaults are both
@@ -21,7 +28,8 @@ under `out/`. Nothing is computed at request time. To deploy you only:
 
 1. `git clone` this repo (branch `main`) and **build the SPA** with the sub-path
    base and blanked live endpoints (§3).
-2. **Copy the baked `out/` data tree** (~320 MB) next to the built app. `out/` is
+2. **Copy the baked `out/` data tree** (~385 MB on disk; ~378 MB actually
+   shipped — see the exclusions in §4) next to the built app. `out/` is
    **git-ignored — it is NOT in the repo** and must be transferred out-of-band.
 3. Serve both as static files, with the data tree at `<app>/out/`.
 
@@ -32,7 +40,10 @@ server. WebGPU/WebGL runs entirely in the visitor's browser.
 
 ## 1. What "every possible selection" resolves to (verified complete)
 
-The dataset catalog is `out/index.json` (11 datasets). Verified on the build
+The dataset catalog is `out/index.json` (**18 datasets** as of 2026-08-12; this
+number grows as the pipeline is re-run — re-check rather than trusting it, and
+note the `out/` tree also holds non-catalog dirs such as `compare/` and
+`neuronpedia/`). Verified on the build
 machine: **every referenced artifact exists on disk — zero missing files**, so no
 selection can hit a "data not available" state as long as you ship the whole
 `out/` tree.
@@ -103,42 +114,84 @@ grep -o '/psychiX/nebulai-maps/assets/[^"]*' viewer/dist/index.html   # should p
 
 ---
 
-## 4. Getting the baked data (`out/`, ~320 MB) — the one real logistics step
+## 4. Getting the baked data (`out/`, ~385 MB) — the one real logistics step
 
-`out/` is git-ignored and lives only on the build machine. Move it to the server
-by whichever of these you have access to:
+`out/` is git-ignored and lives only on the build machine. The tree must end up
+at `<webroot>/psychiX/nebulai-maps/out/` (see §5), which on the real host is:
 
-**Option A — rsync from the build machine (preferred if you have SSH):**
-```sh
-# run on the machine that has ~/Developer/nebulai/out
-rsync -avz --delete ~/Developer/nebulai/out/ \
-  user@research.elysiumsolutions.net:/var/www/nebulai-maps/out/
+```
+/Users/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/nebulai-maps/out/
 ```
 
-**Option B — tarball with a checksum, then transfer + extract:**
+**Option A — local rsync over the SMB mount (what actually works; no SSH).**
+The Mac mini's home is normally already mounted on the build machine at
+`/Volumes/digitalcharbel`, so the "transfer" is a plain local copy:
+
+```sh
+# verify the mount first — if this path is missing, re-mount before anything else
+ls -d /Volumes/digitalcharbel/Documents/digiCharbel/data/www/research
+
+/opt/homebrew/bin/rsync -rlt --delete \
+  --exclude='.DS_Store' --exclude='._*' --exclude='.backup-pre-recuration/' \
+  ~/Developer/nebulai/out/ \
+  /Volumes/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/nebulai-maps/out/
+```
+
+Three details in that command are load-bearing, all learned the hard way:
+
+- **Use Homebrew rsync 3.x** (`/opt/homebrew/bin/rsync`), not `/usr/bin/rsync` —
+  macOS ships *openrsync* (protocol 29, "2.6.9 compatible"), which lacks flags
+  used here and in the verification below.
+- **`-rlt`, not `-a`.** `-a` implies `-pog` (perms/owner/group); SMB cannot
+  preserve those and the run fills with errors. `-rlt` keeps recursion,
+  symlinks and mtimes — mtimes are what make re-deploys incremental.
+- **Keep the excludes.** `.backup-pre-recuration/` is a local pipeline backup
+  (~6.6 MB) that would otherwise be **published on a public site**; `.DS_Store`
+  and `._*` are macOS noise. Excluded paths are protected from `--delete`, so
+  they are not pruned from the server either.
+
+Expect a re-deploy to move only what changed (a 2026-08-12 sync moved 155 MB of
+the 396 MB tree in ~1m40s and deleted nothing).
+
+**Option B — SSH/rsync from elsewhere.** The doc previously assumed this. Note
+that SSH to `192.168.0.199` as `charbelmalo` is **refused (publickey)** — the
+account on that box is **`digitalcharbel`**. Port 22 is open (OpenSSH 10.2);
+port 2222 also appears in `known_hosts` (it is the `Digitals-Mac-mini.local`
+git endpoint in `~/.ssh/config`) but was closed when last checked. If you do
+have a key authorized for `digitalcharbel`:
+
+```sh
+rsync -rlt --delete --exclude='.DS_Store' --exclude='._*' \
+  --exclude='.backup-pre-recuration/' ~/Developer/nebulai/out/ \
+  digitalcharbel@192.168.0.199:'/Users/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/nebulai-maps/out/'
+```
+
+**Option C — tarball with a checksum**, if neither of the above is available:
 ```sh
 # build machine — pack and record an integrity checksum
-tar -czf nebulai-out.tar.gz -C ~/Developer/nebulai out       # ~120–150 MB compressed
+tar -czf nebulai-out.tar.gz -C ~/Developer/nebulai --exclude='.backup-pre-recuration' out
 shasum -a 256 nebulai-out.tar.gz | tee nebulai-out.tar.gz.sha256
 # transfer both files, then on the server verify BEFORE extracting
 shasum -a 256 -c nebulai-out.tar.gz.sha256                   # must print: OK
-mkdir -p /var/www/nebulai-maps && tar -xzf nebulai-out.tar.gz -C /var/www/nebulai-maps
+tar -xzf nebulai-out.tar.gz -C /Users/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/nebulai-maps
 ```
 
-rsync (Option A) is the more reliable choice for this single self-hosted target —
-it is incremental, integrity-checks each block, and `--delete` keeps the server
-tree exactly in sync on re-deploys; prefer it when SSH is available. (A GitHub
-release asset would only be worth the public-upload overhead if many independent
-consumers or a CI job needed to pull the data — not the case for one server you
-control.)
+rsync is the more reliable choice for this single self-hosted target — it is
+incremental, and `--delete` keeps the server tree exactly in sync on re-deploys.
+(A GitHub release asset would only be worth the public-upload overhead if many
+independent consumers or a CI job needed to pull the data — not the case for one
+server you control.)
 
-Either way the tree must end up at `<webroot>/psychiX/nebulai-maps/out/` (see §5).
+> **Do not confuse the clone with the webroot.** There is also a checkout at
+> `/Volumes/digitalcharbel/Developer/nebulai/` **with its own `out/`**. That is
+> *not* what Caddy serves — writing there deploys nothing. Only the
+> `…/digiCharbel/data/www/research/…` path above is live.
 
 > **Updating the maps later:** re-run the pipeline on the build machine
 > (`uv run nebulai tokens …` / `sae` / `neurons` / `interp` / `compare`), then
-> re-rsync `out/`. No rebuild of the SPA is needed unless viewer code changed.
-> `nebulai.json` files compress ~4× (gpt2: 13.8 MB → 3.0 MB gzip), so keep server
-> compression on (§6).
+> re-run the Option A rsync. No rebuild of the SPA is needed unless viewer code
+> changed. `nebulai.json` files compress ~4× (gpt2: 13.8 MB → 3.0 MB gzip), so
+> keep server compression on (§6).
 
 ---
 
@@ -148,20 +201,43 @@ Serve a single directory as the site root; the app and its data sit under the
 sub-path together:
 
 ```
-/var/www/nebulai-maps/                      <- webroot (server root, or an alias)
+…/digiCharbel/data/www/research/           <- webroot  (= /srv/www/research in the container)
+├── index.html                             <- the research dashboard (not ours)
+├── assets/
 └── psychiX/
     └── nebulai-maps/
-        ├── index.html                      <- from viewer/dist/
-        ├── assets/                         <- from viewer/dist/assets/
-        └── out/                            <- the baked data tree (§4)
+        ├── index.html                     <- from viewer/dist/
+        ├── assets/                        <- from viewer/dist/assets/
+        └── out/                           <- the baked data tree (§4)
             ├── index.json
             ├── gpt2/nebulai.json
             ├── gpt2/interp/*.json
             ├── compare/compare.json
-            └── … (all 11 datasets)
+            └── … (every dataset in index.json)
 ```
 
 Put `viewer/dist/*` into `…/psychiX/nebulai-maps/` and the `out/` tree beside it.
+
+**Why that path — the chain, so you can re-derive it when something moves.**
+Caddy runs as the `caddy` service in the `macmini-homelab` compose stack and its
+`root` for this vhost is `/srv/www/research`, which is a *container* path. It
+maps to the host like this:
+
+1. `~/.cloudflared/config.yml` routes every public hostname — including
+   `research.elysiumsystems.net` — to `http://127.0.0.1:8080`.
+2. `Documents/digiCharbel/compose/compose.yaml` binds that port
+   (`127.0.0.1:${CADDY_HTTP_PORT:-8080}:80`) and mounts
+   `${SERVER_DATA_PATH}/www:/srv/www:rw`.
+3. `Documents/digiCharbel/caddy/Caddyfile` sets `root * /srv/www/research` for
+   `{$RESEARCH_HOST}`.
+4. `Documents/digiCharbel/.env.local` sets
+   `SERVER_DATA_PATH='/Users/digitalcharbel/Documents/digiCharbel/data'` and
+   `RESEARCH_HOST=research.elysiumsystems.net`.
+
+So `/srv/www/research` → `/Users/digitalcharbel/Documents/digiCharbel/data/www/research`.
+Because the whole webroot is a bind mount, **files written on the host are live
+immediately — no container restart and no Caddy reload is needed** after a data
+re-sync.
 
 ---
 
@@ -172,10 +248,35 @@ history fallback is needed** — `index.html` is the only HTML entry. The only
 must-haves: correct `application/json` MIME for `.json`, and compression (the
 data is large but highly compressible).
 
-**Nginx** (sub-path via `alias`):
+**This is already configured on the live host — you should not need to touch
+it.** The block below is what `Documents/digiCharbel/caddy/Caddyfile` actually
+contains; the nginx variant is kept only for porting to a different server.
+
+**Caddy** (live config, compression + JSON MIME are automatic):
+```
+http://{$RESEARCH_HOST} {          # RESEARCH_HOST=research.elysiumsystems.net
+    encode zstd gzip
+    root * /srv/www/research       # bind-mounted from the host — see §5
+    file_server
+
+    @bakeddata path /psychiX/nebulai-maps/out/*
+    header @bakeddata Cache-Control "public, max-age=3600"
+
+    import public_security_headers
+}
+```
+
+It listens on plain `http://` **by design**: TLS is terminated by the Cloudflare
+tunnel in front of it, so Caddy never sees port 443 and issues no certificate.
+The site is still HTTPS to the visitor, which is what WebGPU's secure-context
+requirement needs. Note this vhost serves the **whole** research site from one
+root — the nebulai viewer is just the `/psychiX/nebulai-maps/` subtree, so do not
+repoint `root`.
+
+**Nginx** (only if porting elsewhere; sub-path via `alias`):
 ```nginx
 location /psychiX/nebulai-maps/ {
-    alias /var/www/nebulai-maps/psychiX/nebulai-maps/;
+    alias /srv/www/research/psychiX/nebulai-maps/;
     index index.html;
 
     types { application/json json; text/html html; image/png png; }
@@ -192,33 +293,49 @@ location /psychiX/nebulai-maps/ {
 }
 ```
 
-**Caddy** (equivalent, compression + JSON MIME are automatic):
-```
-research.elysiumsolutions.net {
-    handle_path /psychiX/nebulai-maps/* {
-        root * /var/www/nebulai-maps/psychiX/nebulai-maps
-        encode zstd gzip
-        file_server
-    }
-}
-```
-
-No CORS headers are needed — the app and data are same-origin. Serve over HTTPS
-(WebGPU requires a secure context; `localhost` is exempt but the public host must
-be TLS).
+No CORS headers are needed — the app and data are same-origin. The public URL
+must be HTTPS (WebGPU requires a secure context; `localhost` is exempt) — on
+this host that is satisfied by the Cloudflare tunnel, not by Caddy.
 
 ---
 
 ## 7. Post-deploy verification (mirror of what was tested locally)
 
+First confirm the copy itself is complete, by re-running the **same rsync with
+`--dry-run`**. A second run that reports `0` created / `0` deleted / `0`
+transferred is proof the tree is fully in sync — and unlike a bare `ls`, it can
+actually fail:
+
 ```sh
-BASE=https://research.elysiumsolutions.net/psychiX/nebulai-maps
+/opt/homebrew/bin/rsync -rlt --delete --dry-run --stats \
+  --exclude='.DS_Store' --exclude='._*' --exclude='.backup-pre-recuration/' \
+  ~/Developer/nebulai/out/ \
+  /Volumes/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/nebulai-maps/out/ \
+  | grep -E 'Number of (created|deleted|regular)'
+```
+
+Then check it over the wire:
+
+```sh
+BASE=https://research.elysiumsystems.net/psychiX/nebulai-maps
 for p in "" out/index.json out/gpt2/nebulai.json out/gpt2/interp/index.json \
          out/gpt2/interp/weights.json out/compare/compare.json; do
   printf '%s -> ' "$p"; curl -s -o /dev/null -w '%{http_code}\n' "$BASE/$p"
 done
 # all should be 200
 ```
+
+**Add at least one dataset that the server did *not* already have** to that
+loop. The paths above return `200` whether or not your sync landed — they
+existed before it — so on their own they cannot distinguish a successful deploy
+from a no-op. A newly-added `out/<new-dataset>/nebulai.json` returning `200` is
+the check that can actually fail, and is therefore the one worth trusting.
+
+Two things that look like failures but are not: `192.168.0.199` does **not**
+answer `ping` (ICMP is filtered) and has ports 80/443 **closed** on the LAN — it
+is reachable publicly only through the Cloudflare tunnel. Also, immediately
+after a large rsync the SMB mount can report a **stale, inflated** directory
+count (a 22-entry dir listed as 25); re-stat before believing a diff.
 
 Then in a browser at `…/psychiX/nebulai-maps/`:
 - [ ] Semantic map renders; status bar shows `… pts · … clusters · gpu: webgpu`.
