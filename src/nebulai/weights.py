@@ -26,6 +26,7 @@ Two readers live here, sharing that widening:
   pulled, so a map's provenance can prove the claim rather than assert it.
 """
 
+import http.client
 import json
 import os
 import struct
@@ -184,6 +185,14 @@ def _request(
                 raise
             last = e
         except (urllib.error.URLError, TimeoutError, OSError) as e:
+            last = e
+        # A body that dies mid-read raises IncompleteRead, which descends from
+        # HTTPException and NOT from OSError — so without this it escaped the
+        # retry loop and killed the whole run. It only shows up on the long
+        # streams: RemoteDisconnected *is* an OSError, so the shorter reads
+        # retried fine and hid the gap. A range request is idempotent, so the
+        # recovery is simply to ask for the same span again.
+        except http.client.HTTPException as e:
             last = e
         if attempt < _MAX_RETRIES - 1 and _BACKOFF_S:
             time.sleep(_BACKOFF_S * (2**attempt))

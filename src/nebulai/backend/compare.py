@@ -30,7 +30,9 @@ from .reduce import reduce_vectors
 # this list is a correctness constraint, not decoration: comparing more maps
 # than there are colors silently paints two clouds identically in the one view
 # whose entire job is telling them apart. Keep it at least as long as the
-# number of maps in out/ (11 and growing).
+# number of maps in out/ (18 and growing — the four corpus models pushed it
+# past the 16 this list held, which `test_palette_covers_every_built_map`
+# caught).
 _PALETTE = [
     [0.20, 0.70, 1.00],  # blue
     [1.00, 0.45, 0.30],  # orange
@@ -48,6 +50,10 @@ _PALETTE = [
     [0.95, 0.90, 0.55],  # sand
     [0.35, 0.75, 0.80],  # steel
     [0.80, 0.55, 0.35],  # bronze
+    [0.50, 0.85, 1.00],  # ice
+    [0.95, 0.60, 0.20],  # amber
+    [0.65, 0.90, 0.70],  # mint
+    [0.75, 0.50, 0.85],  # orchid
 ]
 
 

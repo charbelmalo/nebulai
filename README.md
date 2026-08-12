@@ -53,20 +53,26 @@ The atlas used to be bounded by disk: mapping a model meant fetching its
 checkpoint. It isn't anymore. `https://huggingface.co/{repo}/resolve/{rev}/{shard}`
 answers **HTTP 206 Partial Content with no auth**, so the loader reads the
 safetensors header — a few hundred KB of JSON carrying every tensor's dtype,
-shape and byte range — and then streams only the rows it maps. Measured across
-the four models below: **1.87 GB of streamed rows against 344 GB of
-checkpoints.**
+shape and byte range — and then streams only the rows it maps. Projected across
+the four models below from their measured tensor shapes: **1.87 GB of streamed
+rows against 344 GB of checkpoints.** Building them actually cost **1.45 GB**,
+because Nemo is mapped at 5k tokens rather than 50k.
 
 Byte ranges, not shards, are what make this work. The shard holding
 Muse-Glimmer-30B's `W_E` is 49.95 GB of its 59.55 GB checkpoint; "download only
 the shard you need" would have fetched 84% of it.
 
-| model | repo | checkpoint | W_E | W_U | 50k-token stream | map |
-|---|---|---|---|---|---|---|
-| Muse-Glimmer-30B | `meta-models/Muse-Glimmer-30B` | 59.55 GB | BF16 `[202048, 6656]` | untied | 666 MB (1.12%) | 🔜 planned |
-| Gemma-4-26B-A4B-it | `google/gemma-4-26B-A4B-it` | 51.61 GB | BF16 `[262144, 2816]` | **tied** | 282 MB (0.55%) | 🔜 planned |
-| Ling-2.6-flash | `inclusionAI/Ling-2.6-flash` | 208.37 GB | BF16 `[157184, 4096]` | untied | 410 MB (0.20%) | 🔜 planned |
-| Mistral-Nemo-Instruct-2407 | `mistralai/Mistral-Nemo-Instruct-2407` | 24.50 GB | BF16 `[131072, 5120]` | untied | 512 MB (2.09%) | 🔜 planned |
+| model | repo | checkpoint | W_E | W_U | predicted 50k stream | measured | map |
+|---|---|---|---|---|---|---|---|
+| Muse-Glimmer-30B | `meta-models/Muse-Glimmer-30B` | 59.55 GB | BF16 `[202048, 6656]` | untied | 666 MB (1.12%) | **690 MB** | ✅ 50k pts · 121 clusters · 66.0% noise |
+| Gemma-4-26B-A4B-it | `google/gemma-4-26B-A4B-it` | 51.61 GB | BF16 `[262144, 2816]` | **tied** | 282 MB (0.55%) | **283 MB** | ✅ 50k pts · 322 clusters · 36.7% noise |
+| Ling-2.6-flash | `inclusionAI/Ling-2.6-flash` | 208.37 GB | BF16 `[157184, 4096]` | untied | 410 MB (0.20%) | **416 MB** | ✅ 50k pts · 209 clusters · 54.3% noise |
+| Mistral-Nemo-Instruct-2407 | `mistralai/Mistral-Nemo-Instruct-2407` | 24.50 GB | BF16 `[131072, 5120]` | untied | 512 MB (2.09%) | 56 MB @5k | ✅ 5k pts · 101 clusters · 34.1% noise |
+
+Every measured figure is the map's own `meta.bytes_fetched`, and each lands
+within 1.5% of the prediction the header read made before a single row moved —
+except Nemo, which is mapped at 5k tokens rather than 50k, so its stream is a
+tenth of the row and the 512 MB column stays a prediction until it is rebuilt.
 
 Ling is the case that settles the design: 208 GB across 26 numbered shards plus
 a separate `model-mtp-layer.safetensors`, 25,015 tensors — and a token map needs
@@ -111,10 +117,26 @@ works too — including when the venv is the thing that is broken.
 live from OpenRouter and drift against `corpus.py` is flagged rather than
 silently trusted.
 
-**Status. No map from any of these four models exists yet** — the validated-map
-table further down is unchanged, and none of the rows above carries a number it
-has not earned. The corpus definition and this measurement tooling are in the
-tree; the remote range-read loader lives in `src/nebulai/weights.py` and the
+**Status. All four are mapped** (2026-08-12) — every row above carries its own
+`meta.bytes_fetched` and a revision pinned to a resolved sha, and each map is
+scored in the validated-map table further down. Three things the first pass
+taught, all fixed in the tree rather than in this file:
+
+- **`--namer auto` is not a good default for a fresh machine.** Its chain is
+  ollama → openai → openrouter → centroid, so with no local server and no keys
+  every build lands on `centroid`, which titles a cluster by joining its four
+  most central tokens (`北京 · 上海 · 广州 · 四川`). The geometry is unaffected and
+  `nebulai rename --namer claude-cli` re-titles a built map in place.
+- **Reserved slots are not always flagged special.** gpt2's `<|endoftext|>` is,
+  so it decodes to `""` and curation drops it; Gemma-4 flags only ids 0-4, so
+  160 `<unusedN>` rows survived into its first map and clustered with each
+  other. `_keep` now drops those families by name.
+- **A long stream needs a retry the short ones never exercised.** A body that
+  dies mid-read raises `IncompleteRead`, which is an `HTTPException` and not an
+  `OSError`, so it slipped past `_request`'s retry loop — invisible on the
+  56-283 MB reads, fatal 8 minutes into Glimmer's 690 MB one.
+
+The remote range-read loader lives in `src/nebulai/weights.py` and the
 pinned-identity namer in `src/nebulai/backend/name.py`, and those files, not
 this one, are the truth about what they currently support. Plan and rationale:
 [`recommended-plan.md`](recommended-plan.md); what measurement corrected along
@@ -261,13 +283,29 @@ floor, not before:
 | SmolLM2-135M · MLP neurons | 1536 | 0.4827 | 0.3834 | +0.099 | 0.64 | 0.57 |
 | gpt2-small · SAE features | 4096 | 0.5246 | 0.5737 | −0.049 ⚠ | 0.89 | 0.58 |
 | SmolLM2-135M · SAE features | 36864 | 0.4770 | 0.4097 | +0.067 ⚠ | 0.71 | 0.57 |
+| Gemma-4-26B · tokens | 50000 | 0.5270 | 0.3821 | +0.145 | 0.67 | 0.48 |
+| Ling-2.6-flash · tokens | 50000 | 0.4730 | 0.3864 | +0.087 | 0.67 | 0.49 |
+| Mistral-Nemo · tokens | 5000 | 0.4968 | 0.2033 | +0.294 | 0.75 | 0.50 |
+| Muse-Glimmer-30B · tokens | 50000 | 0.4899 | 0.4812 | **+0.009** | 0.84 | 0.48 |
 
 ⚠ = the null resolved a cluster count far from the map's own (16 vs 69; 277 vs
 130). Silhouette rises as a partition coarsens, so those two rows compare
 different questions and the margin is not evidence either way. `nebulai
 metrics` prints `null.k` next to the margin and flags this case with `?`.
 
-Three things to take from the seven rows that *are* comparable:
+The four corpus rows are all comparable (each null landed within 0.5-2x of its
+map's own k), and they split. Gemma-4 posts the highest silhouette of any map
+here and a healthy +0.145. Nemo's +0.294 is the largest margin in the table, but
+it is scored on 5k points, where the null has less room to invent islands —
+read it as encouraging, not as a win over the 50k rows. **Muse-Glimmer-30B is
+the cautionary one: +0.009.** Its projection is faithful (trust 0.84, second
+only to pythia), so the *layout* is trustworthy; what is barely-better-than-null
+is the claim that its 121 clusters are separated. At 66% noise and 6656
+dimensions, HDBSCAN is describing the two-thirds it discarded more than the
+third it kept. Do not read Glimmer's territories as findings without a
+parameter sweep behind them.
+
+Three things to take from the seven older rows that *are* comparable:
 
 - **Every one clears its floor, and none clears it by much** — +0.06 to +0.15
   on a scale where silhouette itself sits near 0.5. There is real structure

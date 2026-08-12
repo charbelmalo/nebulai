@@ -9,6 +9,7 @@ fixture is a real 2-shard safetensors payload served through a fake opener that
 honours `Range` and records every request, so shard routing, row ordering and
 range coalescing are asserted on observed traffic rather than on intent."""
 
+import http.client
 import json
 import struct
 import threading
@@ -19,7 +20,12 @@ import urllib.request
 import numpy as np
 import pytest
 
-from nebulai.weights import RemoteCheckpoint, load_safetensor_f32, safetensor_keys
+from nebulai.weights import (
+    RemoteCheckpoint,
+    RemoteRangeError,
+    load_safetensor_f32,
+    safetensor_keys,
+)
 
 
 def _write_safetensors(path, tensors: dict[str, tuple[str, np.ndarray]]) -> None:
@@ -466,3 +472,51 @@ def test_live_range_read_header_length():
     assert len(raw) == 8
     n = struct.unpack("<Q", raw)[0]
     assert 0 < n < (1 << 24), n  # a JSON header, not gigabytes
+
+
+# --- mid-body failures ------------------------------------------------------
+# A dropped connection *during* the body raises http.client.IncompleteRead,
+# which is an HTTPException and NOT an OSError, so it used to slip past the
+# retry loop and abort a whole run. It only bites the long streams — the
+# 666 MB Muse-Glimmer map died on it after 8 minutes while the 56 MB maps
+# never saw it — so it is asserted here rather than left to the network.
+
+
+class _FlakyHub:
+    """Wraps a FakeHub and kills the body of the first `n_fail` shard reads."""
+
+    def __init__(self, hub: FakeHub, n_fail: int = 1):
+        self.hub = hub
+        self.n_fail = n_fail
+        self.attempts = 0
+        self._lock = threading.Lock()
+
+    def __call__(self, request, timeout=None):
+        resp = self.hub(request, timeout=timeout)
+        if request.get_header("Range"):
+            with self._lock:
+                self.attempts += 1
+                fail = self.attempts <= self.n_fail
+            if fail:
+                body = resp.read()
+                raise http.client.IncompleteRead(body[: len(body) // 2], 1)
+        return resp
+
+
+def test_a_body_that_dies_mid_read_is_retried(hub, monkeypatch):
+    monkeypatch.setattr("nebulai.weights._BACKOFF_S", 0)
+    flaky = _FlakyHub(hub, n_fail=1)
+    ck = RemoteCheckpoint.open(REPO, "main", opener=flaky)
+    rows = [7, 0, 3]
+    got = ck.read_rows("model.word_embeddings.weight", rows)
+    assert np.array_equal(got, _W[rows])
+    assert flaky.attempts >= 2, "the failed range was never re-requested"
+
+
+def test_a_body_that_never_completes_still_raises(hub, monkeypatch):
+    """The retry must not paper over a genuinely broken endpoint."""
+    monkeypatch.setattr("nebulai.weights._BACKOFF_S", 0)
+    flaky = _FlakyHub(hub, n_fail=99)
+    ck = RemoteCheckpoint.open(REPO, "main", opener=flaky)
+    with pytest.raises(RemoteRangeError):
+        ck.read_rows("model.word_embeddings.weight", [0, 1])

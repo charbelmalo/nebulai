@@ -17,6 +17,7 @@ writes tokens" that is byte-identical to "how it reads them" carries no
 information and would misrepresent what was measured.
 """
 
+import re
 from collections.abc import Sequence
 
 import numpy as np
@@ -33,6 +34,30 @@ class TiedEmbeddingError(ValueError):
     """Raised when W_U is asked of a model whose W_U *is* its W_E."""
 
 
+# Reserved slots that are NOT flagged special by their own tokenizer, so
+# `decode()` hands them back as literal text and the checks below would keep
+# them. gpt2 has none (its one special token IS flagged, decodes to "" and
+# falls out); Gemma-4 has 160 in its first 10k ids alone — `<unusedN>` blocks
+# hold placeholder rows the model never trained, and they cluster with each
+# other, so an uncurated map spends real estate on the tokenizer's padding.
+# Enumerated by family rather than by shape: `<h3>`, `<span>` and `<div>` are
+# single tokens in these vocabs and are real content, so a blanket `<...>`
+# filter would delete the HTML the map is supposed to show.
+_RESERVED = re.compile(
+    r"""^(?:
+        <unused\d+>                      # Gemma reserved block
+      | <extra_id_\d+>                   # T5 sentinels
+      | <reserved_special_token_\d+>     # Llama 3
+      | <\|[^|]*\|>                      # chat/control markers
+      | <0x[0-9A-Fa-f]{2}>               # SentencePiece byte fallback
+      | \[control_\d+\]                  # Mistral/Tekken control slots
+      | \[multimodal\]                   # Gemma multimodal wrapper
+      | </?(?:pad|eos|bos|unk|mask|sep|cls|s)>   # classic sentinels
+    )$""",
+    re.VERBOSE,
+)
+
+
 def _keep(s: str) -> bool:
     """Curate the vocab: drop byte-fragment junk, controls, and empties."""
     if not s or "�" in s:  # partial-UTF8 byte tokens decode to U+FFFD
@@ -40,6 +65,8 @@ def _keep(s: str) -> bool:
     if s.strip() == "":
         return False
     if any(ord(c) < 0x20 or 0x7F <= ord(c) < 0xA0 for c in s):
+        return False
+    if _RESERVED.match(s.strip()):
         return False
     return True
 
