@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 out/
+# `out` is often a symlink to a machine-local data dir, which `out/` misses.
+/out
 uv.lock
 .DS_Store
 viewer/node_modules/
