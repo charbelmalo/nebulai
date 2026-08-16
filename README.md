@@ -378,6 +378,11 @@ uses: [`docs/OBSERVABILITY-SURFACE.md`](docs/OBSERVABILITY-SURFACE.md).
 
 ## Roadmap
 
+- Behavioral semantic divergence: preserve the current clouds while adding a
+  separate, research-gated GPT-2/Grok association study and a focused
+  **Behavior** page. Research method, statistical confirmation, data contracts,
+  implementation phases, and UX plan:
+  [`docs/BEHAVIORAL-DIVERGENCE-PLAN.md`](docs/BEHAVIORAL-DIVERGENCE-PLAN.md).
 - Held-out auto-interp scores and activation-based coherence — the two validation layers `nebulai validate` does not yet cover (it measures geometry and stability, not whether a cluster predicts behaviour).
 - Intervention-based validation: does ablating a cluster's units change the behaviour its title claims?
 - Phase 2: WebGPU point cloud reading `nebulai.json` — 3D flythrough, hover, cluster hulls, filters, 2D↔3D toggle. (The `compare` viewer is the first cut of this renderer.)
