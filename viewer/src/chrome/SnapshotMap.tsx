@@ -130,6 +130,27 @@ export function SnapshotMap() {
       </div>
 
       <footer class="snapshot-footer">
+        {/* HONESTY: the ring is an ARRANGEMENT, not a projection. `layoutRadial`
+            spaces keywords evenly by their index in the topic preset, so angle
+            and neighbour distance encode authoring order and nothing else. It
+            renders as a network graph, and the default reading of a network
+            graph is "close together = related" — which is false here. The data
+            is entirely in the links and the marks: edge = co-occurrence within a
+            turn, node size = mentions so far.
+
+            It lives in the FOOTER rather than over the stage because every
+            corner of the stage is either inside the ring's label band or under
+            the turn card — a caption there covers the thing it is describing.
+            Here it sits directly above the scrubber, whose own note (see
+            SnapshotScrubber) makes the matching point about the turn axis. */}
+        {(activeTopic?.keywords.length ?? 0) > 0 && (
+          <p class="snapshot-layout-note">
+            Ring position is the keyword's order in the topic preset — angle and
+            distance between nodes carry no meaning. The measurements are the
+            links (co-occurrence within a turn) and the node size (mentions so
+            far).
+          </p>
+        )}
         <SnapshotScrubber
           disabled={!activeLog}
           value={snap.turnIndex}

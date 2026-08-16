@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..backend.embed import embed_texts
+from ..backend.embed import embed_texts, public_embed_host
 from ..units import Units
 
 
@@ -108,7 +108,8 @@ def load_api_token_units(
             "unit": f"api_text_embedding({embed_model})",
             "geometry": "third-party text-embedding space — NOT model-internal",
             "embed_model": embed_model,
-            "embed_host": embed_host,
+            # never the raw host: this file ships publicly (see public_embed_host)
+            "embed_host": public_embed_host(embed_host),
             "embed_api": api,
             "centered": center,
             "vocab_size": int(vocab_size),

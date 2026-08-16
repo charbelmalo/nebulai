@@ -18,6 +18,28 @@ const STATE_LABELS: Record<string, string> = {
 
 const label = (s: string | undefined) => (s ? (STATE_LABELS[s] ?? s) : "—");
 
+/** What a POSITION means in each compare layout — three of the four are
+ *  arrangements rather than projections, and only one of those says so today.
+ *
+ *  `native` is the one that can actively mislead. `compare.py` normalizes each
+ *  model's own cloud to the SAME radius before pushing it into a quadrant, so
+ *  two clouds always look equally spread even when they are not, and the gap
+ *  between quadrants is a constant from `_grid_offsets`. That is the correct
+ *  default — two independent UMAP fits share no axes, orientation or scale, so
+ *  their raw coordinates were never comparable — but the screen shows four
+ *  clouds side by side, which reads as a comparison unless something says
+ *  otherwise. */
+const STATE_NOTES: Record<string, string> = {
+  native:
+    "Each model's own UMAP, rescaled separately to the same radius and placed in a quadrant by command-line order. Nothing across quadrants is comparable — not the gaps, not the relative spread.",
+  semantic:
+    "One shared fit over every model's concepts, so positions here ARE comparable across models. It is a fit of the label text, though, not of the models' weights.",
+  by_model:
+    "Columns are model identity in command-line order. Only the vertical/depth axes carry the shared fit; horizontal spread is compressed to a fifth.",
+  by_concept:
+    "Points are pulled most of the way onto their meta-cluster centroid to make shared concepts pop. Spread within a knot is emphasis, not measurement.",
+};
+
 export function ComparePanel() {
   const data = $compareData.value;
   const ui = $compare.value;
@@ -37,6 +59,10 @@ export function ComparePanel() {
   }
 
   const st = appStore.getState();
+  // the DRIVER's stage, not the store's — see the RadioRow note below. The
+  // layout note has to follow the same value, or it would describe a layout
+  // that is not the one on screen.
+  const activeState = $compareTour.value?.stageName || data.states[ui.state] || "semantic";
 
   return (
     <section class="legend compare-panel" aria-label="Comparison">
@@ -61,7 +87,7 @@ export function ComparePanel() {
         // the DRIVER's stage, not the store's — the tour moves the field
         // without writing the store, and a radio that disagreed with what is on
         // screen would be the panel lying about the view
-        value={$compareTour.value?.stageName || data.states[ui.state] || "semantic"}
+        value={activeState}
         options={data.states.map((s) => ({ value: s, label: STATE_LABELS[s] ?? s }))}
         onChange={(v) => {
           const i = Math.max(data.states.indexOf(v), 0);
@@ -71,6 +97,9 @@ export function ComparePanel() {
           st.setCompareState(i);
         }}
       />
+      {STATE_NOTES[activeState] && (
+        <p class="legend-caption">{STATE_NOTES[activeState]}</p>
+      )}
 
       <div class="legend-sep" />
       <div class="compare-models" role="group" aria-label="Models">

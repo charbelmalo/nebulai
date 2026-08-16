@@ -14,29 +14,119 @@ which a different embedder is silently substituted. The one gap that DID exist
 is closed by `EmbedIdentityError` below — a multi-model server that ignores the
 `model` field and serves whatever it has loaded.
 
-Reachability, measured 2026-08-12 on this machine: nothing serves it.
-localhost:11434 and localhost:8050 both refuse the connection and the LAN box
-at 192.168.0.200 times out, so `nebulai compare` currently fails after ~12s of
-retry backoff with a RuntimeError from `_embed_batch`, uncaught by the CLI. No
-remote drop-in was added, because there isn't a faithful one: the HF router has
-no /v1/embeddings route at all (GET returns 404), and the only live HF path for
-this embedder is `hf-inference`'s feature-extraction pipeline, whose response
-shape neither branch below parses. The ollama `mxbai-embed-large` tag is also a
-quantised GGUF build of `mixedbread-ai/mxbai-embed-large-v1`, so its vectors
-are not the fp32 repo's vectors — pointing `compare` at the repo would change
-the neutral space, which is precisely the substitution this file must not make
-quietly.
+REACHABILITY — corrected 2026-08-13, and the correction is the whole point.
+
+An earlier note here (2026-08-12) said "nothing serves it" and concluded that
+`nebulai compare` was dead until someone built a new embedder. That was wrong,
+and it was wrong for a boring reason: it probed **:11434**, the stock ollama
+port, and the M4 worker has never used it. `docs/M4-OLLAMA-HANDOVER.md` has said
+`OLLAMA_HOST=0.0.0.0:11435` since 2026-08-04. Verified working today:
+
+    GET  http://<m4-host>:11435/api/tags   -> mxbai-embed-large:latest,
+                                             334M params, F16 GGUF, 1024-dim
+    GET  http://<m4-host>:11435/api/version-> 0.23.1
+    GET  http://<m4-host>:8100/v1/status/ollama -> running:true, port:11435
+    embed_texts(...) -> (n,1024) float32, L2-normalized, semantically sane
+                        (cos 0.70 related / 0.31 unrelated)
+
+So the default below is a *local* default, not a claim that the LAN box is down.
+Point `--embed-host` (or NEBULAI_EMBED_HOST) at `http://<m4-host>:11435` and this
+module works as designed. Two things are worth not re-deriving:
+
+  - :8050 on the same box is a DIFFERENT server (OpenAI-compatible, `omlx`)
+    carrying `all-MiniLM-L6-v2` and `nomic-embed-text-v1.5`. It does not serve
+    mxbai. Use `--embed-api openai` for it, and remember it is a different
+    neutral space — not interchangeable with mxbai vectors.
+  - The HF router still has no /v1/embeddings route at all (GET returns 404),
+    and the only live HF path for this embedder is `hf-inference`'s
+    feature-extraction pipeline, whose response shape neither branch below
+    parses. There is still no faithful remote drop-in.
+
+The ollama `mxbai-embed-large` tag is an F16 GGUF build of
+`mixedbread-ai/mxbai-embed-large-v1`, so its vectors are not bit-identical to
+the fp32 repo's. That matters less than the earlier note implied — F16 is half
+precision, not a 4-bit quant — but it is still a different artifact behind a
+MUTABLE tag, so it cannot satisfy a "pinned to an exact revision" requirement.
+Swapping `compare` to the fp32 repo would change the neutral space, which is
+precisely the substitution this file must not make quietly.
 """
 
+import ipaddress
 import json
+import os
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 
 import numpy as np
 
 _DEFAULT_OLLAMA_HOST = "http://localhost:11434"  # local ollama server
 _DEFAULT_EMBED_MODEL = "mxbai-embed-large"
+
+#: Env override for the embeddings base URL. Exists because the working host on
+#: this network is a LAN box on a non-stock port (see the module docstring), and
+#: hardcoding a LAN IP as the library default would be wrong for everyone else
+#: while retyping `--embed-host` every run is how the port drift went unnoticed
+#: for a month. Setting it once fixes both.
+EMBED_HOST_ENV = "NEBULAI_EMBED_HOST"
+
+
+def default_embed_host() -> str:
+    """The embeddings base URL: `NEBULAI_EMBED_HOST` if set, else local ollama.
+
+    Deliberately NOT a discovery probe. This module's contract is that the
+    caller names the endpoint and nothing here silently picks a different one —
+    an env var is still the caller naming it, just once instead of per command.
+    """
+    return (os.environ.get(EMBED_HOST_ENV) or "").strip() or _DEFAULT_OLLAMA_HOST
+
+
+#: What `embed_host` becomes in an exported artifact when the endpoint was not
+#: loopback. A marker, not a redaction of the fact: provenance still records
+#: that an external service placed these points.
+PUBLISHED_REMOTE_HOST = "remote"
+
+
+def public_embed_host(host: str) -> str:
+    """The `embed_host` value that is safe to stamp into an exported artifact.
+
+    Loopback endpoints pass through verbatim — they name no machine but the
+    reader's own. Everything else collapses to `"remote"`.
+
+    The reason is that `nebulai.json` is served publicly while `--embed-host`
+    is an operator's private network detail, and the host is not evidence
+    about the map anyway: what makes these vectors what they are is the
+    *model*, and `embed_model`/`embed_api` are stamped separately and
+    untouched. Five shipped artifacts published a LAN address this way before
+    this function existed (docs/ONBOARDING.md blocker 1).
+
+    Deliberately not a general-purpose "is this address private" classifier.
+    That call fails OPEN — one wrong verdict publishes the address, and the
+    zoo of RFC1918 / CGNAT / link-local / mDNS / bare-LAN-hostname cases is
+    exactly where such a classifier gets it wrong. Only loopback, which needs
+    no judgement, survives; anything unparseable is treated as remote.
+    """
+    host = (host or "").strip()
+    if not host:
+        return ""
+    try:
+        # a bare "localhost:11434" has no scheme, so urlsplit reads it as a
+        # path and yields no hostname; the "//" prefix forces netloc parsing.
+        name = (urlsplit(host).hostname or urlsplit(f"//{host}").hostname or "").lower()
+    except ValueError:  # malformed IPv6 literal, etc.
+        return PUBLISHED_REMOTE_HOST
+    if not name:
+        return PUBLISHED_REMOTE_HOST
+    if name == "localhost" or name.endswith(".localhost"):
+        return host
+    try:
+        # covers 127.0.0.0/8 and ::1 without hardcoding either
+        if ipaddress.ip_address(name).is_loopback:
+            return host
+    except ValueError:
+        pass
+    return PUBLISHED_REMOTE_HOST
 
 
 class EmbedIdentityError(RuntimeError):
@@ -112,8 +202,17 @@ def _embed_batch(
             last = e
             if attempt < retries - 1:
                 time.sleep(2.0 * (attempt + 1))  # linear backoff
+    # Name the fix, not just the failure. The last time this raised, the message
+    # was a bare URLError and the conclusion drawn from it was "no embedder
+    # exists anywhere" — when the real cause was a wrong port on a host that was
+    # up the whole time. Anything that costs 4 retries should say where to look.
     raise RuntimeError(
-        f"embed request to {host} ({model}) failed after {retries} attempts: {last}"
+        f"embed request to {host} ({model}) failed after {retries} attempts: {last}\n"
+        f"  - check the endpoint is up:  curl {host.rstrip('/')}/api/tags\n"
+        f"  - ollama's stock port is 11434, but a host may bind elsewhere "
+        f"(this project's LAN box uses 11435 — see docs/M4-OLLAMA-HANDOVER.md)\n"
+        f"  - set {EMBED_HOST_ENV} or pass --embed-host to point somewhere else\n"
+        f"  - for an OpenAI-compatible server use --embed-api openai"
     )
 
 

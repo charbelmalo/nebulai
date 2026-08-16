@@ -11,6 +11,17 @@ def _timer():
     return lambda: f"{time.time() - t0:.1f}s"
 
 
+def _default_embed_host() -> str:
+    """`--embed-host` default, read at parser-build time so `--help` shows it.
+
+    Imported lazily to keep this module's import cheap, matching the rest of the
+    file's lazy-import style.
+    """
+    from .backend.embed import default_embed_host
+
+    return default_embed_host()
+
+
 def _update_index(out_root: Path) -> Path:
     """Rewrite out/index.json so the static viewer can discover datasets."""
     datasets = []
@@ -626,7 +637,7 @@ def _run_metrics(args: argparse.Namespace) -> None:
     """Structural comparison table (silhouette / noise / cluster count) across
     several already-built maps — the quantitative artifact behind the A-vs-B-vs-C
     claim. Writes out/compare/metrics.json and prints an aligned table."""
-    from .backend.metrics import compute_map_metrics, format_table
+    from .backend.metrics import add_verdict, compute_map_metrics, format_table
 
     out_root = Path(args.out)
     rows = []
@@ -644,7 +655,15 @@ def _run_metrics(args: argparse.Namespace) -> None:
     cmp_dir = out_root / "compare"
     cmp_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = cmp_dir / "metrics.json"
-    metrics_path.write_text(json.dumps({"maps": rows}, ensure_ascii=False, indent=2))
+    # the null-margin verdict is derived HERE rather than in the viewer: the
+    # `!` / `?` rules in margin_flags() are the honesty logic, and reimplementing
+    # them in TypeScript would give the browser a second opinion that drifts from
+    # this table. The viewer renders what this file already decided.
+    metrics_path.write_text(
+        json.dumps(
+            {"maps": [add_verdict(r) for r in rows]}, ensure_ascii=False, indent=2
+        )
+    )
     print(f"\n  {metrics_path}")
 
 
@@ -954,6 +973,7 @@ def _run_rename(args: argparse.Namespace) -> None:
 def _run_compare(args: argparse.Namespace) -> None:
     import os
 
+    from .backend import embed as embed_mod
     from .backend.compare import build_comparison, export_comparison
     from .backend.viewer import write_viewer
 
@@ -988,15 +1008,26 @@ def _run_compare(args: argparse.Namespace) -> None:
         json_paths.append(jp)
 
     t = _timer()
-    comp = build_comparison(
-        json_paths,
-        embed_host=args.embed_host or args.ollama_host,
-        embed_model=args.embed_model,
-        seed=args.seed,
-        embed_api=args.embed_api,
-        embed_api_key=os.environ.get("EMBED_API_KEY")
-        or os.environ.get("OPENAI_API_KEY"),
-    )
+    # explicit flag > NEBULAI_EMBED_HOST > --ollama-host. The env var sits in the
+    # middle so a box whose embedder lives somewhere other than the namer (here:
+    # ollama on :11435, not the stock :11434) can be configured once instead of
+    # per invocation — see backend/embed.py's docstring for why that matters.
+    embed_host = args.embed_host or os.environ.get(embed_mod.EMBED_HOST_ENV) or args.ollama_host
+    try:
+        comp = build_comparison(
+            json_paths,
+            embed_host=embed_host,
+            embed_model=args.embed_model,
+            seed=args.seed,
+            embed_api=args.embed_api,
+            embed_api_key=os.environ.get("EMBED_API_KEY")
+            or os.environ.get("OPENAI_API_KEY"),
+        )
+    except RuntimeError as e:
+        # `compare` is the one command that cannot run without a reachable
+        # embedder, and it used to surface that as a raw traceback. The message
+        # from _embed_batch already names the fix; just don't bury it in a stack.
+        raise SystemExit(f"compare needs a reachable embedder.\n{e}") from e
     print(
         f"[1/2] built comparison: {comp['meta']['n_points']} clusters, "
         f"{comp['meta']['n_meta_clusters']} meta-clusters, "
@@ -1091,8 +1122,9 @@ def main() -> None:
     )
     t.add_argument(
         "--embed-host",
-        default="http://localhost:11434",
-        help="[--source api] embeddings endpoint base URL (default: local ollama server)",
+        default=_default_embed_host(),
+        help="[--source api] embeddings endpoint base URL "
+        "(default: $NEBULAI_EMBED_HOST, else the local ollama server)",
     )
     t.add_argument(
         "--embed-model",
@@ -1545,7 +1577,7 @@ def main() -> None:
         help="model for --namer codex-cli (e.g. gpt-5.6-sol); empty = the CLI default",
     )
     pr.add_argument("--env-file", default=None)
-    pr.add_argument("--embed-host", default="http://localhost:11434")
+    pr.add_argument("--embed-host", default=_default_embed_host())
     pr.add_argument("--embed-model", default="mxbai-embed-large")
     pr.add_argument("--embed-api", default="ollama", choices=["ollama", "openai"])
     pr.add_argument(
@@ -1678,8 +1710,10 @@ def main() -> None:
     c.add_argument(
         "--embed-host",
         default=None,
-        help="embeddings base URL, overrides --ollama-host "
-        "(e.g. http://<lan-host>:8040 with --embed-api openai)",
+        help="embeddings base URL, overrides $NEBULAI_EMBED_HOST and "
+        "--ollama-host (ollama's stock port is 11434, but a host may bind "
+        "elsewhere — this project's LAN box uses 11435; an OpenAI-compatible "
+        "server needs --embed-api openai)",
     )
     c.add_argument(
         "--embed-api",
