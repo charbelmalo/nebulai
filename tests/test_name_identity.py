@@ -337,6 +337,147 @@ def test_an_unpriceable_model_is_flagged_rather_than_silently_gated(capsys):
     assert "no corpus price" in capsys.readouterr().out
 
 
+def test_require_price_refuses_the_unpriceable_model_instead_of_warning():
+    """The fail-open branch above is right for a short interactive run a human
+    is watching. It is wrong for an unattended batch: the only signal is a
+    printed line, and nobody is awake to read it. `require_price` is how such a
+    caller opts into a ceiling that is actually enforceable."""
+    with pytest.raises(llm_mod.BudgetError) as exc:
+        llm_mod.cost_gate("some/unmapped-model", 500, 1.00, require_price=True)
+    msg = str(exc.value)
+    assert "no corpus price" in msg
+    # and it names models that CAN be priced, same as the over-budget branch —
+    # refusing without saying what would work is a dead end, not a gate
+    assert "muse-glimmer-30b" in msg
+
+
+def test_require_price_changes_nothing_for_models_that_have_a_price():
+    """The flag narrows one branch only. A free model is still free and a
+    priced one is still priced — otherwise callers would avoid setting it."""
+    assert llm_mod.cost_gate(
+        "google/gemma-4-26b-a4b-it:free", 1_000_000, 0.0, require_price=True
+    ) == 0.0
+    assert llm_mod.cost_gate(
+        "meta/muse-glimmer-30b", 250, 1.00, require_price=True
+    ) == pytest.approx(llm_mod.cost_gate("meta/muse-glimmer-30b", 250, 1.00))
+
+
+# --- the run-level ceiling -------------------------------------------------
+#
+# `cost_gate` prices ONE job. That is the wrong question for a batch, and the
+# gap is not theoretical: a thousand calls that each clear a per-call ceiling
+# by two orders of magnitude still add up to real money. These pin the
+# cumulative ceiling, and pin that spending requires an approval STEP rather
+# than a flag someone can default to true.
+
+
+def _budget(ceiling=0.01):
+    b = llm_mod.RunBudget(ceiling, label="w1-trials")
+    b.preflight(0.005, 10, "meta/muse-glimmer-30b")
+    b.approve()
+    return b
+
+
+def _response(prompt=1500, completion=400, **extra):
+    return {"usage": {"prompt_tokens": prompt, "completion_tokens": completion, **extra}}
+
+
+def test_the_cumulative_ceiling_trips_where_a_per_call_ceiling_never_would():
+    """The headline case. Each call costs $0.001125 and clears a $0.01 per-call
+    ceiling nine times over; the ninth call is where the RUN passes it."""
+    # a per-call gate waves this exact call through, every time
+    assert llm_mod.cost_gate("meta/muse-glimmer-30b", 15, 0.01) == pytest.approx(
+        0.001125
+    )
+
+    b = _budget(0.01)
+    for _ in range(8):  # 8 x $0.001125 = $0.009
+        b.charge_response("meta/muse-glimmer-30b", _response())
+    assert b.spent_usd == pytest.approx(0.009)
+    assert b.remaining_usd == pytest.approx(0.001)
+
+    with pytest.raises(llm_mod.BudgetError) as exc:
+        b.charge_response("meta/muse-glimmer-30b", _response())
+    msg = str(exc.value)
+    assert "$0.010" in msg  # the total that tripped it, not the per-call cost
+    assert "9 calls" in msg
+    assert "still valid" in msg  # completed trials are not retroactively junk
+
+
+def test_spending_requires_an_approval_step_not_a_flag():
+    b = llm_mod.RunBudget(1.00)
+    with pytest.raises(llm_mod.BudgetError) as exc:
+        b.charge_response("meta/muse-glimmer-30b", _response())
+    assert "before the cost estimate was approved" in str(exc.value)
+    # and approval cannot precede the estimate it is approval OF
+    with pytest.raises(RuntimeError):
+        b.approve()
+
+
+def test_preflight_refuses_before_the_first_token_when_the_estimate_alone_is_over():
+    """Discovering the ceiling 900 calls in costs 900 calls. The estimate is
+    known up front, so an impossible run is refused before anything is sent."""
+    b = llm_mod.RunBudget(0.01, label="w1-trials")
+    with pytest.raises(llm_mod.BudgetError) as exc:
+        b.preflight(5.00, 1200, "meta/muse-glimmer-30b")
+    assert "nothing was sent" in str(exc.value)
+    assert b.spent_usd == 0.0
+
+
+def test_preflight_prints_an_upper_bound_a_human_can_read(capsys):
+    b = llm_mod.RunBudget(1.00, label="w1-trials")
+    text = b.preflight(0.4512, 1200, "meta/muse-glimmer-30b")
+    out = capsys.readouterr().out
+    assert text in out
+    for expected in ("$0.4512", "1200 calls", "meta/muse-glimmer-30b", "UPPER BOUND"):
+        assert expected in out
+
+
+def test_the_budget_charges_measured_usage_not_the_estimate():
+    """Same rule as the stamped cost: the estimate rounds up per batch, so
+    charging it would trip the ceiling on a run that was in fact affordable."""
+    b = _budget(1.00)
+    b.charge_response("meta/muse-glimmer-30b", _response(prompt=150, completion=40))
+    assert b.spent_usd == pytest.approx(0.0001125)  # a tenth of the estimate
+    # the provider's own number still wins when it reports one
+    b2 = _budget(1.00)
+    b2.charge_response("meta/muse-glimmer-30b", _response(cost=0.002))
+    assert b2.spent_usd == pytest.approx(0.002)
+
+
+def test_an_unpriceable_model_cannot_be_charged_silently():
+    """The fail-open hole, closed at the other end. A spend that cannot be
+    counted cannot be bounded, and recording it as $0 makes the ceiling
+    decoration."""
+    b = _budget(1.00)
+    with pytest.raises(llm_mod.BudgetError) as exc:
+        b.charge_response("some/unmapped-model", _response())
+    assert "cannot be priced" in str(exc.value)
+    assert "require_price=True" in str(exc.value)
+
+
+def test_a_response_with_no_usage_reported_costs_nothing_and_does_not_raise():
+    """Some endpoints omit `usage` entirely. That is zero information, not an
+    unpriceable spend — it must not be conflated with the case above."""
+    b = _budget(1.00)
+    b.charge_response("some/unmapped-model", {"choices": []})
+    assert b.spent_usd == 0.0
+    assert b.calls == 1
+
+
+def test_the_budget_summary_gives_an_unspent_run_ink():
+    b = _budget(1.00)
+    assert "$0.0000 of $1.00 over 0 calls" in b.summary()
+    b.charge_response("meta/muse-glimmer-30b", _response())
+    s = b.summary()
+    assert "w1-trials" in s and "1 calls" in s and "1500 prompt" in s
+
+
+def test_a_negative_ceiling_is_a_bug_not_a_zero_budget():
+    with pytest.raises(ValueError):
+        llm_mod.RunBudget(-1.0)
+
+
 # --- the HF Inference Providers backend ------------------------------------
 
 

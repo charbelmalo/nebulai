@@ -177,6 +177,7 @@ def cost_gate(
     n_clusters: int,
     max_cost_usd: float = DEFAULT_MAX_COST_USD,
     batch_size: int = 15,
+    require_price: bool = False,
 ) -> float | None:
     """Estimate the spend before sending. Returns USD, or None if unpriceable.
 
@@ -187,12 +188,38 @@ def cost_gate(
     from the money side instead of the reachability side.
 
     A model with no corpus row cannot be priced (most OpenRouter slugs), so the
-    ceiling is unenforceable for it and this says so rather than pretending.
+    ceiling is unenforceable for it. `require_price` decides what that means:
+
+    - `False` (default) — print that the ceiling is unenforceable and return
+      `None`, permitting the call. This is what the namer and probe have always
+      done, and both are short interactive jobs a human is watching.
+    - `True` — raise `BudgetError` instead. **An unpriceable model is refused
+      rather than waved through.**
+
+    The default is fail-OPEN for one reason only: changing it would alter the
+    behaviour of every existing caller, and an interactive `nebulai tokens` run
+    that suddenly refuses an OpenRouter slug it has always accepted is a
+    regression, not a fix. New unattended callers must pass `require_price=True`.
+    A long batch run against a model that happens not to be in `CORPUS` is
+    exactly the shape that bills without a ceiling while the only signal is a
+    printed line nobody is awake to read.
     """
     s = corpus_entry(model_id)
     if is_free(model_id, s):
         return 0.0
     if s is None:
+        if require_price:
+            raise BudgetError(
+                f"{model_id} has no corpus price, so the ${max_cost_usd:.2f} "
+                f"ceiling cannot be enforced for it, and this caller asked for "
+                f"an enforceable ceiling.\n"
+                f"  add a ModelSpec for it in corpus.py (with measured rates), "
+                f"or pin a model that has one:\n"
+                + "\n".join(
+                    f"    {key:<16} {endpoint}"
+                    for key, endpoint, _ in _alternatives("", n_clusters, batch_size)
+                )
+            )
         print(
             f"  cost: {model_id} has no corpus price — the "
             f"${max_cost_usd:.2f} ceiling cannot be enforced for it"
@@ -224,6 +251,169 @@ def cost_gate(
         f"with --max-cost-usd {est:.4f}"
     )
     raise BudgetError("\n".join(lines))
+
+
+class RunBudget:
+    """A cumulative spend ceiling for one multi-call run, with an approval step.
+
+    `cost_gate` prices ONE job and asks "is this call affordable". That question
+    has a useless answer for a batch: 1,200 calls at $0.004 each clear any
+    per-call ceiling individually and still spend $5. This tracks the running
+    total instead, so the ceiling means what a human reading `--max-cost-usd`
+    thinks it means.
+
+    Two deliberate properties:
+
+    **Approval is a step, not a flag.** `charge()` raises until `approve()` has
+    been called, and `approve()` is only reachable after `preflight()` has
+    printed a human-readable estimate. A runner cannot spend by forgetting to
+    ask — it has to actively call the method whose name says what it is doing.
+
+    **It charges ACTUAL usage, not the estimate.** The estimate is an upper
+    bound by construction (`corpus.estimate_naming_cost` rounds up per batch),
+    so charging it would trip the ceiling early on a run that was in fact
+    affordable. `preflight` reports the upper bound; `charge` records the truth.
+
+    Terminal by design: `BudgetError` is not caught by the fall-through chain,
+    so tripping the ceiling stops the run rather than quietly finishing it on a
+    cheaper model.
+    """
+
+    def __init__(self, ceiling_usd: float, label: str = "run"):
+        if ceiling_usd < 0:
+            raise ValueError(f"ceiling must be >= 0, got {ceiling_usd}")
+        self.ceiling_usd = float(ceiling_usd)
+        self.label = label
+        self.calls = 0
+        #: cumulative reported usage, in the shape `accumulate_usage` maintains
+        self.usage: dict = {"prompt_tokens": 0, "completion_tokens": 0, "cost": None}
+        self._token_usd = 0.0  # priced from `usage`, recomputed on each charge
+        self._flat_usd = 0.0  # from explicit charge() calls
+        self._approved = False
+        self._preflighted = False
+
+    @property
+    def spent_usd(self) -> float:
+        return self._token_usd + self._flat_usd
+
+    @property
+    def remaining_usd(self) -> float:
+        return max(0.0, self.ceiling_usd - self.spent_usd)
+
+    def preflight(self, estimate_usd: float, n_calls: int, model_id: str) -> str:
+        """Print the estimate a human approves against. Returns the same text.
+
+        Raises `BudgetError` before anything is sent if the *estimate alone*
+        already exceeds the ceiling — refusing up front is cheaper than
+        discovering it 900 calls in.
+        """
+        self._preflighted = True
+        text = (
+            f"  cost: {self.label} — ~${estimate_usd:.4f} for {n_calls} calls "
+            f"on {model_id} (ceiling ${self.ceiling_usd:.2f})\n"
+            f"        this is an UPPER BOUND; actual usage is charged as it is "
+            f"reported"
+        )
+        print(text)
+        if estimate_usd > self.ceiling_usd:
+            raise BudgetError(
+                f"{self.label}: the estimate alone (~${estimate_usd:.4f} for "
+                f"{n_calls} calls on {model_id}) exceeds the "
+                f"${self.ceiling_usd:.2f} ceiling, so nothing was sent.\n"
+                f"  raise the ceiling deliberately, or cut the trial count."
+            )
+        return text
+
+    def approve(self) -> None:
+        """Record explicit human approval. Required before the first charge."""
+        if not self._preflighted:
+            raise RuntimeError(
+                "approve() before preflight() — approval must follow an "
+                "estimate the human could actually read"
+            )
+        self._approved = True
+
+    def _require_approval(self) -> None:
+        if not self._approved:
+            raise BudgetError(
+                f"{self.label}: a paid call was charged before the cost "
+                f"estimate was approved. Call preflight() then approve()."
+            )
+
+    def _check(self) -> float:
+        if self.spent_usd > self.ceiling_usd:
+            raise BudgetError(
+                f"{self.label}: cumulative spend ${self.spent_usd:.4f} over "
+                f"{self.calls} calls has passed the ${self.ceiling_usd:.2f} "
+                f"ceiling, so the run stopped here.\n"
+                f"  partial results before this point are still valid — the "
+                f"trials that completed were really run, and their outputs are "
+                f"evidence about the trials that ran, not about the ones that "
+                f"did not.\n"
+                f"  re-run with a higher ceiling to continue."
+            )
+        return self.spent_usd
+
+    def charge(self, usd: float) -> float:
+        """Record a known dollar amount. Raises `BudgetError` when it trips.
+
+        The primitive. Prefer `charge_response`, which prices real usage.
+        """
+        self._require_approval()
+        self._flat_usd += float(usd)
+        self.calls += 1
+        return self._check()
+
+    def charge_response(self, model_id: str, payload: dict) -> float:
+        """Route ONE provider response through the ceiling. The main entry point.
+
+        Accumulates the response's reported usage, re-prices the running total
+        via `actual_cost`, and trips if the total has passed the ceiling. Pricing
+        the *cumulative* usage rather than summing per-call costs keeps the
+        provider's own authoritative `cost` field authoritative and avoids
+        eight-decimal rounding drift over a thousand calls.
+
+        One inherited edge, worth knowing rather than discovering: `actual_cost`
+        prefers the provider's `cost` field over token arithmetic, so a run in
+        which only SOME responses carry that field is priced from those alone.
+        A single pinned endpoint either reports it or does not, and
+        `IdentityError` already refuses a mid-run model swap, so this needs a
+        provider changing its own response shape mid-run to bite.
+
+        An unpriceable model raises rather than accumulating silently. Reaching
+        here with one means the run skipped `cost_gate(..., require_price=True)`
+        — a spend that cannot be counted cannot be bounded, and quietly charging
+        it $0 is how a ceiling becomes decoration.
+        """
+        self._require_approval()
+        accumulate_usage(payload, self.usage)
+        self.calls += 1
+        priced = actual_cost(model_id, self.usage)
+        if priced is None:
+            if self.usage["prompt_tokens"] or self.usage["completion_tokens"]:
+                raise BudgetError(
+                    f"{self.label}: {model_id} reported "
+                    f"{self.usage['prompt_tokens']} + "
+                    f"{self.usage['completion_tokens']} tokens that cannot be "
+                    f"priced — no corpus entry and no provider cost field — so "
+                    f"the ${self.ceiling_usd:.2f} ceiling is unenforceable.\n"
+                    f"  gate this run with cost_gate(..., require_price=True) "
+                    f"before the first call, or add a ModelSpec in corpus.py."
+                )
+            # a response that reported no usage at all costs nothing to record
+            return self._check()
+        self._token_usd = priced
+        return self._check()
+
+    def summary(self) -> str:
+        """One line for the run's log and for `meta`. Absence has ink: an
+        unspent budget says $0.0000, never nothing."""
+        return (
+            f"{self.label}: ${self.spent_usd:.4f} of ${self.ceiling_usd:.2f} "
+            f"over {self.calls} calls "
+            f"({self.usage['prompt_tokens']} prompt + "
+            f"{self.usage['completion_tokens']} completion tokens)"
+        )
 
 
 def accumulate_usage(payload: dict, usage: dict) -> None:
