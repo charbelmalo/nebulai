@@ -7,7 +7,7 @@ export interface ResearchPaper {
 const paper = (title: string, citation: string, url: string): ResearchPaper => ({ title, citation, url });
 
 /** Curated paper-level references for every live Internals guide view. */
-export const GUIDE_RESEARCH: Record<string, readonly ResearchPaper[]> = {
+export const GUIDE_RESEARCH = {
   "fourier-atlas": [
     paper("On the Spectral Bias of Neural Networks", "Rahaman et al. (2019)", "https://arxiv.org/abs/1806.08734"),
     paper("Fourier Features Let Networks Learn High Frequency Functions in Low Dimensional Domains", "Tancik et al. (2020)", "https://arxiv.org/abs/2006.10739"),
@@ -133,4 +133,14 @@ export const GUIDE_RESEARCH: Record<string, readonly ResearchPaper[]> = {
     paper("Towards Best Practices of Activation Patching in Language Models", "Zhang and Nanda (2023)", "https://arxiv.org/abs/2309.16042"),
     paper("Eliciting Latent Predictions from Transformers with the Tuned Lens", "Belrose et al. (2023)", "https://arxiv.org/abs/2303.08112"),
   ],
-};
+} satisfies Record<string, readonly ResearchPaper[]>;
+
+export type GuideResearchId = keyof typeof GUIDE_RESEARCH;
+
+/** Keep the guide's research section as a shipping invariant. A newly
+ * registered Internals view must add its references here before the guide can
+ * render it; silently returning an empty list would make the documentation
+ * look complete while dropping its evidence. */
+export function guideResearchFor(featureId: GuideResearchId): readonly ResearchPaper[] {
+  return GUIDE_RESEARCH[featureId];
+}

@@ -31,7 +31,17 @@ import { appStore } from "./store";
 
 declare global {
   interface Window {
-    __perf: { parseMs?: number; bootMs?: number; p95FrameMs?: number };
+    __perf: {
+      parseMs?: number;
+      bootMs?: number;
+      /** Browser-scheduled requestAnimationFrame interval. Diagnostic only:
+       * headless browsers may cap this independently of application work. */
+      p95FrameMs?: number;
+      /** Main-thread work performed by NebulAI inside one frame callback. */
+      p95FrameWorkMs?: number;
+      /** Most recent dataset change, measured wholly inside the app. */
+      datasetSwitchMs?: number;
+    };
     __store: typeof appStore;
   }
 }

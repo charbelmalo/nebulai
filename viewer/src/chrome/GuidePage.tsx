@@ -8,7 +8,7 @@
 import { appStore } from "../app/store";
 import type { GuideFormula, InterpGroup } from "../scene/interp/InterpDriver";
 import { GROUP_LABEL, INTERP_FEATURES } from "../scene/interp/registry";
-import { GUIDE_RESEARCH } from "./guideResearch";
+import { guideResearchFor } from "./guideResearch";
 
 const GROUP_ORDER: InterpGroup[] = ["weights", "forward", "sae", "trained", "live"];
 
@@ -117,7 +117,7 @@ export function GuidePage() {
                   <div class="guide-card-row">
                     <span class="guide-card-tag">Research</span>
                     <ol class="guide-card-research">
-                      {GUIDE_RESEARCH[f.id].map((source) => (
+                      {guideResearchFor(f.id).map((source) => (
                         <li key={source.url}>
                           <a href={source.url} target="_blank" rel="noreferrer">
                             {source.title}

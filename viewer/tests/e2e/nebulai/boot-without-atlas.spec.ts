@@ -100,3 +100,43 @@ test("no dataset index: Seer is still reachable, as the other instrument", async
   const statusText = (await page.locator(".boot-status").textContent()) ?? "";
   expect(statusText).not.toContain("boot failed:");
 });
+
+test("mobile Guide clears the two-row chrome and documents every live view", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  const errors = await bootWithoutAtlas(page);
+
+  await page.locator(".topnav-pill", { hasText: "Guide" }).click();
+  await expect(page.locator(".guide-page")).toBeVisible();
+  await expect(page.locator(".guide-count")).toContainText("25 of 25");
+  await expect(page.locator(".guide-card")).toHaveCount(25);
+  await expect(page.locator(".guide-card-research li")).toHaveCount(75);
+
+  const links = page.locator(".guide-card-research a");
+  await expect(links).toHaveCount(75);
+  for (const link of await links.all()) {
+    await expect(link).toHaveAttribute("href", /^https:\/\//);
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expect(link).toHaveAttribute("rel", "noreferrer");
+  }
+
+  const clearance = await page.evaluate(() => {
+    const nav = document.querySelector(".topnav")!.getBoundingClientRect();
+    const guide = document.querySelector(".guide-page")!.getBoundingClientRect();
+    return { navBottom: nav.bottom, pageTop: guide.top };
+  });
+  expect(clearance.pageTop).toBeGreaterThanOrEqual(clearance.navBottom);
+
+  await page.locator(".guide-card-open").first().click();
+  expect(await page.evaluate(() => window.__store.getState().page)).toBe("interp");
+  await expect(page.locator(".interp-page")).toBeVisible();
+
+  const interpClearance = await page.evaluate(() => {
+    const nav = document.querySelector(".topnav")!.getBoundingClientRect();
+    const interp = document.querySelector(".interp-page")!.getBoundingClientRect();
+    return { navBottom: nav.bottom, pageTop: interp.top };
+  });
+  expect(interpClearance.pageTop).toBeGreaterThanOrEqual(interpClearance.navBottom);
+  expect(errors).toEqual([]);
+});

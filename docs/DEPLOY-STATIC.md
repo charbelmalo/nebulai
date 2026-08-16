@@ -1,46 +1,48 @@
 # Handover — static psychiX deploy at `research.elysiumsystems.net/psychiX/`
 
 **Audience:** the agent operating the self-hosted `research.elysiumsystems.net`
-server. **Goal:** serve **three** fully static, pre-baked sites under one
-parent sub-path, `/psychiX/`, with **zero server-side computation**:
+server. **Goal:** serve the branded PsychiX shell and its **two** fully static,
+pre-baked instruments under `/psychiX/`, with **zero server-side computation**:
 
 | URL | What | Needs baked `out/` data? |
 |---|---|---|
-| `/psychiX/` | the psychiX **hub** — a no-JS landing page linking the two instruments | no |
+| `/psychiX/` | the separately built, branded **PsychiX shell** whose current instrument boundary enters Nebul.AI | no |
 | `/psychiX/nebulai-maps/` | **Nebul.AI** — "map what a model knows" — **ALREADY LIVE; do not rename this path** | **yes** (~385 MB) |
 | `/psychiX/seer/` | **Seer** — "map what an agent did" | no |
 
 Nebul.AI and Seer used to be two tabs of one document; they are now two
 separate instruments (`viewer/index.html` and `viewer/seer.html`) that share
 one chrome and one `@psychix/viz` package but ship as **independent builds**.
-The hub is new: a third, JS-free document that exists only to link the other
-two. None of the three needs anything computed at request time.
+This repository also builds a generic, JS-free hub for standalone deployments.
+The current Elysium deployment does **not** use that hub: its branded PsychiX
+shell is maintained and deployed separately. None of the three public surfaces
+needs anything computed at request time.
 
-> **Deploy host, in one line** (verified 2026-08-12): the server is the Mac mini
-> at **`192.168.0.199`** (`Digitals-Mac-mini.local`), account **`digitalcharbel`**,
-> and the live webroot is
+> **Deploy target** (verified 2026-08-13): the live webroot is
 > `/Users/digitalcharbel/Documents/digiCharbel/data/www/research/`.
-> It is normally **already SMB-mounted on the build machine**, which makes the
-> data transfer in §4 a *local file copy* — see §4 Option A.
+> It is available directly on the deployment machine, which makes the data
+> transfer in §4 a *local file copy* — see §4 Option A. Keep private network
+> addresses and account details out of this repository.
 
-Build from **`main`** — it is the single source of truth. There is no separate
-deploy branch: every sub-path base, cross-instrument link and blanked
-live-endpoint default is selected at **build time** via `VITE_*` env vars (§3),
-so the same `main` tree serves local dev (loopback defaults, both apps
-side-by-side under `./`) and all three static deploys with no code divergence.
+Build the two instruments from **`main`** — it is their single source of truth.
+There is no separate deploy branch: every sub-path base, cross-instrument link
+and blanked live-endpoint default is selected at **build time** via `VITE_*`
+env vars (§3). The separately maintained PsychiX shell has its own source and
+deployment workflow.
 
 ---
 
 ## 0. TL;DR
 
-Each of the three sites is a plain static SPA (the hub is not even an SPA — it
-has no JS runtime at all). Nebul.AI's views (Atlas / Chord / Hierarchical /
-Compare and all 25 Internals panels) are each a plain `fetch()` of a
+All three public surfaces are static. Nebul.AI and Seer are SPAs; the branded
+shell is built in its own project. Nebul.AI's views (Atlas / Chord /
+Hierarchical / Compare and all 25 Internals panels) are each a plain `fetch()` of a
 **pre-computed JSON file** under `out/`. **Seer needs no such tree — it ships
 with zero baked artifacts and fetches nothing at boot**; it only ever talks to
 a Live capture server if a visitor points it at one. To deploy:
 
-1. `git clone` this repo (branch `main`) and **build all three SPAs** with
+1. `git clone` this repo (branch `main`) and **build both instruments plus the
+   standalone hub validation artifact** with
    `npm run build:deploy` — one command that runs `build:nebulai`,
    `build:seer` and `build:hub` in turn, each with its own sub-path base and
    its own `dist/<name>/` output (§3).
@@ -48,8 +50,9 @@ a Live capture server if a visitor points it at one. To deploy:
    shipped — see the exclusions in §4) next to the built Nebul.AI app only.
    `out/` is **git-ignored — it is NOT in the repo** and must be transferred
    out-of-band. Seer and the hub need no equivalent step.
-3. Serve all three built trees as static files under `/psychiX/`, with the
-   data tree at `<app>/psychiX/nebulai-maps/out/`.
+3. Serve both instrument trees under `/psychiX/`, with the data tree at
+   `<app>/psychiX/nebulai-maps/out/`. Preserve the separately deployed branded
+   shell at the parent path.
 
 No Python, no Node, no GPU, no model weights, and no live backend run on the
 server for any of the three. WebGPU/WebGL runs entirely in the visitor's
@@ -202,13 +205,17 @@ grep -o '/psychiX/assets/[^"]*'              dist/hub/index.html
 **Seer and the hub need nothing from this section.** Only Nebul.AI reads a
 baked artifact tree, and only its own sub-path needs one.
 
-`out/` is git-ignored and lives only on the build machine. Since 2026-08-12 the
-385 MB of artifacts no longer sit inside the working tree at all: they live at
-`~/Developer/nebulai-data/out/`, and `~/Developer/nebulai/out` is a **symlink**
-pointing there. Every consumer resolves through it unchanged — the dev server's
-`/out` middleware, the Playwright suite, and the rsync below — so no path in
-this document changed. The one thing that behaves differently is described in
-the fourth bullet after the command; read it before you retype that line.
+`out/` is git-ignored and is not supplied by a fresh clone. On the current
+deployment machine, `~/Developer/nebulai/out/` is the local working mirror and
+the live webroot is the authoritative complete corpus. Pull the live tree into
+that mirror before frontend QA so Playwright does not validate stale datasets
+or comparisons. A checksum dry run should be silent:
+
+```sh
+rsync -rcn --delete --exclude='.DS_Store' --itemize-changes \
+  /Users/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/nebulai-maps/out/ \
+  ~/Developer/nebulai/out/
+```
 
 The tree must end up at `<webroot>/psychiX/nebulai-maps/out/` (see §5), which on
 the real host is:
@@ -217,25 +224,25 @@ the real host is:
 /Users/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/nebulai-maps/out/
 ```
 
-**Option A — local rsync over the SMB mount (what actually works; no SSH).**
-The Mac mini's home is normally already mounted on the build machine at
-`/Volumes/digitalcharbel`, so the "transfer" is a plain local copy:
+**Option A — local rsync on the deployment machine (current path).** The source
+checkout and live webroot are available on the same machine, so the transfer is
+a plain local copy:
 
 ```sh
-# verify the mount first — if this path is missing, re-mount before anything else
-ls -d /Volumes/digitalcharbel/Documents/digiCharbel/data/www/research
+# resolve the exact target before allowing --delete
+ls -d /Users/digitalcharbel/Documents/digiCharbel/data/www/research
 
-/opt/homebrew/bin/rsync -rlt --delete \
+rsync -rlt --delete \
   --exclude='.DS_Store' --exclude='._*' --exclude='.backup-pre-recuration/' \
   ~/Developer/nebulai/out/ \
-  /Volumes/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/nebulai-maps/out/
+  /Users/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/nebulai-maps/out/
 ```
 
 Four details in that command are load-bearing, all learned the hard way:
 
-- **Use Homebrew rsync 3.x** (`/opt/homebrew/bin/rsync`), not `/usr/bin/rsync` —
-  macOS ships *openrsync* (protocol 29, "2.6.9 compatible"), which lacks flags
-  used here and in the verification below.
+- **Use only the portable flags shown here.** The current deployment machine's
+  `/usr/bin/rsync` is openrsync and supports this command. Verify the installed
+  version before adding GNU-rsync-only options.
 - **`-rlt`, not `-a`.** `-a` implies `-pog` (perms/owner/group); SMB cannot
   preserve those and the run fills with errors. `-rlt` keeps recursion,
   symlinks and mtimes — mtimes are what make re-deploys incremental.
@@ -243,29 +250,21 @@ Four details in that command are load-bearing, all learned the hard way:
   (~6.6 MB) that would otherwise be **published on a public site**; `.DS_Store`
   and `._*` are macOS noise. Excluded paths are protected from `--delete`, so
   they are not pruned from the server either.
-- **Keep the trailing slash on `~/Developer/nebulai/out/`.** It is now the one
-  character standing between a deploy and a broken site. That source is a
-  symlink to `~/Developer/nebulai-data/out/`; with the slash rsync reads through
-  it and enumerates the tree (verified: 259 top-level entries), and without it
-  `-l` copies **the link itself** — a single `out -> /Users/charbelmalo/...`
-  entry that dangles on a server where no such path exists, leaving Nebul.AI
-  live with every dataset 404ing. Same trap in `cp`: use `cp -RL`, never
-  `cp -R out dest`.
+- **Keep the trailing slash on `~/Developer/nebulai/out/`.** It means “copy the
+  contents of this directory into the deployed `out/` directory.” Without it,
+  rsync creates an extra nested `out/out/` level and every dataset URL 404s.
 
 Expect a re-deploy to move only what changed (a 2026-08-12 sync moved 155 MB of
 the 396 MB tree in ~1m40s and deleted nothing).
 
-**Option B — SSH/rsync from elsewhere.** The doc previously assumed this. Note
-that SSH to `192.168.0.199` as `charbelmalo` is **refused (publickey)** — the
-account on that box is **`digitalcharbel`**. Port 22 is open (OpenSSH 10.2);
-port 2222 also appears in `known_hosts` (it is the `Digitals-Mac-mini.local`
-git endpoint in `~/.ssh/config`) but was closed when last checked. If you do
-have a key authorized for `digitalcharbel`:
+**Option B — SSH/rsync from elsewhere.** Resolve the private hostname and
+deployment account from the operator's local configuration; do not commit them
+to this repository. If that account has an authorized key:
 
 ```sh
 rsync -rlt --delete --exclude='.DS_Store' --exclude='._*' \
   --exclude='.backup-pre-recuration/' ~/Developer/nebulai/out/ \
-  digitalcharbel@192.168.0.199:'/Users/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/nebulai-maps/out/'
+  deploy-user@research-host:'/Users/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/nebulai-maps/out/'
 ```
 
 **Option C — tarball with a checksum**, if neither of the above is available:
@@ -284,9 +283,8 @@ incremental, and `--delete` keeps the server tree exactly in sync on re-deploys.
 independent consumers or a CI job needed to pull the data — not the case for one
 server you control.)
 
-> **Do not confuse the clone with the webroot.** There is also a checkout at
-> `/Volumes/digitalcharbel/Developer/nebulai/` **with its own `out/`**. That is
-> *not* what Caddy serves — writing there deploys nothing. Only the
+> **Do not confuse the clone with the webroot.** Editing or building the
+> checkout deploys nothing by itself. Only the explicitly resolved
 > `…/digiCharbel/data/www/research/…` path above is live.
 
 > **Updating the maps later:** re-run the pipeline on the build machine
@@ -299,17 +297,17 @@ server you control.)
 
 ## 5. On-server layout
 
-Serve a single directory as the site root; the hub and both instruments sit
-under the sub-path together, as **three siblings**, with Nebul.AI's data tree
-nested inside its own subtree only:
+Serve a single directory as the site root. The separately built PsychiX shell
+owns the parent path; the two instrument builds are its siblings, with
+Nebul.AI's data tree nested inside its own subtree only:
 
 ```
 …/digiCharbel/data/www/research/           <- webroot  (= /srv/www/research in the container)
 ├── index.html                             <- the research dashboard (not ours)
 ├── assets/
 └── psychiX/
-    ├── index.html                         <- from dist/hub/       (the psychiX landing page)
-    ├── assets/                            <- from dist/hub/assets/  (one hashed .css, no JS)
+    ├── index.html                         <- from the branded PsychiX shell
+    ├── assets/                            <- from the branded PsychiX shell
     ├── nebulai-maps/                      <- ALREADY LIVE — do not rename this directory
     │   ├── index.html                     <- from dist/nebulai/
     │   ├── assets/                        <- from dist/nebulai/assets/
@@ -324,36 +322,29 @@ nested inside its own subtree only:
         └── assets/                        <- from dist/seer/assets/ — no out/, ever
 ```
 
-Put each `dist/<name>/*` into its matching directory under `psychiX/`.
-
-> **The hub shares a parent directory with both instruments — that makes its
-> rsync the one dangerous one.** `dist/hub/` contains only `index.html` and
-> `assets/`; it has no `nebulai-maps/` or `seer/` entries in it. Sync it into
-> `psychiX/` with `--delete` and you will erase both instruments out from
-> under yourself. **Do not pass `--delete` on the hub sync** (§ below has the
-> exact command). `--delete` is correct and intended for the `nebulai-maps/`
-> and `seer/` syncs, each of which is a genuinely self-contained subtree.
+Put each instrument build into its matching directory under `psychiX/`.
+`--delete` is correct for those self-contained subtrees only.
 
 ```sh
-# hub — NO --delete: this directory is also the parent of nebulai-maps/ and seer/
-/opt/homebrew/bin/rsync -rlt \
-  ~/Developer/nebulai/viewer/dist/hub/ \
-  /Volumes/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/
-
-# Nebul.AI app code (data tree is the separate, heavier §4 sync)
-/opt/homebrew/bin/rsync -rlt --delete \
+# Nebul.AI app code. `out/` is deliberately excluded: it is the separate,
+# heavier §4 data tree and is not present in dist/nebulai/. Without this
+# exclusion, --delete would erase every deployed map.
+rsync -rlt --delete --exclude='out/' \
   ~/Developer/nebulai/viewer/dist/nebulai/ \
-  /Volumes/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/nebulai-maps/
+  /Users/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/nebulai-maps/
 
 # Seer — self-contained, no out/ tree ever lands here
-/opt/homebrew/bin/rsync -rlt --delete \
+rsync -rlt --delete \
   ~/Developer/nebulai/viewer/dist/seer/ \
-  /Volumes/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/seer/
+  /Users/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/seer/
 ```
 
-(Swap in the Option B / Option C mechanics from §4 for any of the three if the
-SMB mount isn't available — same `-rlt`, same Homebrew-rsync requirement, same
-`--delete` caution for the hub.)
+(Swap in the Option B / Option C mechanics from §4 if the copy is remote — same
+`-rlt`, the same portable flags, and the same required `out/` exclusion
+for the Nebul.AI app-code sync.)
+
+> Do not copy `dist/hub/` over the current Elysium shell. The generic hub is
+> only for a standalone deployment where PsychiX has no external landing page.
 
 **Why that path — the chain, so you can re-derive it when something moves.**
 Caddy runs as the `caddy` service in the `macmini-homelab` compose stack and its
@@ -451,16 +442,16 @@ this host that is satisfied by the Cloudflare tunnel, not by Caddy.
 ## 7. Post-deploy verification (mirror of what was tested locally)
 
 First confirm the copy itself is complete, by re-running the **same rsync with
-`--dry-run`** for each of the three subtrees (drop `--delete` from the hub's,
-same as the real sync). For Nebul.AI's data tree, a second run that reports
+`--dry-run`** for both instrument subtrees. Verify the external shell through
+its own project workflow. For Nebul.AI's data tree, a second run that reports
 `0` created / `0` deleted / `0` transferred is proof the tree is fully in sync
 — and unlike a bare `ls`, it can actually fail:
 
 ```sh
-/opt/homebrew/bin/rsync -rlt --delete --dry-run --stats \
+rsync -rlt --delete --dry-run --stats \
   --exclude='.DS_Store' --exclude='._*' --exclude='.backup-pre-recuration/' \
   ~/Developer/nebulai/out/ \
-  /Volumes/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/nebulai-maps/out/ \
+  /Users/digitalcharbel/Documents/digiCharbel/data/www/research/psychiX/nebulai-maps/out/ \
   | grep -E 'Number of (created|deleted|regular)'
 ```
 
@@ -482,22 +473,21 @@ loop. The Nebul.AI paths above return `200` whether or not your data sync
 landed — they existed before it — so on their own they cannot distinguish a
 successful deploy from a no-op. A newly-added
 `nebulai-maps/out/<new-dataset>/nebulai.json` returning `200` is the check
-that can actually fail, and is therefore the one worth trusting. The hub and
+that can actually fail, and is therefore the one worth trusting. The shell and
 Seer have no equivalent "did the data actually move" question — their `200`s
 above are the whole check.
 
-Two things that look like failures but are not: `192.168.0.199` does **not**
-answer `ping` (ICMP is filtered) and has ports 80/443 **closed** on the LAN — it
-is reachable publicly only through the Cloudflare tunnel. Also, immediately
-after a large rsync the SMB mount can report a **stale, inflated** directory
-count (a 22-entry dir listed as 25); re-stat before believing a diff.
+The public hostname is served through the Cloudflare tunnel, so a failed LAN
+ping or closed LAN HTTP port does not establish that the public route is down.
+After a large filesystem copy, re-stat before believing a cached directory
+count.
 
 Then in a browser:
 
-**`…/psychiX/`** (the hub):
-- [ ] Two cards render, no console errors — this document ships no JS at all,
-      so "no console errors" really means none.
-- [ ] "Open Nebul.AI" → `…/psychiX/nebulai-maps/`; "Open Seer" → `…/psychiX/seer/`.
+**`…/psychiX/`** (the branded PsychiX shell):
+- [ ] The branded shell renders and the browser console is clean.
+- [ ] "Enter NebulAI" → `…/psychiX/nebulai-maps/`. Seer is deliberately not
+      duplicated here; it remains reachable from Nebul.AI's cross-instrument link.
 
 **`…/psychiX/nebulai-maps/`** (Nebul.AI):
 - [ ] Semantic map renders; status bar shows `… pts · … clusters · gpu: webgpu`.
@@ -518,10 +508,9 @@ Then in a browser:
       hub link goes to `…/psychiX/`.
 - [ ] DevTools console is clean.
 
-This exact flow was verified on a deployment-shaped local server before handover
-for the original single-tree Nebul.AI deploy; the hub and Seer checks above are
-new for the three-tree shape and have not yet been run against the live host —
-run them at actual deploy time.
+The HTTP surface was reverified against the live host on 2026-08-13. Repeat the
+rendered checklist after each deploy; an HTTP `200` cannot prove that WebGPU,
+navigation, or responsive chrome rendered correctly.
 
 ---
 

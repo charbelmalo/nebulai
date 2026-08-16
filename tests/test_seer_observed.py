@@ -170,20 +170,42 @@ class TestShim:
         payload = json.dumps({"session_id": "s", "tool_name": "Bash",
                               "tool_input": {"command": "pytest -q"}})
 
-        def median_ms(cmd: list[str]) -> float:
+        commands = ([str(empty)], [str(shim), "claude", "PreToolUse"])
+        for cmd in commands:
             for _ in range(3):  # warm the page cache
                 subprocess.run(cmd, input=payload, text=True, capture_output=True)
-            times = []
-            for _ in range(15):
-                t0 = time.perf_counter()
-                subprocess.run(cmd, input=payload, text=True, capture_output=True)
-                times.append((time.perf_counter() - t0) * 1000)
-            return sorted(times)[len(times) // 2]
 
-        floor = median_ms([str(empty)])
-        ours = median_ms([str(shim), "claude", "PreToolUse"])
-        assert ours - floor < 3.0, (
-            f"shim adds {ours - floor:.2f} ms over a {floor:.2f} ms empty script; "
+        # Compare adjacent launches rather than measuring the two scripts in
+        # separate phases. On a busy machine the process-spawn floor can move
+        # several milliseconds between those phases and falsely become "our"
+        # overhead. Alternate order so a steady load trend cannot favour one
+        # command; the median paired delta still catches the ~3.5 ms cost of a
+        # command substitution the bound was designed to guard against.
+        floor_times: list[float] = []
+        ours_times: list[float] = []
+        deltas: list[float] = []
+        for i in range(21):
+            order = (0, 1) if i % 2 == 0 else (1, 0)
+            pair: dict[int, float] = {}
+            for kind in order:
+                t0 = time.perf_counter()
+                subprocess.run(
+                    commands[kind], input=payload, text=True, capture_output=True
+                )
+                pair[kind] = (time.perf_counter() - t0) * 1000
+            floor_times.append(pair[0])
+            ours_times.append(pair[1])
+            deltas.append(pair[1] - pair[0])
+
+        def median(values: list[float]) -> float:
+            return sorted(values)[len(values) // 2]
+
+        floor = median(floor_times)
+        ours = median(ours_times)
+        overhead = median(deltas)
+        assert overhead < 3.0, (
+            f"shim adds {overhead:.2f} ms over a {floor:.2f} ms empty script "
+            f"(shim median {ours:.2f} ms); "
             "something in it is forking"
         )
 

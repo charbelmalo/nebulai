@@ -1,9 +1,15 @@
-# Onboarding — "Start here"
+# Onboarding — historical "Start here" design
 
-Nebul.AI currently opens on 49,857 GPT-2 token dots, 208 clusters, 55% of them
-noise, a gear panel, and no statement of what any of it is. That is a fine
-first screen for someone who already came for GPT-2 and a bad one for everyone
-else. This document specifies the path in.
+> **Status (2026-08-13): superseded at the product boundary.** The branded
+> PsychiX shell now owns discovery and entry at `/psychiX/`; Nebul.AI remains
+> the focused analytical instrument at `/psychiX/nebulai-maps/`. Do not add the
+> start page described below to Nebul.AI unless that product decision changes.
+> The interaction and honesty notes remain useful design research, but the
+> proposed build order is no longer an implementation backlog.
+
+This proposal began when Nebul.AI opened directly on 49,857 GPT-2 token dots,
+208 clusters, and a gear panel, with no product-level introduction. It records
+the earlier design for an onboarding path inside the instrument.
 
 Two facts shape the whole design:
 
@@ -122,102 +128,51 @@ is the whole difference between a guardrail and a disclaimer.
 | Open Compare | "Silhouette rises as a partition coarsens. When the null resolved a cluster count outside 0.5–2× the map's, the margin is flagged `?` and is not evidence." | `metrics` `null.k` |
 | Anywhere | "This is clustering + visualization over public micro-models. It shows how units relate geometrically — not what any unit *does* to behaviour." | project guardrail |
 
-## Prerequisites — one blocker left
+## Resolution ledger
 
-Blocker 1 is fixed (2026-08-13) and §3 turned out to be a misdiagnosis rather
-than a blocker. Only §2, the `build_server` probe path, still stands between
-here and door 1's live branch.
+The implementation prerequisites from the original proposal are resolved:
 
-### 1. ~~`embed_host` leaks a private LAN IP into public artifacts~~ — FIXED 2026-08-13
+| Item | Current state |
+|---|---|
+| Exported endpoint metadata | Resolved 2026-08-13. Both exporters stamp `public_embed_host()` rather than the raw `--embed-host`: loopback endpoints pass through verbatim (they name no machine but the reader's own) and every other endpoint collapses to `"remote"`. Existing deployed artifacts were sanitized without changing their map payloads. |
+| Live probe build path | Resolved. `build_server` accepts `source=probe`, validates the free-text seed separately from `_MODEL_ID`, builds argv as a list without a shell, and maps the result to the same dataset slug as the CLI. |
+| Pre-baked examples | Resolved. The deployed catalog contains three probe clouds: glassblowing, grief, and tidal ecology. |
+| Product entry | Superseded. The external PsychiX shell owns first-run entry into Nebul.AI. Seer remains reachable through Nebul.AI's cross-instrument navigation. |
+| In-instrument explanation | Retained. Nebul.AI's Guide documents all 25 live Internals views and their research references. |
+
+Live probe generation remains optional and bring-your-own-endpoint. The static
+deployment is complete without a generator or embedder running on the web
+server, and the UI must continue to describe that absence honestly.
+
+### What the `embed_host` fix cost — keep this record
 
 `probe.py` and `api_tokens.py` both stamped the raw `--embed-host` into exported
 `meta`, and those files are served publicly. This predated the onboarding work
 and was a straight regression against the `a512c21 sanitize:` intent.
 
-**The blast radius was larger than this section originally recorded.** It named
-two shipped datasets; a sweep of `nebulai-data/out` found **five**. The three it
+**The blast radius was larger than first recorded.** The original note named two
+shipped datasets; a sweep of `nebulai-data/out` found **five**. The three it
 missed are the `probe__*` clouds, and they carry `:11435` — the *current* port —
-so they were baked *after* this warning was written. The sentence predicting
-that "pre-baking probe clouds against the same worker would add more of them"
-had already come true by the time anyone acted on it.
+so they were baked *after* that warning was written.
 
-Fixed at the source: `public_embed_host()` in `backend/embed.py` passes loopback
-endpoints through verbatim and collapses everything else to `"remote"`, so
-provenance still records that an external service placed the points while the
-address itself never reaches disk. Both front-ends call it at their single
-stamping site (`api_tokens.py`, `probe.py`), so it stayed one change in one
-place. It is deliberately *not* a general "is this address private" classifier —
-that call fails open, and one wrong verdict publishes the address; only
-loopback, which needs no judgement, survives. The evidential fields
-(`embed_model`, `embed_api`) are untouched: the host was never what made a map's
-vectors what they are.
+`public_embed_host()` in `backend/embed.py` is deliberately *not* a general "is
+this address private" classifier. That call fails open, and one wrong verdict
+publishes the address; only loopback, which needs no judgement, survives, and
+anything unparseable is treated as remote. The evidential fields (`embed_model`,
+`embed_api`) are untouched: the host was never what made a map's vectors what
+they are.
 
 The five shipped artifacts were **redacted in place, not re-exported**. A
 re-export re-runs the embedder, and the GGUF build is not bit-deterministic
-(measured against the July cache: ~1e-3 elementwise, cosine ≥ 0.999945), so
+(measured against the July cache: ~1e-3 elementwise, cosine >= 0.999945), so
 every coordinate in five maps would have moved to fix one metadata string. The
 substitution was verified to leave each parsed document differing at exactly one
 key. Originals are in `nebulai-data/.pre-redaction-backup/` — outside the served
 `out/` tree, deliberately.
 
-### 2. `build_server` can only run `nebulai tokens`
+## Archived ideas, not current Nebul.AI scope
 
-`build_cmd` hardcodes the subcommand and validates `model` against `_MODEL_ID`
-(`build_server.py:93`). Door 1's live-probe branch needs a `probe` path: a seed
-is free text, not a model id, so it needs its own validation — argv is a list,
-never a shell string, so this is a value-sanitation question rather than an
-injection one, but the seed still reaches an LLM prompt and should be length-
-and character-bounded.
-
-### 3. No generator or embedder on *this* machine — but the M4 has both
-
-Ollama is not installed locally (`ollama not found`, nothing on 11434). That part
-is still true. What was wrong, and cost an afternoon elsewhere: the M4 worker's
-embedder is **not** on 11434 either — it binds **11435**, and has since
-2026-08-04 (`M4-OLLAMA-HANDOVER.md`). Verified 2026-08-13:
-
-```
-GET http://<m4-host>:11435/api/tags         -> mxbai-embed-large:latest (1024-dim)
-GET http://<m4-host>:11435/api/version      -> 0.23.1
-GET http://<m4-host>:8100/v1/status/ollama  -> running:true, port:11435
-```
-
-So pre-baking needs **no activation step** — ollama is already running and
-`KeepAlive` survives reboots. Export `NEBULAI_EMBED_HOST=http://<m4-host>:11435`
-once and `tokens`/`probe`/`compare` all pick it up.
-
-Note `:8050` on the same box is a *different* server (OpenAI-compatible `omlx`,
-carrying `all-MiniLM-L6-v2` and `nomic-embed-text-v1.5`) — a different neutral
-space, reached with `--embed-api openai`, not a substitute for mxbai.
-
-Blocker 1 still applies: fix the host-stamping first, or the baked clouds carry
-the LAN IP the way `gpt2__api-mxbai-embed-large` already does.
-
-## Build order
-
-1. ~~**Sanitize `embed_host`**~~ — done 2026-08-13 (blocker 1 above). It blocked
-   everything else that writes a map, so it went first.
-2. **Pre-bake 3–5 probe clouds** — seeds spanning emotion / science / culture /
-   money so door 1 has range. Add them to `out/index.json`. Three already exist
-   (`grief`, `glassblowing`, `tidal-ecology`) and are now clean, so this is
-   nearer to done than the list implies.
-3. **Generalize the tour engine** — `tours.ts` is currently gpt2-only, Internals-
-   only, and typed to `InterpSelection`. It needs to also drive `page`,
-   `viewMode`, `datasetId`, toggles, and search, so a tour can walk the Atlas.
-4. **`start` page** — new `Page` variant, `NavPill`, mount branch, door cards.
-5. **Caveat hooks** — the table above, fired from real interactions.
-6. **Live probe** — `build_cmd` probe path + the door-1 "your own word" branch,
-   degrading to a labelled "needs a local backend, here's the command" state
-   when the build server is absent.
-
-Steps 1–2 are back-end and unblock the demo; 3–5 are the viewer; 6 closes the
-loop. Every new knob introduced along the way lands in `SettingsPage.tsx` under
-the correct tab, per the project rule.
-
-## Deliberately not in scope yet
-
-- **Two-level tree** (domain → question). The doors are designed to grow a
-  sub-fork without the top level moving; deferred by decision.
-- **Rewriting the three existing Internals tours.** They are good and stay
-  verbatim as door 3.
-- **Mobile.** The viewer is a WebGPU desktop tool; the onboarding inherits that.
+- A two-level domain → question tree inside Nebul.AI.
+- Rewriting the existing Internals tours around the proposed doors.
+- A new `start` page, Atlas tour engine, or duplicate product-level caveat
+  system inside the sealed analytical instrument.

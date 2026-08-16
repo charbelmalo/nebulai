@@ -7,6 +7,20 @@
      - Narrow-viewport nav clearance */
 
 @media (max-width: 900px) {
+  /* The nav becomes a second chrome row at y=64 and reaches y=118 on a
+     coarse-pointer viewport. Every non-map page is a fixed, opaque layer with
+     z-index:15; leaving its desktop top at 60px paints over that row and makes
+     navigation both invisible and untappable. Keep all instrument pages below
+     the shared mobile chrome, using the same measured 130px clearance as the
+     floating map panels below. */
+  .guide-page,
+  .interp-page,
+  .snapshot-page,
+  .sessions-page,
+  .seer-page {
+    top: 130px;
+  }
+
   .snapshot-shell {
     grid-template-columns: 1fr;
   }

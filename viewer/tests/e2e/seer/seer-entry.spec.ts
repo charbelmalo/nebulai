@@ -157,3 +157,25 @@ test("an Internals permalink opened on seer.html is refused, not half-applied", 
   await expect(page.locator(".seer-page")).toBeVisible();
   expect(errors).toEqual([]);
 });
+
+test("mobile navigation remains above every Seer page", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  const { errors } = await bootSeer(page);
+
+  for (const [label, selector] of [
+    ["Live", ".seer-page"],
+    ["Transcripts", ".sessions-page"],
+    ["Topics", ".snapshot-page"],
+  ] as const) {
+    await page.locator(".topnav-pill", { hasText: label }).click();
+    await expect(page.locator(selector)).toBeVisible();
+    const clearance = await page.evaluate((pageSelector) => {
+      const nav = document.querySelector(".topnav")!.getBoundingClientRect();
+      const content = document.querySelector(pageSelector)!.getBoundingClientRect();
+      return { navBottom: nav.bottom, pageTop: content.top };
+    }, selector);
+    expect(clearance.pageTop).toBeGreaterThanOrEqual(clearance.navBottom);
+  }
+
+  expect(errors).toEqual([]);
+});

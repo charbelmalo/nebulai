@@ -122,12 +122,19 @@ def test_seed_is_never_gated_out(fake_stack):
 def test_meta_declares_the_geometry_is_not_model_internal(fake_stack):
     fake_stack(sim_for=lambda t: 0.9)
     units = load_probe_units(
-        "grief", depth=1, breadth=6, sensitivity=0.0, embed_model="fake-embedder"
+        "grief",
+        depth=1,
+        breadth=6,
+        sensitivity=0.0,
+        embed_host="http://embed.internal:8040",
+        embed_model="fake-embedder",
     )
     m = units.meta
     assert "NOT model-internal" in m["geometry"]
     assert m["generator"] == "fake:gen-1"
     assert m["embed_model"] == "fake-embedder"
+    assert m["embed_host"] == "remote"
+    assert "embed.internal" not in json.dumps(m)
     assert m["probe_seed"] == "grief"
     assert m["sensitivity"] == 0.0
     assert m["unit"].startswith("probe_concept")

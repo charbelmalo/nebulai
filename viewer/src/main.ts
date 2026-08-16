@@ -309,7 +309,15 @@ async function bootAtlas(shell: BootedShell, t0: number) {
       if (st.loading.active || id === st.datasetId) return;
       const entry = st.datasets.find((d) => d.id === id);
       if (!entry) return;
-      await loadAndShow(entry);
+      const started = performance.now();
+      try {
+        await loadAndShow(entry);
+      } finally {
+        // Measure the application path, not Playwright's selectOption and
+        // cross-process polling overhead. The e2e budget warms the cache first,
+        // so this covers cache lookup, store/driver handoff, and rendered state.
+        window.__perf.datasetSwitchMs = performance.now() - started;
+      }
     },
     switchViewMode,
     async refreshDatasets(datasetId) {
@@ -384,12 +392,14 @@ async function bootAtlas(shell: BootedShell, t0: number) {
   // runs so camera tweens and picking stay live.
   const frozen = new URLSearchParams(location.search).has("frozen");
   const frameDts: number[] = [];
+  const frameWork: number[] = [];
   let last = performance.now();
   let frames = 0;
 
   const loop = (now: number) => {
     const dt = now - last;
     last = now;
+    const workStarted = performance.now();
     // during the crossfade all live drivers render; afterwards only the active one
     const fading = now < fadeUntil;
     const t = frozen ? 0 : now / 1000;
@@ -399,10 +409,14 @@ async function bootAtlas(shell: BootedShell, t0: number) {
     if ((activeMode === "hierarchy" || fading) && hierDriver) hierDriver.frame(dt, t);
 
     frameDts.push(dt);
+    frameWork.push(performance.now() - workStarted);
     if (frameDts.length > 120) frameDts.shift();
+    if (frameWork.length > 120) frameWork.shift();
     if (++frames % 60 === 0) {
       const sorted = [...frameDts].sort((a, b) => a - b);
+      const sortedWork = [...frameWork].sort((a, b) => a - b);
       window.__perf.p95FrameMs = sorted[Math.floor(sorted.length * 0.95)];
+      window.__perf.p95FrameWorkMs = sortedWork[Math.floor(sortedWork.length * 0.95)];
     }
     requestAnimationFrame(loop);
   };

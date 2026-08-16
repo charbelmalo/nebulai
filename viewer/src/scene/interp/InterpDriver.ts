@@ -9,6 +9,7 @@
 
 import type { GpuTier } from "@psychix/viz/capabilities";
 import type { InterpSelection } from "../../app/store";
+import type { GuideResearchId } from "../../chrome/guideResearch";
 import type { StatTile } from "@psychix/viz/StatStrip";
 
 export interface InterpDriver {
@@ -72,7 +73,9 @@ export interface GuideFormula {
  *  the rail never lists a view that isn't backed by real data yet. `legend`
  *  and `note` are the encoding key shown in the on-canvas legend card. */
 export interface InterpFeature {
-  id: string;
+  /** Registering a live view without guide evidence is a type error. This is
+   * a type-only dependency and does not pull chrome code into scene bundles. */
+  id: GuideResearchId;
   n: number;
   label: string;
   group: InterpGroup;

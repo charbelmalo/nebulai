@@ -13,6 +13,7 @@ from nebulai.backend.embed import (
     parse_embed_response,
     public_embed_host,
 )
+from nebulai.frontends import api_tokens as api_tokens_mod
 from nebulai.frontends.api_tokens import api_dataset_id
 from nebulai.frontends.tokens import _keep, curated_vocab
 
@@ -256,3 +257,24 @@ def test_api_dataset_id():
         api_dataset_id("EleutherAI/pythia-70m", "org/embedder")
         == "EleutherAI__pythia-70m__api-org__embedder"
     )
+
+
+def test_api_token_map_does_not_publish_its_embedding_endpoint(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        api_tokens_mod,
+        "embed_texts",
+        lambda texts, **_kwargs: np.ones((len(texts), 2), dtype=np.float32),
+    )
+    units = api_tokens_mod.load_api_token_units(
+        "gpt2",
+        embed_host="http://private-worker.internal:8040/v1?key=secret",
+        embed_model="fake-embedder",
+        center=False,
+        max_tokens=3,
+        out_root=tmp_path,
+        checkpoint_every=3,
+    )
+
+    assert units.meta["embed_host"] == "remote"
+    assert "private-worker" not in str(units.meta)
+    assert "secret" not in str(units.meta)
