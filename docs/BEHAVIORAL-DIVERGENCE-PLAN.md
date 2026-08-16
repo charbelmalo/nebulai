@@ -985,16 +985,40 @@ is *small-n* geometry.
    `n_neighbors`, no `min_dist`; it cannot manufacture islands out of noise
    because it is a linear projection; and its axes are reportable by explained
    variance, so the display has something honest to say about what a direction
-   *is*. Critically, **PCA is a persistable linear transform** — store the mean
-   vector and the component axes and a cue added in a later study revision lands
-   in the *same* space without moving anything already published. It is the only
-   option that makes “fixed coordinate system” literally true rather than
-   aspirationally true.
-2. **Reuse the existing implementation.** `_pca_rows()` at
-   `src/nebulai/backend/interp/bundles.py:146-166` already performs exact PCA by
-   covariance eigendecomposition in float64 with **deterministic axis signs**,
-   returning `(coords, evr, total_var)`. Adopt it rather than writing a second
-   one. The Internals bundles also stamp a `"quantity"` string describing what a
+   *is*. Critically, **PCA admits a persistable linear transform** — the fit is
+   fully described by the mean vector and the component axes, so *if those are
+   stored*, a cue added in a later study revision lands in the *same* space
+   without moving anything already published. It is the only option that makes
+   “fixed coordinate system” literally true rather than aspirationally true.
+   Note the conditional: persistence is a property of the maths, and it becomes
+   a property of *this system* only once something actually writes those arrays
+   down. Item 2 is where that stops being free.
+2. **Extend the existing implementation — it is not persistable as written.**
+   `_pca_rows()` at `src/nebulai/backend/interp/bundles.py:146-166` already
+   performs exact PCA by covariance eigendecomposition in float64 with
+   **deterministic axis signs**, and that arithmetic is worth adopting rather
+   than writing a second time. But it returns `(coords, evr, total_var)`, and
+   both `R.mean(axis=0)` and `axes` are **locals that are garbage-collected on
+   return** — which is, precisely and embarrassingly, the same defect this
+   section has just finished holding against `reduce_vectors` two paragraphs
+   above. An earlier revision of this plan said to "reuse" it and treated the
+   fixed-coordinate promise as thereby satisfied. It was not: reusing it
+   unchanged buys the determinism and none of the persistence, and the
+   permalink breakage §7.1.1 exists to prevent would arrive anyway, one
+   projection later.
+
+   So the work item is: return `(coords, evr, total_var, mean, axes)` (or a
+   small `PCAFit` carrying them), persist `mean` and `axes` into the study
+   artifact beside the coordinates, and place later cues with
+   `(x - mean) @ axes` rather than by refitting. The three Internals callers
+   (`bundles.py:211`, `:270`, `:347`) discard the two new values and are
+   unaffected — this is an additive change, and the existing bundles stay
+   byte-identical, which §12 requires. A test must assert the round-trip:
+   projecting a held-out row through the persisted `(mean, axes)` equals its
+   coordinate from a joint fit, to float tolerance. Without that test the
+   promise is a comment.
+
+   The Internals bundles also stamp a `"quantity"` string describing what a
    projection physically *is* (`bundles.py:221`); the cue landscape does the
    same — `"quantity": "PCA projection of cue-word embeddings in
    <embedder>@<sha>"` — and the viewer renders that string rather than inventing

@@ -383,6 +383,12 @@ uses: [`docs/OBSERVABILITY-SURFACE.md`](docs/OBSERVABILITY-SURFACE.md).
   **Behavior** page. Research method, statistical confirmation, data contracts,
   implementation phases, and UX plan:
   [`docs/BEHAVIORAL-DIVERGENCE-PLAN.md`](docs/BEHAVIORAL-DIVERGENCE-PLAN.md).
+- Generative variance: does a model's *story architecture* — not its prose —
+  move from run to run, and does it move less than the gap between models? The
+  within-model number has to exist before the between-model one means anything,
+  so W1 (one model, repeated trials) gates W2 (across models). Proposal, not a
+  baseline — nothing is built and no paid call has been made:
+  [`docs/GENERATIVE-VARIANCE-PLAN.md`](docs/GENERATIVE-VARIANCE-PLAN.md).
 - Held-out auto-interp scores and activation-based coherence — the two validation layers `nebulai validate` does not yet cover (it measures geometry and stability, not whether a cluster predicts behaviour).
 - Intervention-based validation: does ablating a cluster's units change the behaviour its title claims?
 - Phase 2: WebGPU point cloud reading `nebulai.json` — 3D flythrough, hover, cluster hulls, filters, 2D↔3D toggle. (The `compare` viewer is the first cut of this renderer.)
