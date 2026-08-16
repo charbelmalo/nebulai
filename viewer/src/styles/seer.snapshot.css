@@ -269,6 +269,18 @@
   stroke-dasharray: 3 5;
 }
 
+/* What ring position means. In the footer, in normal flow above the scrubber —
+   NOT over the stage: the ring fills the stage's middle, its labels reach into
+   every corner, and the turn card owns bottom-right, so an overlay caption
+   there lands on top of the marks it is describing. */
+.snapshot-layout-note {
+  margin: 0 0 12px;
+  max-width: 78ch;
+  color: var(--text-dim);
+  font: 400 11px/1.55 var(--font-ui);
+  text-wrap: pretty;
+}
+
 .snapshot-edge {
   stroke: var(--accent);
   transition:

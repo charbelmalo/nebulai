@@ -348,6 +348,15 @@
   background: var(--glass-bg);
   backdrop-filter: var(--glass-blur);
   box-shadow: var(--shadow-card);
+  /* the card is anchored to the BOTTOM, so it grows upward — and with the
+     layout note plus a below-null callout it outgrows a 800px viewport and
+     slides under the top bar. Bound it and scroll instead: the honesty text is
+     the part that varies in length, and it must never push the ramp off screen
+     to get itself seen. The bound mirrors `.search-panel`'s own
+     `calc(100vh - 320px)` so both cards on the right rail share one envelope. */
+  max-height: calc(100vh - 300px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .legend-head {
@@ -425,6 +434,38 @@
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--text);
+}
+
+/* what a POSITION means, and how far to trust it. Deliberately the same dim
+   caption type as the ramp's provenance line — this is disclosure, not a
+   second data legend, and the ramp stays the one saturated element here. */
+.legend-subtitle {
+  margin: 0;
+  font: 650 11px/1.4 var(--font-ui);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.legend-validation-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.legend-validation-row b {
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* the ONE case that gets a colour: the null out-scored the map. It is an
+   inverted result rather than a weak one, so it has to survive being skimmed —
+   the same reason `nebulai metrics` gives it its own `!` and a callout under
+   the table instead of a quieter suffix. */
+.legend-below-null,
+.legend-below-null b {
+  color: var(--danger);
 }
 
 /* ── Top-right settings entry ─────────────────────────────────────────── */

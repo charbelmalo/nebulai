@@ -181,6 +181,24 @@ def build_comparison(
     semantic = _normalize(u3)
 
     # --- native state: each model's own cloud, normalized then quadranted ---
+    #
+    # WHAT THIS DESTROYS, deliberately: `_normalize(..., scale=9.0)` is applied
+    # PER MODEL, so every cloud is rescaled to the same radius regardless of how
+    # spread its own UMAP was. Cross-model distance in this state is therefore
+    # meaningless in both directions — a model whose concepts genuinely sit
+    # further apart is squeezed to look like one whose concepts sit close, and
+    # the gap between two quadrants is `_grid_offsets`, a constant.
+    #
+    # It is still the right default. Each model got its OWN UMAP fit, and two
+    # independent non-linear fits share no axes, no orientation and no scale, so
+    # their raw coordinates were never comparable to begin with — normalizing
+    # does not throw away a comparison, it declines to imply one. The comparable
+    # states are `semantic`/`by_concept`, which put every model through ONE fit
+    # of a shared embedding space.
+    #
+    # Quadrant assignment and palette index both follow `models` order, i.e. the
+    # order the datasets were passed on the command line. Nothing about a
+    # model's position here is a property of the model.
     native = np.asarray(native, dtype=np.float32)
     offs = _grid_offsets(len(models))
     native_state = np.zeros_like(semantic)

@@ -122,27 +122,43 @@ is the whole difference between a guardrail and a disclaimer.
 | Open Compare | "Silhouette rises as a partition coarsens. When the null resolved a cluster count outside 0.5–2× the map's, the margin is flagged `?` and is not evidence." | `metrics` `null.k` |
 | Anywhere | "This is clustering + visualization over public micro-models. It shows how units relate geometrically — not what any unit *does* to behaviour." | project guardrail |
 
-## Prerequisites — two blockers, one of them live
+## Prerequisites — one blocker left
 
-### 1. `embed_host` leaks a private LAN IP into public artifacts
+Blocker 1 is fixed (2026-08-13) and §3 turned out to be a misdiagnosis rather
+than a blocker. Only §2, the `build_server` probe path, still stands between
+here and door 1's live branch.
 
-`probe.py:306` and `api_tokens.py:111` both stamp the raw `--embed-host` into
-exported `meta`. Two **already-shipped** datasets carry it today:
+### 1. ~~`embed_host` leaks a private LAN IP into public artifacts~~ — FIXED 2026-08-13
 
-```
-out/gpt2__api-mxbai-embed-large/nebulai.json          embed_host: http://<m4-host>:11434
-out/Xenova__claude-tokenizer__api-.../nebulai.json    embed_host: http://<m4-host>:8040
-```
+`probe.py` and `api_tokens.py` both stamped the raw `--embed-host` into exported
+`meta`, and those files are served publicly. This predated the onboarding work
+and was a straight regression against the `a512c21 sanitize:` intent.
 
-Those files are served publicly. This predates the onboarding work and is a
-straight regression against the `a512c21 sanitize:` intent — and pre-baking
-probe clouds against the same worker would add more of them.
+**The blast radius was larger than this section originally recorded.** It named
+two shipped datasets; a sweep of `nebulai-data/out` found **five**. The three it
+missed are the `probe__*` clouds, and they carry `:11435` — the *current* port —
+so they were baked *after* this warning was written. The sentence predicting
+that "pre-baking probe clouds against the same worker would add more of them"
+had already come true by the time anyone acted on it.
 
-The host is not evidence about the map; the *model name* is, and that is stamped
-separately. Fix: stop recording the host for non-loopback endpoints (keep a
-`"remote"` marker so provenance still says an external service was used), then
-re-export the two affected artifacts. Shared between both front-ends, so it is
-one change in one place.
+Fixed at the source: `public_embed_host()` in `backend/embed.py` passes loopback
+endpoints through verbatim and collapses everything else to `"remote"`, so
+provenance still records that an external service placed the points while the
+address itself never reaches disk. Both front-ends call it at their single
+stamping site (`api_tokens.py`, `probe.py`), so it stayed one change in one
+place. It is deliberately *not* a general "is this address private" classifier —
+that call fails open, and one wrong verdict publishes the address; only
+loopback, which needs no judgement, survives. The evidential fields
+(`embed_model`, `embed_api`) are untouched: the host was never what made a map's
+vectors what they are.
+
+The five shipped artifacts were **redacted in place, not re-exported**. A
+re-export re-runs the embedder, and the GGUF build is not bit-deterministic
+(measured against the July cache: ~1e-3 elementwise, cosine ≥ 0.999945), so
+every coordinate in five maps would have moved to fix one metadata string. The
+substitution was verified to leave each parsed document differing at exactly one
+key. Originals are in `nebulai-data/.pre-redaction-backup/` — outside the served
+`out/` tree, deliberately.
 
 ### 2. `build_server` can only run `nebulai tokens`
 
@@ -153,19 +169,38 @@ never a shell string, so this is a value-sanitation question rather than an
 injection one, but the seed still reaches an LLM prompt and should be length-
 and character-bounded.
 
-### 3. No generator or embedder on this machine
+### 3. No generator or embedder on *this* machine — but the M4 has both
 
-Ollama is not installed locally (port 11434 dead, `ollama not found`). The M4
-worker's activation API at `:8100` **is** up, so pre-baking is one activation
-step away — subject to blocker 1 being fixed first, or the baked clouds will
-carry the LAN IP.
+Ollama is not installed locally (`ollama not found`, nothing on 11434). That part
+is still true. What was wrong, and cost an afternoon elsewhere: the M4 worker's
+embedder is **not** on 11434 either — it binds **11435**, and has since
+2026-08-04 (`M4-OLLAMA-HANDOVER.md`). Verified 2026-08-13:
+
+```
+GET http://<m4-host>:11435/api/tags         -> mxbai-embed-large:latest (1024-dim)
+GET http://<m4-host>:11435/api/version      -> 0.23.1
+GET http://<m4-host>:8100/v1/status/ollama  -> running:true, port:11435
+```
+
+So pre-baking needs **no activation step** — ollama is already running and
+`KeepAlive` survives reboots. Export `NEBULAI_EMBED_HOST=http://<m4-host>:11435`
+once and `tokens`/`probe`/`compare` all pick it up.
+
+Note `:8050` on the same box is a *different* server (OpenAI-compatible `omlx`,
+carrying `all-MiniLM-L6-v2` and `nomic-embed-text-v1.5`) — a different neutral
+space, reached with `--embed-api openai`, not a substitute for mxbai.
+
+Blocker 1 still applies: fix the host-stamping first, or the baked clouds carry
+the LAN IP the way `gpt2__api-mxbai-embed-large` already does.
 
 ## Build order
 
-1. **Sanitize `embed_host`** (shared front-end change) + re-export the two
-   affected artifacts. Blocks everything else that writes a map.
+1. ~~**Sanitize `embed_host`**~~ — done 2026-08-13 (blocker 1 above). It blocked
+   everything else that writes a map, so it went first.
 2. **Pre-bake 3–5 probe clouds** — seeds spanning emotion / science / culture /
-   money so door 1 has range. Add them to `out/index.json`.
+   money so door 1 has range. Add them to `out/index.json`. Three already exist
+   (`grief`, `glassblowing`, `tidal-ecology`) and are now clean, so this is
+   nearer to done than the list implies.
 3. **Generalize the tour engine** — `tours.ts` is currently gpt2-only, Internals-
    only, and typed to `InterpSelection`. It needs to also drive `page`,
    `viewMode`, `datasetId`, toggles, and search, so a tour can walk the Atlas.

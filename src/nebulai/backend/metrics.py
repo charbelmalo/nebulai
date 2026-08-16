@@ -91,7 +91,7 @@ def compute_map_metrics(dataset_dir: Path) -> dict:
             # carried so the margin can be qualified: silhouette is not
             # comparable across wildly different cluster counts, so a null that
             # partitioned at a different granularity than the real map produces
-            # a margin that means nothing. See `_margin()`.
+            # a margin that means nothing. See `margin_flags()`.
             "null_clusters": (v.get("null_baseline") or {}).get("n_clusters"),
         }
 
@@ -112,6 +112,57 @@ def compute_map_metrics(dataset_dir: Path) -> dict:
     }
 
 
+def margin_flags(r: dict) -> tuple[float | None, bool, bool]:
+    """(margin, not-comparable, below-floor) for one row.
+
+    Two INDEPENDENT problems, deliberately not collapsed into one marker:
+
+    `?` not-comparable — silhouette rises as a partition gets coarser, so a
+        null that resolved a very different number of clusters than the real
+        map is being scored on a different question. `nebulai validate`
+        rescales min_cluster_size for subsampling, but HDBSCAN still picks
+        its own cluster count; outside 0.5-2x the real map's, the margin is
+        not evidence either way.
+
+    `!` below-floor — the null scored HIGHER than the real map. This is not
+        a weak result, it is an inverted one: the construction procedure
+        found more separation in column-shuffled vectors than in the real
+        ones. It has to be legible at a glance, so it gets its own marker
+        and a callout under the table rather than sharing `?`.
+
+    Module-level, not nested in `format_table`, because the viewer renders the
+    same verdict from `out/compare/metrics.json` (see `add_verdict`). Two
+    implementations of one rule drift, and a map badged "below null floor" in
+    the CLI but clean in the browser reads as a second measurement.
+    """
+    s, n = r.get("silhouette"), r.get("null_silhouette")
+    if s is None or n is None:
+        return None, False, False
+    nk, rk = r.get("null_clusters"), r.get("n_clusters")
+    return (
+        s - n,
+        bool(rk and nk) and not (0.5 <= nk / rk <= 2.0),
+        s < n,
+    )
+
+
+def add_verdict(row: dict) -> dict:
+    """`row` plus the derived null-margin verdict, for consumers that cannot
+    call `margin_flags` themselves — currently `out/compare/metrics.json`, which
+    the viewer reads to show a distortion signal next to the map.
+
+    All three keys are `None`/`False` when the map has not been validated. That
+    is "not measured", never "measured as clean": the viewer must render an
+    absent readout rather than a passing one."""
+    m, suspect, below = margin_flags(row)
+    return {
+        **row,
+        "margin": None if m is None else round(m, 4),
+        "not_comparable": suspect,
+        "below_null_floor": below,
+    }
+
+
 def format_table(rows: list[dict]) -> str:
     """A fixed-width comparison table, one map per row. Label detection is not
     a column: with `--labels none` maps every unit is a placeholder, so a
@@ -125,36 +176,8 @@ def format_table(rows: list[dict]) -> str:
     def sil(r: dict) -> str:
         return num(r["silhouette"])
 
-    def _margin_flags(r: dict) -> tuple[float | None, bool, bool]:
-        """(margin, not-comparable, below-floor) for one row.
-
-        Two INDEPENDENT problems, deliberately not collapsed into one marker:
-
-        `?` not-comparable — silhouette rises as a partition gets coarser, so a
-            null that resolved a very different number of clusters than the real
-            map is being scored on a different question. `nebulai validate`
-            rescales min_cluster_size for subsampling, but HDBSCAN still picks
-            its own cluster count; outside 0.5-2x the real map's, the margin is
-            not evidence either way.
-
-        `!` below-floor — the null scored HIGHER than the real map. This is not
-            a weak result, it is an inverted one: the construction procedure
-            found more separation in column-shuffled vectors than in the real
-            ones. It has to be legible at a glance, so it gets its own marker
-            and a callout under the table rather than sharing `?`.
-        """
-        s, n = r.get("silhouette"), r.get("null_silhouette")
-        if s is None or n is None:
-            return None, False, False
-        nk, rk = r.get("null_clusters"), r.get("n_clusters")
-        return (
-            s - n,
-            bool(rk and nk) and not (0.5 <= nk / rk <= 2.0),
-            s < n,
-        )
-
     def margin(r: dict) -> str:
-        m, suspect, below = _margin_flags(r)
+        m, suspect, below = margin_flags(r)
         if m is None:
             return "n/a"
         return f"{m:+.4f}" + ("!" if below else "") + ("?" if suspect else "")
@@ -221,7 +244,7 @@ def format_table(rows: list[dict]) -> str:
     # a null that OUT-SCORES the real map is the one result that cannot be left
     # to a suffix character in a wide table — it says the separation on screen
     # is the procedure rather than the model, for that map.
-    below = [r for r in rows if _margin_flags(r)[2]]
+    below = [r for r in rows if margin_flags(r)[2]]
     if below:
         lines.append("")
         lines.append(
@@ -229,7 +252,7 @@ def format_table(rows: list[dict]) -> str:
             "higher than column-shuffled vectors:"
         )
         for r in below:
-            m, suspect, _ = _margin_flags(r)
+            m, suspect, _ = margin_flags(r)
             lines.append(
                 f"      {_source_label(r)}: silhouette {num(r['silhouette'])} vs "
                 f"null {num(r.get('null_silhouette'))} ({m:+.4f})"

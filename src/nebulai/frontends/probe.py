@@ -498,7 +498,7 @@ def load_probe_units(
     because a high rate means the generator wandered and the map you are looking
     at is narrower than the terms that were actually proposed.
     """
-    from ..backend.embed import embed_texts
+    from ..backend.embed import embed_texts, public_embed_host
 
     # filled by _make_expander with the resolved generator identity; stays empty
     # when the expander is stubbed out, in which case the stamps below fall back
@@ -638,7 +638,8 @@ def load_probe_units(
             "generator_identity": gen_stamp.get("identity", "auto"),
             "generator_cost_usd": gen_stamp.get("cost_usd"),
             "embed_model": embed_model,
-            "embed_host": embed_host,
+            # never the raw host: this file ships publicly (see public_embed_host)
+            "embed_host": public_embed_host(embed_host),
             "embed_api": embed_api,
             "depth": depth,
             "breadth": breadth,
