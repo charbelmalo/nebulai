@@ -68,6 +68,22 @@ const TILT_RAD = (38 * Math.PI) / 180;
 const MORPH_MS = 900;
 const ID_PICK_INTERVAL_MS = 33; // ~30Hz async id-buffer hover in 3D
 
+// The orbit-pivot fallback needs the median depth of the points in frame. It
+// runs synchronously inside a pointer handler at every gesture start, so it
+// samples rather than scanning: walking all 49k points of a pythia-70m map cost
+// 2.5ms median / 11.2ms worst (measured), which is a visible hitch at the exact
+// instant the orbit begins, and it grows linearly with the map. A strided
+// sample of this size puts the median well inside the depth resolution the
+// camera can express, at a fixed ~0.1ms.
+const PIVOT_DEPTH_SAMPLES = 4096;
+
+// A wheel gesture picks orbit-or-zoom once and keeps it. Deciding per event
+// makes a diagonal trackpad swipe alternate between the two branches, and since
+// the zoom branch drops the pivot, the orbit branch re-grabs it on the next
+// event: one 40-event swipe measured 6 grab/clear pairs and 22.4ms of blocked
+// main thread, with the rotation centre visibly jumping mid-gesture.
+const WHEEL_GESTURE_GAP_MS = 400;
+
 export class AtlasDriver implements SceneDriver {
   readonly cam = new Camera2D();
 
@@ -101,7 +117,20 @@ export class AtlasDriver implements SceneDriver {
   /** map extent (max bound dimension) — scale reference for flare sizing */
   private mapExtent = 1;
 
-  private cameraDirty = true;
+  /** Backing field for `cameraDirty`. Assigning `cameraDirty = true` anywhere
+   *  also raises `needsRender`, so the repaint gate can never go stale behind a
+   *  camera change without that call site having to know the gate exists. */
+  private _cameraDirty = true;
+  private get cameraDirty(): boolean {
+    return this._cameraDirty;
+  }
+  private set cameraDirty(v: boolean) {
+    this._cameraDirty = v;
+    if (v) this.needsRender = true;
+  }
+  /** Something changed since the last submitted frame. Paths that mutate a
+   *  uniform without touching the camera must set this themselves. */
+  private needsRender = true;
   private mouse: { x: number; y: number } | null = null;
   private hoverDirty = false;
   private hoveredIndex: number | null = null;
@@ -128,6 +157,9 @@ export class AtlasDriver implements SceneDriver {
   private orbitPivot: { p2: [number, number]; p3: [number, number, number] } | null = null;
   private orbitAnchor: { a: number; b: number } | null = null;
   private wheelOrbitAt = 0; // last wheel-orbit tick — a fresh swipe re-grabs
+  /** orbit-vs-zoom latched for the duration of one wheel gesture */
+  private wheelMode: "orbit" | "zoom" | null = null;
+  private wheelGestureAt = 0;
   /** wheel zoom: pending log-factor drained over ~120 ms, cursor-anchored */
   private zoomPending = 0;
   private zoomAnchor = { x: 0, y: 0 };
@@ -169,6 +201,8 @@ export class AtlasDriver implements SceneDriver {
   private lastIdPickAt = 0;
   private idPickBusy = false;
   private projScratch = new THREE.Vector3();
+  /** reused by resolveOrbitPivot so a gesture start allocates nothing */
+  private pivotDepthScratch = new Float32Array(PIVOT_DEPTH_SAMPLES);
 
   private abort = new AbortController();
   private unsubscribes: (() => void)[] = [];
@@ -211,6 +245,7 @@ export class AtlasDriver implements SceneDriver {
         if (s.selection !== prev.selection) {
           this.labels?.setSelected(s.selection?.kind === "cluster" ? s.selection.id : null);
           this.applySelection(s.selection);
+          this.needsRender = true;
         }
         if (s.toggles !== prev.toggles) {
           if (this.territories) this.territories.visible = s.toggles.territories;
@@ -226,6 +261,10 @@ export class AtlasDriver implements SceneDriver {
             this.points.uConfFloor.value = s.settings.confidenceFloor;
           }
           this.bloomOn = this.bloomPipe !== null && s.settings.bloom;
+          // point scale / confidence floor / bloom are uniform-and-pipeline
+          // changes with no camera move — without this the repaint gate would
+          // hold the old frame until something else happened to dirty it
+          this.needsRender = true;
         }
         if (s.appearance !== prev.appearance) {
           if (this.beams) this.beams.uWidthScale.value = s.appearance.atlas.beamWidth;
@@ -445,8 +484,42 @@ export class AtlasDriver implements SceneDriver {
       this.cameraDirty = false;
     }
 
+    // Repaint gate. The loop used to submit a frame on every rAF tick whether
+    // or not anything had changed — 49k sprites plus, on the webgpu rung, a
+    // full-res bloom chain, redrawn at 60Hz over a completely static scene.
+    //
+    // Note this is deliberately a no-op in the default configuration: breathing
+    // halos are a genuine per-frame animation, so `animating` stays true while
+    // they are on. The win is for reduced-motion users, halos-off, and idle
+    // background tabs — not for the default view, which really does need every
+    // frame. Anything that changes the picture without animating must raise
+    // needsRender; the `cameraDirty` setter does that for every camera path.
+    const spinning =
+      appStore.getState().appearance.atlas.orbitEnabled && this.morph > 0.5 && !this.reducedMotion;
+    const animating =
+      this.morphTween !== null ||
+      this.zoomPending !== 0 ||
+      this.orbiting ||
+      this.dragging ||
+      this.pinch !== null ||
+      spinning ||
+      (this.halos?.visible === true && !this.reducedMotion);
+    if (!this.needsRender && !animating) return;
+    this.renderNow();
+  }
+
+  /** Submit one frame immediately, outside the repaint gate.
+   *
+   *  On-demand rendering has a readback consequence: a WebGL drawing buffer is
+   *  only defined for `drawImage`/`getImageData` in the same task it was drawn
+   *  in — once composited the spec lets the browser clear it, and we don't pay
+   *  for `preserveDrawingBuffer`. On screen that is invisible (the compositor
+   *  keeps showing the last committed frame), but anything sampling pixels off
+   *  the canvas has to draw first. Call this immediately before reading. */
+  renderNow(): void {
     if (this.bloomOn && this.bloomPipe) this.bloomPipe.post.render();
     else this.renderer.render(this.scene, this.camera);
+    this.needsRender = false;
   }
 
   /** The rendered spherical camera angles: azimuth around the map's +Z axis and
@@ -533,20 +606,26 @@ export class AtlasDriver implements SceneDriver {
       const hull = this.hullsById.get(sel.id);
       if (c3 && hull) return { p2: [hull.anchor[0], hull.anchor[1]], p3: [...c3] };
     }
-    // median depth of the points currently in frame, pivot at the view center
+    // median depth of the points currently in frame, pivot at the view center.
+    // Strided sample, not a full scan — see PIVOT_DEPTH_SAMPLES. The stride is
+    // an odd-ish step over the whole array rather than a prefix, so a map whose
+    // points are ordered by cluster still samples across all of them.
     const m = this.morph;
     const [hx, hy] = this.cam.halfExtents();
     const n = Math.min(p.length / 2, q.length / 3);
-    const zs: number[] = [];
-    for (let i = 0; i < n; i++) {
+    const stride = Math.max(1, Math.floor(n / PIVOT_DEPTH_SAMPLES));
+    const zs = this.pivotDepthScratch;
+    let k = 0;
+    for (let i = 0; i < n && k < zs.length; i += stride) {
       const x = p[i * 2]! + (q[i * 3]! - p[i * 2]!) * m;
       const y = p[i * 2 + 1]! + (q[i * 3 + 1]! - p[i * 2 + 1]!) * m;
       if (Math.abs(x - this.cam.cx) <= hx && Math.abs(y - this.cam.cy) <= hy)
-        zs.push(q[i * 3 + 2]!);
+        zs[k++] = q[i * 3 + 2]!;
     }
-    if (zs.length) {
-      zs.sort((a, b) => a - b);
-      const zMed = zs[zs.length >> 1]!;
+    if (k) {
+      const inFrame = zs.subarray(0, k);
+      inFrame.sort(); // TypedArray sorts numerically
+      const zMed = inFrame[k >> 1]!;
       return {
         p2: [this.cam.cx, this.cam.cy],
         p3: [this.cam.cx, this.cam.cy, zMed],
@@ -605,11 +684,13 @@ export class AtlasDriver implements SceneDriver {
     }
   }
 
-  /** Wheel orbit has no gesture boundaries — treat a >400 ms gap as a fresh
-   *  swipe and re-grab the pivot (the cursor may be on a different node). */
+  /** Wheel orbit has no gesture boundaries — treat a gap as a fresh swipe and
+   *  re-grab the pivot (the cursor may be on a different node). Within one
+   *  latched gesture this is a no-op after the first event. */
   private refreshWheelOrbitPivot(): void {
     const now = performance.now();
-    if (!this.orbitPivot || now - this.wheelOrbitAt > 400) this.grabOrbitPivot();
+    if (!this.orbitPivot || now - this.wheelOrbitAt > WHEEL_GESTURE_GAP_MS)
+      this.grabOrbitPivot();
     this.wheelOrbitAt = now;
   }
 
@@ -694,7 +775,7 @@ export class AtlasDriver implements SceneDriver {
     // anchor compensation carries the grabbed node through the morph. Only a
     // deliberate dims toggle gets the cinematic full-cloud re-frame.
     const orbitLift =
-      this.orbiting || this.pinch !== null || now - this.wheelOrbitAt < 400;
+      this.orbiting || this.pinch !== null || now - this.wheelOrbitAt < WHEEL_GESTURE_GAP_MS;
     if (orbitLift) return;
 
     this.clearOrbitPivot();
@@ -1113,22 +1194,30 @@ export class AtlasDriver implements SceneDriver {
         // needs its own gain to feel 1:1 with the fingers
         const pinching = e.ctrlKey;
 
-        if (this.morph > 0.02 && !pinching) {
+        // Latch orbit-vs-zoom for the whole gesture. A trackpad swipe is never
+        // purely one axis, so deciding per event flips branches mid-swipe and
+        // thrashes the pivot (see WHEEL_GESTURE_GAP_MS). The first event of a
+        // gesture decides; the rest follow it until the fingers lift.
+        const now = performance.now();
+        if (now - this.wheelGestureAt > WHEEL_GESTURE_GAP_MS) this.wheelMode = null;
+        this.wheelGestureAt = now;
+        if (this.wheelMode === null) {
           // in 3-D a horizontal-dominant two-finger swipe orbits the azimuth,
           // and shift+swipe takes elevation — vertical stays zoom, which is the
           // one gesture a plain mouse wheel also has to serve
-          if (Math.abs(dx) > Math.abs(dy)) {
-            this.refreshWheelOrbitPivot();
-            this.ensure3DForOrbit();
-            this.orbitBy(dx * WHEEL_ORBIT_AZ, 0);
-            return;
-          }
-          if (e.shiftKey) {
-            this.refreshWheelOrbitPivot();
-            this.ensure3DForOrbit();
-            this.orbitBy(0, dy * WHEEL_ORBIT_EL);
-            return;
-          }
+          const orbits =
+            this.morph > 0.02 && !pinching && (Math.abs(dx) > Math.abs(dy) || e.shiftKey);
+          this.wheelMode = orbits ? "orbit" : "zoom";
+        }
+
+        if (this.wheelMode === "orbit") {
+          this.refreshWheelOrbitPivot();
+          this.ensure3DForOrbit();
+          // shift is read live so a swipe can cross from azimuth to elevation
+          // without the pivot being torn down and re-resolved between them
+          if (e.shiftKey) this.orbitBy(0, dy * WHEEL_ORBIT_EL);
+          else this.orbitBy(dx * WHEEL_ORBIT_AZ, 0);
+          return;
         }
 
         // zoom re-centers on its own cursor anchor — the orbit pivot yields
@@ -1301,6 +1390,7 @@ export class AtlasDriver implements SceneDriver {
       this.hoveredIndex = index;
       this.points?.setHover(index);
       appStore.getState().setHover(index !== null ? { kind: "point", id: index } : null);
+      this.needsRender = true; // the hover highlight is a uniform, not a camera move
     }
 
     if (index !== null && this.tooltip && this.dataset) {
