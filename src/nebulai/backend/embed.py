@@ -71,15 +71,79 @@ _DEFAULT_EMBED_MODEL = "mxbai-embed-large"
 #: for a month. Setting it once fixes both.
 EMBED_HOST_ENV = "NEBULAI_EMBED_HOST"
 
+#: Values of EMBED_HOST_ENV (or `--embed-host`) that mean "don't hardcode the M4
+#: worker's address — go find it". The box is company-managed: its DHCP IP and
+#: Private-Wi-Fi MAC both rotate, so a literal `http://192.168.0.200:11435` goes
+#: stale. Setting `NEBULAI_EMBED_HOST=auto` once resolves the host dynamically at
+#: run time instead. Mirrors the sentinels the m4host resolver itself honors.
+_DISCOVER_SENTINELS = frozenset({"auto", "discover", "dynamic", "m4"})
+
+#: The M4 worker's ollama embed port — only the HOST is discovered; the port and
+#: the `/api/embed` path (appended by _embed_batch) are unchanged. See the module
+#: docstring and docs/M4-OLLAMA-HANDOVER.md (the box binds 11435, not stock 11434).
+_M4_EMBED_PORT = 11435
+
+#: Last-resort host when dynamic discovery is unavailable (the resolver cannot be
+#: imported, or itself gives up). The historical literal, kept so a resolver
+#: problem degrades to the old behavior rather than breaking a command.
+_M4_FALLBACK_HOST = "192.168.0.200"
+
+
+def _looks_like_discover(value: str) -> bool:
+    return value.strip().lower() in _DISCOVER_SENTINELS
+
+
+def _discover_embed_host() -> str:
+    """Build the M4 embed base URL from a live host discovery. Best-effort.
+
+    Uses the vendored `m4host` resolver, which finds the worker by the service it
+    serves rather than a fixed address. ANY failure — the resolver missing, an
+    import error, an unexpected bug — collapses to the historical literal so
+    asking for discovery can never take down a command: worst case it behaves
+    exactly as the old hardcoded default did. The resolver never scans when
+    `MIND_M4_STRICT=1` (with a pin) or `MIND_M4_DISCOVERY=0` is set.
+    """
+    host = _M4_FALLBACK_HOST
+    try:
+        from . import m4host
+
+        resolved = (m4host.resolve() or "").strip()
+        if resolved:
+            host = resolved
+    except Exception:
+        host = _M4_FALLBACK_HOST
+    return f"http://{host}:{_M4_EMBED_PORT}"
+
+
+def resolve_embed_host(host: str | None) -> str | None:
+    """Interpret one embed-host value shared by every entry point.
+
+    A discovery sentinel (`auto` / `m4` / `discover` / `dynamic`) becomes the
+    dynamically resolved M4 URL; anything else — a real URL, or None/blank — is
+    returned unchanged so an explicit endpoint still wins verbatim.
+    """
+    if host and _looks_like_discover(host):
+        return _discover_embed_host()
+    return host
+
 
 def default_embed_host() -> str:
     """The embeddings base URL: `NEBULAI_EMBED_HOST` if set, else local ollama.
 
-    Deliberately NOT a discovery probe. This module's contract is that the
-    caller names the endpoint and nothing here silently picks a different one —
-    an env var is still the caller naming it, just once instead of per command.
+    The caller still names the endpoint — an env var is the caller naming it once
+    instead of per command, and a concrete URL is used verbatim with nothing here
+    silently substituting a different one. The single exception is an explicit
+    discovery sentinel (`NEBULAI_EMBED_HOST=auto`), which is the caller asking, in
+    so many words, to have the (address-rotating) M4 worker located at run time;
+    only then does this consult the resolver. Unset/blank stays the local ollama
+    default — no probe, no network.
     """
-    return (os.environ.get(EMBED_HOST_ENV) or "").strip() or _DEFAULT_OLLAMA_HOST
+    raw = (os.environ.get(EMBED_HOST_ENV) or "").strip()
+    if not raw:
+        return _DEFAULT_OLLAMA_HOST
+    if _looks_like_discover(raw):
+        return _discover_embed_host()
+    return raw
 
 
 #: What `embed_host` becomes in an exported artifact when the endpoint was not

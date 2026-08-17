@@ -1012,7 +1012,14 @@ def _run_compare(args: argparse.Namespace) -> None:
     # middle so a box whose embedder lives somewhere other than the namer (here:
     # ollama on :11435, not the stock :11434) can be configured once instead of
     # per invocation — see backend/embed.py's docstring for why that matters.
-    embed_host = args.embed_host or os.environ.get(embed_mod.EMBED_HOST_ENV) or args.ollama_host
+    # resolve_embed_host turns a discovery sentinel ("auto"/"m4"/...) — whether it
+    # arrives via --embed-host or NEBULAI_EMBED_HOST — into the dynamically located
+    # M4 URL, and passes any concrete URL (or None) through untouched.
+    embed_host = (
+        embed_mod.resolve_embed_host(args.embed_host)
+        or embed_mod.resolve_embed_host(os.environ.get(embed_mod.EMBED_HOST_ENV))
+        or args.ollama_host
+    )
     try:
         comp = build_comparison(
             json_paths,
@@ -1124,7 +1131,8 @@ def main() -> None:
         "--embed-host",
         default=_default_embed_host(),
         help="[--source api] embeddings endpoint base URL "
-        "(default: $NEBULAI_EMBED_HOST, else the local ollama server)",
+        "(default: $NEBULAI_EMBED_HOST, else the local ollama server; pass "
+        "'auto' to discover the M4 worker's rotating LAN address at run time)",
     )
     t.add_argument(
         "--embed-model",
@@ -1713,7 +1721,8 @@ def main() -> None:
         help="embeddings base URL, overrides $NEBULAI_EMBED_HOST and "
         "--ollama-host (ollama's stock port is 11434, but a host may bind "
         "elsewhere — this project's LAN box uses 11435; an OpenAI-compatible "
-        "server needs --embed-api openai)",
+        "server needs --embed-api openai). Pass 'auto' to discover the M4 "
+        "worker's rotating LAN address at run time.",
     )
     c.add_argument(
         "--embed-api",
