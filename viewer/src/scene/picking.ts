@@ -39,13 +39,24 @@ export class PointPicker {
 }
 
 /** GPU id-buffer picker for the 3D flythrough. Owns a private scene holding
- *  the id sprite and a CSS-pixel-sized render target; `pick` renders one id
- *  frame with the caller's camera and async-reads the pixel under the cursor.
+ *  the id sprite and a 1×1 render target; `pick` renders one id frame with the
+ *  caller's camera and async-reads the single pixel under the cursor.
  *  Callers throttle (~30Hz) and guard staleness — a pick that resolves after
- *  a dataset switch must be dropped. */
+ *  a dataset switch must be dropped.
+ *
+ *  The target is 1×1 rather than viewport-sized on purpose. Only one pixel is
+ *  ever read, so rasterizing the whole frame is pure waste — measured at 1.6ms
+ *  vs 1.0ms per pick for a 49k-point cloud at 1594×834 on an M4, and it scales
+ *  with fill rate, so a weaker GPU pays far more. `camera.setViewOffset` scales
+ *  the projection so the 1×1 target *is* the cursor pixel: the sub-rect keeps
+ *  the exact projection the main render uses, so the id under the cursor is
+ *  identical to what the visual pass drew there. */
 export class IdPicker {
   private scene = new THREE.Scene();
   private rt: THREE.RenderTarget;
+  /** full viewport in CSS px — the frame `setViewOffset` subdivides */
+  private viewW = 1;
+  private viewH = 1;
   /** readback failed (backend without readRenderTargetPixelsAsync support) —
    *  callers should stop asking */
   broken = false;
@@ -59,24 +70,48 @@ export class IdPicker {
   }
 
   setSize(w: number, h: number): void {
-    this.rt.setSize(Math.max(Math.round(w), 1), Math.max(Math.round(h), 1));
+    this.viewW = Math.max(Math.round(w), 1);
+    this.viewH = Math.max(Math.round(h), 1);
   }
 
   /** Instance index under CSS pixel (sx, sy), or -1 for background. */
   async pick(camera: THREE.Camera, sx: number, sy: number): Promise<number> {
     if (this.broken) return -1;
-    const x = Math.min(Math.max(Math.round(sx), 0), this.rt.width - 1);
-    // readback origin: top-left on the WebGPU backend, bottom-left (GL
-    // convention) on the forceWebGL rung — verified empirically on both
-    const isGL = (this.renderer.backend as { isWebGLBackend?: boolean }).isWebGLBackend === true;
-    const yTop = Math.min(Math.max(Math.round(sy), 0), this.rt.height - 1);
-    const y = isGL ? this.rt.height - 1 - yTop : yTop;
-    const prev = this.renderer.getRenderTarget();
+    const x = Math.min(Math.max(Math.round(sx), 0), this.viewW - 1);
+    const y = Math.min(Math.max(Math.round(sy), 0), this.viewH - 1);
+
+    // Narrow the projection to the single cursor pixel. setViewOffset uses a
+    // top-left origin, matching the CSS coords callers hand us. Restoring the
+    // previous view (rather than clearViewOffset) keeps this transparent to a
+    // caller that is itself using a view offset.
+    const view = (camera as THREE.PerspectiveCamera).view;
+    const prevView = view?.enabled ? { ...view } : null;
+    (camera as THREE.PerspectiveCamera).setViewOffset(this.viewW, this.viewH, x, y, 1, 1);
+
+    const prevTarget = this.renderer.getRenderTarget();
     this.renderer.setRenderTarget(this.rt);
     this.renderer.render(this.scene, camera);
-    this.renderer.setRenderTarget(prev);
+    this.renderer.setRenderTarget(prevTarget);
+
+    // Restore before the await so the main render pass — which runs later in
+    // this same frame — never sees the 1×1 projection.
+    if (prevView) {
+      (camera as THREE.PerspectiveCamera).setViewOffset(
+        prevView.fullWidth,
+        prevView.fullHeight,
+        prevView.offsetX,
+        prevView.offsetY,
+        prevView.width,
+        prevView.height,
+      );
+    } else {
+      (camera as THREE.PerspectiveCamera).clearViewOffset();
+    }
+
     try {
-      const px = (await this.renderer.readRenderTargetPixelsAsync(this.rt, x, y, 1, 1)) as Uint8Array;
+      // The target is the cursor pixel, so the readback origin is (0,0) on both
+      // backends — the old bottom-left/top-left flip no longer applies.
+      const px = (await this.renderer.readRenderTargetPixelsAsync(this.rt, 0, 0, 1, 1)) as Uint8Array;
       return px[0]! + px[1]! * 256 + px[2]! * 65536 - 1;
     } catch {
       this.broken = true;

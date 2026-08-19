@@ -59,6 +59,12 @@ test("atlas: confidence floor culls low-confidence points (gate direction locked
     page.evaluate(async () => {
       const cv = document.querySelector("canvas") as HTMLCanvasElement;
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      // The driver repaints on demand, so a static scene submits no frame this
+      // tick — and a composited WebGL drawing buffer reads back cleared without
+      // `preserveDrawingBuffer`. Draw synchronously here so the pixels below are
+      // this frame's, not an undefined buffer. (Screenshot goldens are immune:
+      // they sample the compositor, which still holds the last committed frame.)
+      (window.__driver as unknown as { renderNow?: () => void })?.renderNow?.();
       const off = document.createElement("canvas");
       off.width = cv.width;
       off.height = cv.height;
