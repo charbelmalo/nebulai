@@ -31,15 +31,19 @@ const MAX_CLUSTER_BEAMS = 12; // strongest neighbors of the selected hub
 const HALO_HUBS = 8; // top clusters by summed edge weight get pulsing rings
 
 // orbit (3-D only): middle/right-drag rotates azimuth+elevation; a trackpad
-// two-finger horizontal swipe rotates azimuth. Elevation offset is clamped so
-// the camera never dips under the map or snaps fully overhead.
+// two-finger horizontal swipe rotates azimuth. The elevation *offset* range is
+// intentionally generous — a firm drag reaches the hard limits below — so the
+// view spans straight-down (top view, matching the flat 2-D map) to just short
+// of the horizon; the two EL_CLAMP bounds are what actually keep the camera
+// from tipping past overhead or under the map.
 const ORBIT_AZ_SPEED = 0.008; // rad per px of horizontal drag
 const ORBIT_EL_SPEED = 0.006; // rad per px of vertical drag
-const ORBIT_EL_MIN = -0.55;
-const ORBIT_EL_MAX = 0.85;
+const ORBIT_EL_MIN = -0.75; // reaches top-down (el=0) with a little overrun
+const ORBIT_EL_MAX = 0.9; // reaches the near-horizon cap with a little overrun
 const WHEEL_ORBIT_AZ = 0.004; // rad per px of horizontal wheel/swipe
 const WHEEL_ORBIT_EL = 0.003; // rad per px of shift+vertical wheel/swipe
-const EL_CLAMP_MAX = 1.45; // ~83° from overhead — keep the horizon off-screen
+const EL_CLAMP_MIN = 0.0; // straight overhead (top-down) — never tip past it
+const EL_CLAMP_MAX = 1.5; // ~86° from overhead — near the horizon, cos(el) still safe
 
 // wheel/trackpad. Browsers report deltas in three units (px / line / page) and
 // only Chrome-on-mac reliably uses px, so everything is normalized to px before
@@ -531,7 +535,10 @@ export class AtlasDriver implements SceneDriver {
   private orbitAngles(): [az: number, el: number] {
     return [
       this.morph * this.orbitAz,
-      Math.min(this.morph * (TILT_RAD + this.orbitEl), EL_CLAMP_MAX),
+      Math.min(
+        Math.max(this.morph * (TILT_RAD + this.orbitEl), EL_CLAMP_MIN),
+        EL_CLAMP_MAX,
+      ),
     ];
   }
 
@@ -631,6 +638,26 @@ export class AtlasDriver implements SceneDriver {
         p3: [this.cam.cx, this.cam.cy, zMed],
       };
     }
+    // Nothing in frame — the view has been panned clear of the cloud. Pivoting
+    // on the empty ground plane under the view center (the old z=0 fallback)
+    // makes the next orbit swing the whole cloud away in a wide arc — the
+    // "panning ruins the orbit" report. Fall back to the cloud's own center
+    // (bounds3 centroid at the sampled median depth) so an orbit re-grabs the
+    // whole map and turntables around it instead of around empty space.
+    const b = this.bounds3;
+    if (b) {
+      let g = 0;
+      for (let i = 0; i < n && g < zs.length; i += stride) zs[g++] = q[i * 3 + 2]!;
+      let zMed = 0;
+      if (g) {
+        const all = zs.subarray(0, g);
+        all.sort();
+        zMed = all[g >> 1]!;
+      }
+      const cx = (b[0] + b[2]) / 2;
+      const cy = (b[1] + b[3]) / 2;
+      return { p2: [cx, cy], p3: [cx, cy, zMed] };
+    }
     return { p2: [this.cam.cx, this.cam.cy], p3: [this.cam.cx, this.cam.cy, 0] };
   }
 
@@ -672,7 +699,10 @@ export class AtlasDriver implements SceneDriver {
     if (!this.orbitPivot || !this.orbitAnchor) return;
     const [px, py, pz] = this.pivotWorld();
     const [az, el] = this.orbitAngles();
-    const b2 = (this.orbitAnchor.b - pz * Math.sin(el)) / Math.cos(el); // el clamped < 90°
+    // el is clamped short of 90°, but near the cap cos(el) is small — floor it
+    // (0.06 sits just under cos(EL_CLAMP_MAX)) so this compensating pan can never
+    // blow up as the view approaches the horizon.
+    const b2 = (this.orbitAnchor.b - pz * Math.sin(el)) / Math.max(Math.cos(el), 0.06);
     const cosAz = Math.cos(az);
     const sinAz = Math.sin(az);
     const cx = px - (this.orbitAnchor.a * cosAz - b2 * sinAz);
@@ -1118,6 +1148,7 @@ export class AtlasDriver implements SceneDriver {
         this.dragging = false;
         this.orbiting = false;
         this.orbitLast = null;
+        this.clearOrbitPivot(); // same reason as pointerup — don't leave a live anchor
         c.style.cursor = "";
       },
       opts,
@@ -1147,6 +1178,11 @@ export class AtlasDriver implements SceneDriver {
         if (this.orbiting) {
           this.orbiting = false;
           this.orbitLast = null;
+          // release the pivot the gesture pinned: once the orbit ends, a live
+          // anchor would keep re-solving the camera center every frame and
+          // fight the next wheel-zoom's cursor anchoring. Auto-orbit and the
+          // next gesture each re-grab their own pivot.
+          this.clearOrbitPivot();
           c.style.cursor = "";
           return;
         }
