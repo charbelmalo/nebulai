@@ -154,6 +154,17 @@ export class CompareDriver {
   private radius = 46;
   /** Common world radius every layout state is normalised to (STATE_EXTENT). */
   private extent = 10;
+  /** True radius of the packed cloud (max point distance from the origin, over
+   *  all four layout states — any blend is a convex mix and stays within it).
+   *  The zoom floor and the per-frame near/far planes are both derived from it
+   *  so the perspective camera never enters the cloud and clips the nearest
+   *  sprites while their DOM/tooltip labels stay put. Set in setData. */
+  private cloudRadius = 10;
+  /** Closest the camera may dolly: just outside the cloud, so the nearest
+   *  sprites always sit in front of the near plane. */
+  private get minRadius(): number {
+    return this.cloudRadius + 2;
+  }
 
   // manual state tween (the radio buttons)
   private curState = 1;
@@ -283,6 +294,21 @@ export class CompareDriver {
 
     const at = compareAttributes(data);
     this.attrs = at;
+
+    // Bug 3: measure the real cloud radius so the camera can be kept outside it.
+    // xyz of each packed state holds that state's normalised position; the max
+    // over all four bounds every blended position the GPU will ever draw.
+    let r2 = 0;
+    for (const buf of [at.a, at.b, at.c, at.d]) {
+      for (let i = 0; i < this.count; i++) {
+        const x = buf[i * 4]!;
+        const y = buf[i * 4 + 1]!;
+        const z = buf[i * 4 + 2]!;
+        const d2 = x * x + y * y + z * z;
+        if (d2 > r2) r2 = d2;
+      }
+    }
+    this.cloudRadius = Math.max(Math.sqrt(r2), at.extent);
     const iA = instancedBufferAttribute<"vec4">(new THREE.InstancedBufferAttribute(at.a, 4), "vec4");
     const iB = instancedBufferAttribute<"vec4">(new THREE.InstancedBufferAttribute(at.b, 4), "vec4");
     const iC = instancedBufferAttribute<"vec4">(new THREE.InstancedBufferAttribute(at.c, 4), "vec4");
@@ -405,8 +431,10 @@ export class CompareDriver {
     const HFILL = 0.44;
     const aspect = Math.max(this.camera.aspect || 1, 0.2);
     const fill = Math.min(VFILL, HFILL * aspect);
-    this.radius =
-      Math.max(this.extent, 1e-3) / (Math.tan((this.camera.fov * Math.PI) / 360) * fill);
+    this.radius = Math.max(
+      Math.max(this.extent, 1e-3) / (Math.tan((this.camera.fov * Math.PI) / 360) * fill),
+      this.minRadius,
+    );
   }
 
   resize(width: number, height: number, dpr: number): void {
@@ -445,6 +473,18 @@ export class CompareDriver {
       this.radius * ce * Math.sin(this.theta),
     );
     this.camera.lookAt(0, 0, 0);
+    // Bug 3: size near/far to the cloud each frame. The camera sits `radius`
+    // from the origin the cloud is centred on and `radius >= cloudRadius + 2`,
+    // so the nearest point is at least ~2 units in front; a near plane at half
+    // that distance keeps every sprite visible no matter how far the user zooms
+    // in, instead of the fixed 0.1 that let the closest dots cross it and vanish.
+    const near = Math.max(0.05, (this.radius - this.cloudRadius) * 0.5);
+    const far = this.radius + this.cloudRadius + 1;
+    if (near !== this.camera.near || far !== this.camera.far) {
+      this.camera.near = near;
+      this.camera.far = far;
+      this.camera.updateProjectionMatrix();
+    }
     this.camera.updateMatrixWorld();
 
     if (this.bloomPipe && this.bloomOn) this.bloomPipe.post.render();
@@ -751,7 +791,7 @@ export class CompareDriver {
         this.phi = Math.max(-1.5, Math.min(1.5, this.phi + dy * 0.006));
       },
       onPinch: (e) => {
-        this.radius = clamp(this.radius / e.scale, 8, 180);
+        this.radius = clamp(this.radius / e.scale, this.minRadius, 180);
         this.theta -= e.dcx * 0.006;
         this.phi = Math.max(-1.5, Math.min(1.5, this.phi + e.dcy * 0.006));
       },
@@ -796,7 +836,10 @@ export class CompareDriver {
     this.canvas.addEventListener(
       "wheel",
       (e) => {
-        this.radius = Math.max(8, Math.min(180, this.radius * Math.exp(e.deltaY * 0.0012)));
+        this.radius = Math.max(
+          this.minRadius,
+          Math.min(180, this.radius * Math.exp(e.deltaY * 0.0012)),
+        );
       },
       { passive: true, signal: sig },
     );
