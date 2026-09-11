@@ -617,6 +617,69 @@ def _cmd_import_spool(args: argparse.Namespace, store: EventStore) -> int:
     return 0
 
 
+def _cmd_import(args: argparse.Namespace, store: EventStore) -> int:
+    """Import a public corpus as reconciled runs (Attractors D7).
+
+    The corpora are other people's data. Two rules are enforced here rather
+    than left to the caller: the run is written with `capture_mode:
+    reconciled`, and a `corpus.json` sits next to the events carrying the
+    licence, the URL, the input file's sha256 and the count of records the
+    mapping did not recognise. A run whose provenance is not written is not
+    importable — there is no flag to skip it.
+    """
+    from .adapters import corpus_adapter
+    from .adapters.corpus_base import CorpusError
+    from .adapters.corpus_village import VillageUnavailable
+
+    kw: dict[str, object] = {}
+    if args.corpus == "amongus":
+        kw = {"summary_path": args.summary, "max_games": args.limit}
+    elif args.corpus == "ctfish":
+        kw = {
+            "labels_path": args.labels,
+            "max_runs": args.limit,
+            "model": args.filter_model,
+            "variant": args.variant,
+        }
+    elif args.corpus == "village":
+        kw = {"kind": args.kind, "max_rows": args.limit}
+
+    try:
+        adapter = corpus_adapter(args.corpus, run_id=args.run_id or "", session_id="")
+        runs = adapter.read(args.path, **{k: v for k, v in kw.items() if v is not None})
+    except VillageUnavailable as e:
+        sys.stderr.write(f"{e}\n")
+        return 2
+    except (CorpusError, FileNotFoundError) as e:
+        sys.stderr.write(f"{e}\n")
+        return 2
+
+    out = []
+    for r in runs:
+        if not args.dry_run:
+            store.append_many(r.events)
+            d = store.runs_dir / r.run_id
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "corpus.json").write_text(
+                json.dumps({**r.meta, "warnings": r.warnings}, indent=2) + "\n"
+            )
+        out.append(
+            {
+                "run_id": r.run_id,
+                "n_events": len(r.events),
+                "n_unmapped": r.meta.get("n_unmapped"),
+                "n_warnings": len(r.warnings),
+                "corpus": r.corpus.id,
+                "licence": r.corpus.licence,
+                "ships_in_repo": r.corpus.ships_in_repo,
+            }
+        )
+    print(json.dumps({"dry_run": args.dry_run, "runs": out}, indent=2))
+    for r in runs:
+        for w in r.warnings:
+            sys.stderr.write(f"{r.run_id}: {w}\n")
+    return 0
+
 # ── wiring ───────────────────────────────────────────────────────────────────
 #
 # `_add_subcommands` is the one place the sub-subcommand table is declared.
@@ -873,6 +936,29 @@ def _add_subcommands(p: argparse.ArgumentParser) -> None:
                     help="seconds of silence before a run is called interrupted")
     wa.add_argument("--progress", action="store_true", default=True)
     wa.set_defaults(seer_fn=_cmd_watch)
+
+
+    ip = s.add_parser(
+        "import",
+        help="import a public corpus (Among Us / ctfish / AI Village / a transcript)",
+    )
+    ip.add_argument("corpus", choices=["amongus", "ctfish", "village", "transcript"])
+    ip.add_argument("path", help="the corpus file. Nothing is downloaded here")
+    ip.add_argument("--summary", default=None,
+                    help="[amongus] summary.json, which carries the Impostor labels")
+    ip.add_argument("--labels", default=None,
+                    help="[ctfish] scoring/labels.json — Palisade's own published "
+                         "classification, attached as theirs and never re-judged here")
+    ip.add_argument("--variant", default=None, help="[ctfish] prompt variant filter")
+    ip.add_argument("--filter-model", default=None, help="[ctfish] model id filter")
+    ip.add_argument("--kind", default="computer_use_turns",
+                    help="[village] which config file this is")
+    ip.add_argument("--limit", type=int, default=None,
+                    help="stop after this many games / runs / rows")
+    ip.add_argument("--run-id", default=None, help="override the generated run id")
+    ip.add_argument("--dry-run", action="store_true",
+                    help="map and report, write nothing")
+    ip.set_defaults(seer_fn=_cmd_import)
 
     im = s.add_parser("import-spool", help="import the whole spool once, after the fact")
     im.add_argument("--idle-timeout", type=float, default=60.0)
