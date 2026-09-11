@@ -80,6 +80,10 @@ ResidHook = Callable[[np.ndarray], np.ndarray]
 #: `resid_hooks` key for the embedding output, before block 0.
 EMBED_LAYER = -1
 
+#: Positions per prefill step. Bounds the (B, H, T, T_kv) attention block a
+#: batched prefill materialises; see `generate_batch`.
+PREFILL_CHUNK = 128
+
 _SUPPORTED_MODEL_TYPES = frozenset({"llama", "qwen2", "smollm", "smollm2"})
 
 
@@ -104,22 +108,37 @@ def _rms_norm(x: np.ndarray, w: np.ndarray, eps: float) -> tuple[np.ndarray, np.
 def _silu(x: np.ndarray) -> np.ndarray:
     """x * sigmoid(x), overflow-free.
 
-    ``1/(1+exp(-x))`` overflows for x < -88 in float32 and numpy warns; the
-    piecewise form below is the standard stable sigmoid and is exact in the
-    same places.
+    ``1/(1+exp(-x))`` overflows for x < -88 in float32 and numpy warns, so the
+    two branches of the standard stable sigmoid are evaluated over the whole
+    array and selected with :func:`numpy.where`. Writing it the obvious way —
+    boolean *fancy indexing* into an output buffer — is bit-for-bit identical
+    and **6.7x slower**: on the (14400, 1536) block a batch-48 prefill produces
+    it measured 501 ms against 75 ms, which was 16 of the 23 seconds that
+    prefill took. ``exp(-|x|)`` never overflows, and the selection recovers the
+    two branches exactly, so nothing is approximated here.
     """
-    out = np.empty_like(x)
-    pos = x >= 0
-    out[pos] = 1.0 / (1.0 + np.exp(-x[pos]))
-    ex = np.exp(x[~pos])
-    out[~pos] = ex / (1.0 + ex)
-    return x * out
+    z = np.exp(-np.abs(x))
+    s = np.where(x >= 0, 1.0 / (1.0 + z), z / (1.0 + z)).astype(x.dtype, copy=False)
+    return x * s
 
 
 def _softmax(x: np.ndarray, axis: int = -1) -> np.ndarray:
     x = x - x.max(axis=axis, keepdims=True)
     e = np.exp(x)
     return e / e.sum(axis=axis, keepdims=True)
+
+
+def _softmax_(x: np.ndarray) -> np.ndarray:
+    """Softmax over the last axis, **in place**, returning the same array.
+
+    Rows that are entirely -inf (a fully masked query) would be 0/0; the
+    attention mask guarantees every query keeps at least its own position, so
+    that case cannot arise and is not papered over here.
+    """
+    x -= x.max(axis=-1, keepdims=True)
+    np.exp(x, out=x)
+    x /= x.sum(axis=-1, keepdims=True)
+    return x
 
 
 def _rotate_half(x: np.ndarray) -> np.ndarray:
@@ -148,11 +167,27 @@ class KVCache:
     n_kv_head: int
     d_head: int
     t: int = 0
+    #: Leading **left-pad** slots per row, or None when every row is real.
+    #:
+    #: Batched generation over prompts of different lengths left-pads the short
+    #: ones so one prefill covers the batch. The pad slots hold real k/v of
+    #: filler tokens, so they have to be masked out of attention or a short
+    #: prompt would silently read the filler. RoPE makes this exact rather than
+    #: approximate: q·k depends only on the *difference* of positions, so
+    #: shifting a row's absolute positions by its pad count changes nothing the
+    #: model can see.
+    pad: np.ndarray | None = None
     _k: list[np.ndarray] = field(default_factory=list)
     _v: list[np.ndarray] = field(default_factory=list)
     _cap: int = 0
 
     def __post_init__(self) -> None:
+        if self.pad is not None:
+            self.pad = np.asarray(self.pad, dtype=np.int64)
+            if self.pad.shape != (self.batch,):
+                raise ValueError("cache pad must be one count per batch row")
+            if not self.pad.any():
+                self.pad = None
         if not self._k:
             self._reserve(64)
 
@@ -197,18 +232,35 @@ class KVCache:
         is actually left rather than to the widest the batch ever was.
         """
         idx = list(keep)
-        out = KVCache(
+        # Allocate the new buffers here and hand them to the constructor rather
+        # than calling `_reserve` on a half-built cache: `_reserve`'s grow path
+        # copies `[:t]` out of the arrays it is replacing, and on a cache whose
+        # `t` was set before any buffer existed those are the 64-slot defaults —
+        # which raises as soon as a row finishes after position 64. That is the
+        # ordinary case for a conversation, so this path has to be built, not
+        # grown.
+        cap = max(self._cap, 64)
+        shape = (len(idx), self.n_kv_head, cap, self.d_head)
+        k: list[np.ndarray] = []
+        v: list[np.ndarray] = []
+        for L in range(self.n_layer):
+            nk = np.zeros(shape, dtype=np.float32)
+            nv = np.zeros(shape, dtype=np.float32)
+            nk[:, :, : self.t] = self._k[L][idx][:, :, : self.t]
+            nv[:, :, : self.t] = self._v[L][idx][:, :, : self.t]
+            k.append(nk)
+            v.append(nv)
+        return KVCache(
             n_layer=self.n_layer,
             batch=len(idx),
             n_kv_head=self.n_kv_head,
             d_head=self.d_head,
             t=self.t,
+            pad=None if self.pad is None else self.pad[idx],
+            _k=k,
+            _v=v,
+            _cap=cap,
         )
-        out._reserve(max(self._cap, 64))
-        for L in range(self.n_layer):
-            out._k[L][:, :, : self.t] = self._k[L][idx][:, :, : self.t]
-            out._v[L][:, :, : self.t] = self._v[L][idx][:, :, : self.t]
-        return out
 
 
 @dataclass
@@ -495,12 +547,13 @@ class LlamaNumpy:
 
     # ── forward ──────────────────────────────────────────────────────────
 
-    def new_cache(self, batch: int = 1) -> KVCache:
+    def new_cache(self, batch: int = 1, *, pad: Sequence[int] | None = None) -> KVCache:
         return KVCache(
             n_layer=self.n_layer,
             batch=batch,
             n_kv_head=self.n_kv_head,
             d_head=self.d_head,
+            pad=None if pad is None else np.asarray(pad, dtype=np.int64),
         )
 
     def forward(
@@ -638,6 +691,25 @@ class LlamaNumpy:
         cos = self._cos[pos0 : pos0 + T]  # (T, dh)
         sin = self._sin[pos0 : pos0 + T]
 
+        # The causal mask is the same for every layer, so build it once. Rows
+        # with left-padding get their own: a real query must not read another
+        # row's filler. A *pad* query is allowed to read its own position so the
+        # softmax it computes has at least one finite entry — without that the
+        # pad rows produce NaNs which, while never attended to, are a poor thing
+        # to have flowing through a forward pass.
+        mask: np.ndarray | None = None
+        blocked: np.ndarray | None = None  # ~mask, built once for all layers
+        pad = cache.pad if cache is not None else None
+        if pad is not None:
+            T_kv_total = pos0 + T
+            qpos = np.arange(pos0, pos0 + T)[:, None]
+            kpos = np.arange(T_kv_total)[None, :]
+            causal = kpos <= qpos  # (T, T_kv)
+            real_key = kpos[None, :, :] >= pad[:, None, None]  # (B, 1, T_kv)
+            mask = causal[None, None] & (
+                real_key[:, :, None, :] | (kpos == qpos)[None, None]
+            )
+
         resid = np.empty((self.n_layer + 1, B, T, d), dtype=np.float32) if want_trace else None
         mlp_post = (
             np.empty((self.n_layer, B, T, self.d_mlp), dtype=np.float32) if want_trace else None
@@ -666,19 +738,37 @@ class LlamaNumpy:
                 k, v = cache.append(L, np.ascontiguousarray(k), np.ascontiguousarray(v))
             T_kv = k.shape[2]
 
-            if R > 1:  # grouped-query: repeat each kv head R times, never average
-                k = np.repeat(k, R, axis=1)
-                v = np.repeat(v, R, axis=1)
-
-            scores = (q @ k.transpose(0, 1, 3, 2)) / math.sqrt(dh)  # (B,H,T,T_kv)
+            # Grouped-query attention by *reshape*, never by `np.repeat`. Query
+            # head h reads kv head h // R, so folding the R queries of a group
+            # into the time axis — (B, KV, R*T, dh) — lets one matmul per kv
+            # head serve the whole group. `np.repeat` would materialise a copy
+            # of the entire k and v history (at batch 48 and a 340-token
+            # context that is ~1 GB of memory traffic per decode step, which
+            # measured as an 8x slowdown). The arithmetic is identical: heads
+            # are still repeated, never averaged.
+            qg = q.reshape(B, KV, R * T, dh)
+            scores = (qg @ k.transpose(0, 1, 3, 2)) / math.sqrt(dh)  # (B,KV,R*T,T_kv)
+            scores = scores.reshape(B, H, T, T_kv)
             # query i sits at absolute position pos0+i and may see key j <= pos0+i
-            qpos = np.arange(pos0, pos0 + T)[:, None]
-            kpos = np.arange(T_kv)[None, :]
-            scores = np.where(kpos <= qpos, scores, np.float32(-np.inf))
-            a = _softmax(scores.astype(np.float32), axis=-1)
+            if mask is None:
+                qpos = np.arange(pos0, pos0 + T)[:, None]
+                kpos = np.arange(T_kv)[None, :]
+                mask = kpos <= qpos
+            elif mask.shape[-1] != T_kv:  # pragma: no cover - shape invariant
+                raise AssertionError("attention mask and kv history disagree")
+            if blocked is None:
+                blocked = ~mask
+            # In place from here down. `scores` is a fresh array this call owns,
+            # and at a 300-token prefill with batch 48 it is 155 MB per layer:
+            # every temporary numpy would otherwise allocate (the mask copy,
+            # the shifted exponent, the normalised result) is another 155 MB of
+            # memory traffic, thirty times over.
+            np.copyto(scores, np.float32(-np.inf), where=blocked)
+            a = _softmax_(scores)
             if want_trace:
                 attn_out_store.append(a)
-            ctx = (a @ v).transpose(0, 2, 1, 3).reshape(B * T, n_q)
+            ctx = (a.reshape(B, KV, R * T, T_kv) @ v).reshape(B, H, T, dh)
+            ctx = ctx.transpose(0, 2, 1, 3).reshape(B * T, n_q)
             x = x + (ctx @ w["o"]).reshape(B, T, d)
 
             xn2, _ = _rms_norm(x, w["ln2"], self.eps)
@@ -806,64 +896,78 @@ class LlamaNumpy:
                 f"{longest} prompt + {max_new_tokens} new exceeds context {self.n_ctx}"
             )
 
-        # Prefill each row into its own cache, then splice them into one batched
-        # cache padded to the longest prompt. Rows shorter than that begin with
-        # their own positions, so the splice keeps each row's RoPE positions and
-        # causal mask correct only when the prompts are equal length; when they
-        # are not, short rows are prefilled to the common length by generating
-        # into them individually first. Practically every ensemble protocol
-        # shares a prompt prefix, so the equal-length path is the hot one.
-        lengths = {len(s) for s in seqs}
-        if len(lengths) == 1:
-            cache = self.new_cache(B)
-            ids = np.asarray(seqs, dtype=np.int64)
+        # One prefill for the whole batch, **left-padding** the short rows. The
+        # pad slots are masked out of every attention (see `KVCache.pad`), and
+        # RoPE's dependence on position *differences* alone means a row that
+        # starts at absolute position `pad_b` computes the same scores it would
+        # have at position 0. The alternative — generating the short rows one at
+        # a time — is what this replaces, and it cost a self-play study roughly
+        # twenty-fold: a ragged batch is the normal case once a conversation has
+        # more than one turn in it, not an edge case.
+        #
+        # Padded prefill is not bit-identical to an unpadded one: the absolute
+        # positions differ, so cos/sin are different float32 numbers. Measured
+        # on SmolLM2-135M-Instruct the logit gap is of the same order as the KV
+        # cache's own (~1e-4 max-abs) with identical argmax; the tests pin both.
+        longest_seq = max(len(s) for s in seqs)
+        pads = [longest_seq - len(s) for s in seqs]
+        pad_id = int(self.eos_token_id) if self.eos_token_id is not None else 0
+        cache = self.new_cache(B, pad=pads)
+        ids = np.asarray(
+            [[pad_id] * pads[i] + list(s) for i, s in enumerate(seqs)], dtype=np.int64
+        )
+        # Prefill in chunks. The attention score block is (B, H, T, T_kv), so a
+        # whole-prompt prefill grows as T squared in memory: batch 96 over 300
+        # tokens is 518 MB per layer and the machine starts swapping (measured:
+        # 528 positions/s at batch 96 undivided against 1022 at batch 48).
+        # Chunking caps that block and, because the mask is causal, also skips
+        # roughly half the score matrix.
+        for a0 in range(0, ids.shape[1], PREFILL_CHUNK):
             out = self._core(
-                ids, cache=cache, resid_hooks=resid_hooks, want_trace=False, last_only=True
+                ids[:, a0 : a0 + PREFILL_CHUNK],
+                cache=cache,
+                resid_hooks=resid_hooks,
+                want_trace=False,
+                last_only=True,
+            )
+        last = out["logits"][:, -1, :]
+        active = list(range(B))  # which conversations are still rows of the batch
+        done = [False] * B
+        gen: list[list[int]] = [[] for _ in range(B)]
+        finish = ["length"] * B
+        for _ in range(max_new_tokens):
+            nxt = _sample(last, temperature, top_p, rng)
+            for row, b in enumerate(active):
+                if done[b]:
+                    continue
+                tid = int(nxt[row])
+                if tid in stops:
+                    finish[b] = "stop"
+                    done[b] = True
+                    continue
+                gen[b].append(tid)
+            live = [row for row, b in enumerate(active) if not done[b]]
+            if not live:
+                break
+            # Narrowing the batch copies the entire KV history, so do it only
+            # when it actually pays: dropping one row of forty-eight at a
+            # 340-token context costs ~1 GB of memory traffic to save 2 % of a
+            # matmul. Finished rows keep decoding until the batch is worth
+            # rebuilding; their tokens are simply not recorded. This threshold
+            # measured as the difference between 37 and 100+ tok/s on the
+            # self-play shape.
+            if len(live) <= 0.6 * len(active):
+                cache = cache.slice_batch(live)
+                nxt = nxt[live]
+                active = [active[row] for row in live]
+            out = self._core(
+                nxt.reshape(-1, 1).astype(np.int64),
+                cache=cache,
+                resid_hooks=resid_hooks,
+                want_trace=False,
+                last_only=True,
             )
             last = out["logits"][:, -1, :]
-            active = list(range(B))
-            gen: list[list[int]] = [[] for _ in range(B)]
-            finish = ["length"] * B
-            for _ in range(max_new_tokens):
-                nxt = _sample(last, temperature, top_p, rng)
-                keep: list[int] = []
-                keep_rows: list[int] = []
-                for row, b in enumerate(active):
-                    tid = int(nxt[row])
-                    if tid in stops:
-                        finish[b] = "stop"
-                        continue
-                    gen[b].append(tid)
-                    keep.append(b)
-                    keep_rows.append(row)
-                if not keep:
-                    break
-                if len(keep_rows) != len(active):
-                    cache = cache.slice_batch(keep_rows)
-                    nxt = nxt[keep_rows]
-                active = keep
-                out = self._core(
-                    nxt.reshape(-1, 1).astype(np.int64),
-                    cache=cache,
-                    resid_hooks=resid_hooks,
-                    want_trace=False,
-                    last_only=True,
-                )
-                last = out["logits"][:, -1, :]
-        else:
-            results = [
-                self.generate(
-                    s,
-                    max_new_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    seed=(None if seed is None else seed + i),
-                    resid_hooks=resid_hooks,
-                    stop_tokens=stop_tokens,
-                )
-                for i, s in enumerate(seqs)
-            ]
-            return results
 
         return [
             Generation(
