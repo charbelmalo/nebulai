@@ -412,6 +412,204 @@ def _direction_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     return out_dir, out_dir / DIRECTIONS_FILENAME, out_dir / CHANNELS_FILENAME
 
 
+def _run_intervene(args: argparse.Namespace) -> None:
+    """Sweep one intervention over alpha and write a curve bundle.
+
+    The bundle is what an episode reads; it is a measurement, never a model.
+    D6 is enforced by absence here as everywhere else: this command has no
+    `--save-model`, no `--export-weights`, and no code path that could grow one
+    without `tests/test_intervene.py::test_no_weight_export` failing.
+
+    The alpha grid always contains 0, and the 0 row installs no hook at all, so
+    its `identical_to_baseline` flag is a real assertion about the run rather
+    than a label. If it ever prints False, the bundle is telling you the
+    harness is broken — which is the only honest thing for it to do.
+    """
+    import datetime as _dt
+    import json as _json
+
+    from .backend.interp import intervene as _iv
+    from .backend.interp.gpt2_numpy import GPT2Numpy
+
+    out_dir, dpath, _ = _direction_paths(args)
+    t = _timer()
+    model = GPT2Numpy(args.model)
+
+    alphas = [float(a) for a in args.alpha]
+    if 0.0 not in alphas:
+        alphas = [0.0] + alphas
+        print("[intervene] alpha=0 added: a sweep without its control is a line, not a result")
+    alphas.sort()
+    prompts = list(args.prompt)
+    if not prompts:
+        raise SystemExit("--prompt is required (repeat it for more than one)")
+
+    sae_tensors = None
+    meta_extra: dict = {}
+    if args.verb == "clamp":
+        if args.feature is None:
+            raise SystemExit("--feature is required for clamp")
+        from .backend.interp.bundles import SAE_HOOK, SAE_REPO, load_sae_weights
+
+        cfg, sae_tensors, _sp = load_sae_weights()
+        hook_layer = _iv.hook_layer(
+            f"sae.L{int(cfg['hook_point_layer'])}.{SAE_REPO}", n_layer=model.n_layer
+        )
+        meta_extra = {
+            "sae_repo": SAE_REPO,
+            "sae_hook": SAE_HOOK,
+            "sae_hook_layer": int(cfg["hook_point_layer"]),
+            "hook_layer": hook_layer,
+            "hook_layer_note": (
+                f"{SAE_HOOK} is the stream ENTERING block "
+                f"{int(cfg['hook_point_layer'])}, i.e. the output of block "
+                f"{hook_layer} — which is the layer the hook fires at"
+            ),
+        }
+        base_value = float(args.value)
+
+        def make(a: float) -> "_iv.Intervention":
+            return _iv.Intervention(
+                verb="clamp",
+                layer=hook_layer,
+                feature=int(args.feature),
+                value=base_value,
+                alpha=a,
+                sae_repo=SAE_REPO,
+                sae_hook=SAE_HOOK,
+            )
+
+    elif args.verb == "cap":
+        if args.layer is None:
+            raise SystemExit("--layer is required for cap")
+        if args.lo is None and args.hi is None:
+            raise SystemExit("cap needs at least one of --lo / --hi")
+        lo, hi = args.lo, args.hi
+
+        def make(a: float) -> "_iv.Intervention":
+            # alpha scales how far the bound is pulled in: alpha 0 = no bound
+            # at all (the identity), alpha 1 = the bound as given. A cap has no
+            # natural continuous knob otherwise, and a sweep needs one.
+            if a == 0.0:
+                return _iv.Intervention(verb="cap", layer=int(args.layer), lo=None, hi=None)
+            return _iv.Intervention(
+                verb="cap",
+                layer=int(args.layer),
+                lo=None if lo is None else lo / a,
+                hi=None if hi is None else hi / a,
+            )
+
+        meta_extra = {
+            "cap_note": (
+                "alpha scales the bound: the reported lo/hi are divided by "
+                "alpha, so alpha 0 is no bound (the identity) and alpha 1 is "
+                "the --lo/--hi given"
+            )
+        }
+
+    else:  # add / ablate
+        from .backend.directions import Direction, read_directions
+
+        doc = read_directions(dpath)
+        if doc is None:
+            raise SystemExit(f"{out_dir.name}: no directions.json — nothing to intervene with")
+        by_id = {d["id"]: Direction.from_json(d) for d in doc.get("directions", [])}
+        d = by_id.get(args.direction)
+        if d is None:
+            raise SystemExit(
+                f"unknown direction {args.direction!r}; have {sorted(by_id)}"
+            )
+        if d.d != model.d:
+            raise SystemExit(
+                f"direction {d.id!r} is {d.d} wide; this model's stream is {model.d}"
+            )
+        layer = (
+            int(args.layer)
+            if args.layer is not None
+            else (None if args.verb == "ablate" else _iv.hook_layer(d.space, n_layer=model.n_layer))
+        )
+        meta_extra = {
+            "direction": {
+                "id": d.id,
+                "label": d.label,
+                "space": d.space,
+                "method": d.method,
+                "protocol": d.source.get("protocol", ""),
+            },
+            "layer_note": (
+                "the layer is the direction's own space unless --layer overrode "
+                "it; a direction fitted at one depth and injected at another is "
+                "a different experiment"
+            ),
+        }
+
+        def make(a: float) -> "_iv.Intervention":
+            return _iv.Intervention(
+                verb=args.verb,
+                layer=layer,
+                vector=np.asarray(d.vector, dtype=np.float64),
+                direction_id=d.id,
+                space=d.space,
+                alpha=a,
+            )
+
+    bundle = _iv.sweep(
+        model,
+        prompts,
+        make,
+        alphas,
+        max_tokens=int(args.max_tokens),
+        sae=sae_tensors,
+        targets=list(args.target) if args.target else None,
+    )
+    bundle["model"] = args.model
+    bundle["n_layer"] = int(model.n_layer)
+    bundle["d_model"] = int(model.d)
+    bundle["verb"] = args.verb
+    bundle["meta"] = {
+        "generated": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+        "revision": _resolve_revision_or_branch(args.model, args.revision),
+        "digest": _iv.sweep_digest(bundle),
+        **meta_extra,
+    }
+
+    ctrl = [r for r in bundle["rows"] if r["is_identity"]]
+    for r in ctrl:
+        if not r["identical_to_baseline"]:
+            raise SystemExit(
+                "the alpha = 0 row is NOT bit-identical to the baseline. "
+                "Refusing to write a bundle whose control is not a control."
+            )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / (args.name or f"intervene_{args.verb}.json")
+    path.write_text(_json.dumps(bundle, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"[intervene] {path} ({t()})")
+    for r in bundle["rows"]:
+        flag = " (control, no hook installed)" if r["is_identity"] else ""
+        print(f"  alpha {r['alpha']:+8.3f}  KL mean {r['kl_bits_mean']:8.4f}  max {r['kl_bits_max']:8.4f}{flag}")
+    print()
+    print(bundle["claim"])
+
+
+def _resolve_revision_or_branch(model: str, revision: str | None) -> str:
+    """A sha when one can be resolved, the branch name when it cannot.
+
+    Never a blank and never a silently-substituted "main" pretending to be a
+    pin: honesty rule 2.2 — the resolved commit sha is recorded, and when it is
+    genuinely unavailable the artifact says which branch it was, not nothing.
+    """
+    rev = str(revision or "main")
+    if rev in ("", "main"):
+        from .weights import resolve_revision
+
+        try:
+            return resolve_revision(model, "main", None)
+        except Exception:
+            return "main"
+    return rev
+
+
 def _run_direction_list(args: argparse.Namespace) -> None:
     """Print the registry, and say of each entry whether it can be drawn."""
     from .backend.channels import read_channels
@@ -2313,6 +2511,57 @@ def main() -> None:
     c.add_argument("--embed-model", default="mxbai-embed-large")
     c.add_argument("--seed", type=int, default=42)
     c.set_defaults(fn=_run_compare)
+
+    ivp = sub.add_parser(
+        "intervene",
+        help="sweep one intervention (clamp/add/ablate/cap) over alpha and "
+        "write a curve bundle — measures, never writes a modified checkpoint",
+    )
+    ivp.add_argument("model", help="model id (a real forward pass is run)")
+    ivp.add_argument("--out", default="out", help="output directory root")
+    ivp.add_argument(
+        "verb",
+        choices=["clamp", "add", "ablate", "cap"],
+        help="the intervention verb; nothing else is accepted",
+    )
+    ivp.add_argument(
+        "--prompt",
+        action="append",
+        default=[],
+        help="prompt to run (repeatable)",
+    )
+    ivp.add_argument(
+        "--alpha",
+        action="append",
+        default=[],
+        type=float,
+        help="alpha value (repeatable); 0 is added if absent",
+    )
+    ivp.add_argument("--direction", help="direction id, for add/ablate")
+    ivp.add_argument(
+        "--layer",
+        type=int,
+        default=None,
+        help="hook layer (output of block L; -1 = the embedding output). "
+        "Defaults to the direction's own space for add.",
+    )
+    ivp.add_argument("--feature", type=int, default=None, help="SAE feature index, for clamp")
+    ivp.add_argument(
+        "--value", type=float, default=0.0, help="the activation to pin, for clamp"
+    )
+    ivp.add_argument("--lo", type=float, default=None, help="cap lower bound")
+    ivp.add_argument("--hi", type=float, default=None, help="cap upper bound")
+    ivp.add_argument("--max-tokens", type=int, default=16, help="greedy tokens per generation")
+    ivp.add_argument(
+        "--target",
+        action="append",
+        default=[],
+        help="a completion whose teacher-forced logprob is measured before and "
+        "after (repeatable) — catches an effect the argmax hides",
+    )
+    ivp.add_argument("--revision", default="main")
+    ivp.add_argument("--name", default=None, help="output filename")
+    ivp.set_defaults(fn=_run_intervene)
 
     dr = sub.add_parser(
         "direction",

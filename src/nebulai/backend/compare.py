@@ -54,6 +54,13 @@ _PALETTE = [
     [0.95, 0.60, 0.20],  # amber
     [0.65, 0.90, 0.70],  # mint
     [0.75, 0.50, 0.85],  # orchid
+    # 21-24: the roster reached 22 built maps while this list was 20 long, and
+    # `test_palette_covers_every_built_map` caught it before two clouds came
+    # out the same colour. Extended rather than the guard relaxed.
+    [0.30, 0.60, 0.55],  # pine
+    [0.95, 0.75, 0.85],  # blush
+    [0.55, 0.45, 0.30],  # umber
+    [0.80, 0.95, 0.40],  # chartreuse
 ]
 
 

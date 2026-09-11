@@ -30,6 +30,7 @@ from typing import Any
 
 import numpy as np
 
+from . import intervene as _iv
 from .bundles import SAE_HOOK, SAE_REPO, compute_trace, load_sae_weights, sae_trace_for_prompt
 from .gpt2_numpy import GPT2Numpy, _layernorm
 
@@ -187,9 +188,96 @@ def live_sae(m: GPT2Numpy, text: str, max_tokens: int = MAX_TRACE_TOKENS) -> dic
     }
 
 
+# An intervened generation is a forward pass per token with no KV cache, run
+# twice (baseline + intervened). The cap keeps one typed request from holding
+# the server's single lock for a minute; it is disclosed in the response.
+MAX_GEN_TOKENS = 24
+
+
+def live_intervene(
+    m: GPT2Numpy,
+    req: dict[str, Any],
+    *,
+    directions: dict[str, Any] | None = None,
+    max_tokens: int = MAX_TRACE_TOKENS,
+) -> dict[str, Any]:
+    """`POST /live/intervene` — run one prompt with and without one verb.
+
+    The allow-list is `intervene.build()` and nothing else: an unknown verb, an
+    unknown key or a missing field comes back as a 400 with the reason, never
+    as a default that turns a typo into a different experiment. This is the
+    D6 boundary in the network layer — there is no endpoint here that emits a
+    modified checkpoint, and adding one would have to delete
+    `tests/test_intervene.py::test_no_weight_export`.
+
+    `ablate` and `add` need a direction, and the server resolves them ONLY from
+    the directions the caller's dataset actually shipped. A client cannot post
+    a raw 768-number vector: that would let the browser run an arbitrary
+    steering experiment whose provenance is a text box, and every figure this
+    project exports carries a protocol string that has to mean something.
+    """
+    prompt = req.get("prompt", "")
+    if not isinstance(prompt, str) or not prompt:
+        raise ValueError('body must be {"prompt": "…", "intervention": {…}}')
+    ids = m.encode(prompt)
+    if not ids:
+        raise ValueError("empty prompt (tokenizes to zero tokens)")
+    truncated = len(ids) > max_tokens
+    if truncated:
+        prompt = "".join(m.decode1(int(i)) for i in ids[:max_tokens])
+
+    gen = int(req.get("max_tokens", 16))
+    gen_capped = gen > MAX_GEN_TOKENS
+    gen = max(1, min(gen, MAX_GEN_TOKENS))
+
+    spec = req.get("intervention")
+    if not isinstance(spec, dict):
+        raise ValueError("intervention must be an object naming one of " + str(list(_iv.VERBS)))
+
+    def resolve(did: str):
+        if not directions:
+            raise ValueError(
+                f"this server has no directions loaded, so it cannot run {did!r}. "
+                f"Start it with --directions <directions.json>; refusing rather "
+                f"than accepting a vector from the wire."
+            )
+        d = directions.get(did)
+        if d is None:
+            raise ValueError(f"unknown direction {did!r}; have {sorted(directions)}")
+        return d
+
+    iv = _iv.build(spec, resolve_direction=resolve, n_layer=m.n_layer)
+
+    sae_tensors = None
+    if iv.verb == "clamp":
+        cfg, tensors, _sp = _sae()
+        sae_tensors = tensors
+        if iv.sae_repo not in (None, SAE_REPO) or iv.sae_hook not in (None, SAE_HOOK):
+            raise ValueError(
+                f"this server serves exactly one SAE ({SAE_REPO} @ {SAE_HOOK}); "
+                f"it will not pretend a clamp on another dictionary is the same "
+                f"experiment"
+            )
+
+    t0 = time.perf_counter()
+    out = _iv.run(m, prompt, iv, max_tokens=gen, sae=sae_tensors, targets=req.get("targets"))
+    out["model"] = m.model_id
+    out["ms"] = round((time.perf_counter() - t0) * 1000.0, 1)
+    out["truncated"] = truncated
+    out["max_tokens"] = gen
+    out["max_tokens_capped"] = gen_capped
+    out["verbs"] = list(_iv.VERBS)
+    out["d6"] = (
+        "measured, never exported: this endpoint runs inference-time hooks and "
+        "there is no path here that writes a modified checkpoint"
+    )
+    return out
+
+
 class _Handler(BaseHTTPRequestHandler):
     m: GPT2Numpy  # set by serve()
     lock: threading.Lock
+    directions: dict[str, Any] = {}  # id -> Direction, empty unless --directions
 
     def _send(self, code: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -222,18 +310,27 @@ class _Handler(BaseHTTPRequestHandler):
                     "sae_repo": SAE_REPO,
                     "sae_hook": SAE_HOOK,
                     "sae_loaded": _sae_cache is not None,
+                    "intervene_verbs": list(_iv.VERBS),
+                    "directions": sorted(self.directions),
+                    "max_gen_tokens": MAX_GEN_TOKENS,
                 },
             )
         else:
             self._send(404, {"error": f"unknown path {self.path}"})
 
     def do_POST(self) -> None:
-        if self.path not in ("/live/forward", "/live/trace", "/live/sae"):
+        if self.path not in ("/live/forward", "/live/trace", "/live/sae", "/live/intervene"):
             self._send(404, {"error": f"unknown path {self.path}"})
             return
         try:
             n = int(self.headers.get("Content-Length", "0"))
             req = json.loads(self.rfile.read(n).decode("utf-8"))
+            if self.path == "/live/intervene":
+                # serialize: an intervened generation is 2 x gen forward passes
+                with self.lock:
+                    out = live_intervene(self.m, req, directions=self.directions)
+                self._send(200, out)
+                return
             text = req.get("text", "")
             if not isinstance(text, str) or not text:
                 self._send(400, {"error": "body must be {\"text\": \"<non-empty prompt>\"}"})
@@ -256,18 +353,50 @@ class _Handler(BaseHTTPRequestHandler):
         print(f"[live] {self.address_string()} {fmt % args}")
 
 
-def serve(model_id: str = "gpt2", host: str = "127.0.0.1", port: int = 8123) -> None:
+def _load_directions(path: str | None, d_model: int) -> dict[str, Any]:
+    """Load the directions this server will let a client name.
+
+    Width is checked here rather than at request time so the refusal happens
+    once, at boot, with the whole table printed — the same refusal
+    `check_dimensionality` makes on import, in the place a user can see it.
+    """
+    if not path:
+        return {}
+    from ...backend.directions import Direction, read_directions
+
+    doc = read_directions(path)
+    if doc is None:
+        print(f"[live] no directions at {path} — /live/intervene will refuse add/ablate")
+        return {}
+    out: dict[str, Any] = {}
+    for obj in doc.get("directions", []):
+        dd = Direction.from_json(obj)
+        if dd.d != d_model:
+            print(f"[live] skipping {dd.id}: {dd.d} wide, this model's stream is {d_model}")
+            continue
+        out[dd.id] = dd
+    print(f"[live] {len(out)} direction(s) available to /live/intervene: {sorted(out)}")
+    return out
+
+
+def serve(
+    model_id: str = "gpt2",
+    host: str = "127.0.0.1",
+    port: int = 8123,
+    directions_path: str | None = None,
+) -> None:
     t0 = time.perf_counter()
     print(f"[live] loading {model_id} weights (float32, resident)…")
     m = GPT2Numpy(model_id)
     print(f"[live] loaded in {time.perf_counter() - t0:.1f}s — {m.n_layer} layers, vocab {m.V}")
     _Handler.m = m
     _Handler.lock = threading.Lock()
+    _Handler.directions = _load_directions(directions_path, m.d)
     srv = ThreadingHTTPServer((host, port), _Handler)
     print(
         f"[live] serving on http://{host}:{port}  "
         "(health: /live/health, forward: POST /live/forward, trace: POST /live/trace, "
-        "sae: POST /live/sae)"
+        "sae: POST /live/sae, intervene: POST /live/intervene)"
     )
     srv.serve_forever()
 
@@ -277,5 +406,11 @@ if __name__ == "__main__":
     ap.add_argument("--model", default="gpt2")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8123)
+    ap.add_argument(
+        "--directions",
+        default=None,
+        help="path to a directions.json; /live/intervene's add and ablate "
+        "verbs resolve ids against it and refuse anything not in it",
+    )
     a = ap.parse_args()
-    serve(a.model, a.host, a.port)
+    serve(a.model, a.host, a.port, a.directions)
