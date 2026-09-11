@@ -54,6 +54,16 @@ _PALETTE = [
     [0.95, 0.60, 0.20],  # amber
     [0.65, 0.90, 0.70],  # mint
     [0.75, 0.50, 0.85],  # orchid
+    # Extended 2026-09-12 when the corpus models' W_U maps and the api-embedding
+    # contrast map pushed out/ past twenty. The guard in tests/test_compare.py
+    # is what caught it: the modulo below would have quietly given two maps the
+    # same colour, and a legend that lies is worse than a missing legend.
+    [0.30, 0.60, 0.85],  # denim
+    [0.90, 0.75, 0.60],  # linen
+    [0.55, 0.95, 0.40],  # spring
+    [1.00, 0.40, 0.40],  # coral
+    [0.45, 0.55, 0.70],  # slate
+    [0.85, 0.85, 0.95],  # frost
 ]
 
 
