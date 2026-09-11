@@ -1109,6 +1109,147 @@ def _add_llm_args(sp: argparse.ArgumentParser) -> None:
     )
 
 
+# ── persona space (Attractors P2 / D4) ──────────────────────────────────────
+# A persona space is a *fixed* PCA coordinate system for trajectories. These
+# two verbs are deliberately separate: `build` runs the model and writes a
+# space; `verify` re-runs only the control against an existing space and
+# refuses if the frozen prompt set has moved underneath it.
+
+
+def _persona_model(args):
+    from .backend.interp.llama_numpy import LlamaNumpy
+
+    return LlamaNumpy(args.model, revision=args.revision, local_dir=args.local_dir)
+
+
+def _persona_progress(quiet: bool):
+    if quiet:
+        return None
+    state = {"last": -1}
+
+    def fn(done: int, total: int) -> None:
+        pct = int(done * 100 / total)
+        if pct // 5 != state["last"] // 5:
+            state["last"] = pct
+            print(f"  activations {done}/{total} ({pct}%)", flush=True)
+
+    return fn
+
+
+def _persona_report(space, *, wrote=None) -> None:
+    c = space.control
+    print(f"space_id  {space.space_id}")
+    print(f"model     {space.model} @ {space.revision}")
+    print(f"layer     {space.layer}  pooling {space.pooling}")
+    print(f"prompts   {space.prompt_set['id']} sha256={space.prompt_set['sha256'][:12]} "
+          f"n={space.prompt_set['n']}")
+    print(f"control   {c.method} n={c.n}")
+    print(f"          pc1_evr        {c.pc1_evr:.4f}")
+    print(f"          null p95       {c.pc1_evr_null_p95:.4f} (mean {c.pc1_evr_null_mean:.4f})")
+    if c.p_value == c.p_value:  # not NaN
+        print(f"          p              {c.p_value:.4f} (one-sided, permutation)")
+    print(f"          verdict        {c.verdict}")
+    if c.cross_check is not None:
+        # The null that was run first and failed stays on screen, not just in
+        # the file: a control that got swapped has to show both numbers.
+        x = c.cross_check
+        print(f"cross     {x['method']} n={x['n']}")
+        print(f"          null p95       {x['pc1_evr_null_p95']:.4f} "
+              f"(mean {x['pc1_evr_null_mean']:.4f}) -> {x['verdict']}")
+        import textwrap
+
+        print(textwrap.fill(x["note"], 78, initial_indent="          ",
+                            subsequent_indent="          "))
+    if c.verdict != "above_null":
+        print(
+            "\n  PC1 does NOT clear its null. This space is written and readable, "
+            "but it is NOT the default trajectory frame: the viewer gates the "
+            "default on `above_null`, and a figure drawn in it must carry the "
+            "verdict. The plan's response is to escalate model size, then fall "
+            "back to a user-chosen Direction pair (D4b)."
+        )
+    if wrote is not None:
+        print(f"\nwrote {wrote}")
+
+
+def _run_persona_build(args) -> None:
+    from .backend.persona import build_space, write_space
+
+    model = _persona_model(args)
+    print(f"{model.model_id} @ {model.revision} — {model.n_layer} layers, d={model.d}")
+    space = build_space(
+        model,
+        prompt_set_id=args.prompt_set,
+        layer=args.layer,
+        batch_size=args.batch_size,
+        control_n=args.control_n,
+        progress=_persona_progress(args.quiet),
+    )
+    path = write_space(space, Path(args.out) / "persona")
+    _persona_report(space, wrote=path)
+
+
+def _run_persona_verify(args) -> None:
+    from .backend.persona import read_space, verify_space
+
+    space = read_space(args.space_id, Path(args.out) / "persona")
+    model = _persona_model(args)
+    got = verify_space(space, model, control_n=args.control_n)
+    print(f"space_id  {space.space_id}")
+    print(f"recorded  pc1_evr {space.control.pc1_evr:.4f}  null p95 "
+          f"{space.control.pc1_evr_null_p95:.4f}  {space.control.verdict}")
+    print(f"re-run    pc1_evr {got.pc1_evr:.4f}  null p95 "
+          f"{got.pc1_evr_null_p95:.4f}  {got.verdict}")
+    if got.verdict != space.control.verdict:
+        raise SystemExit(
+            f"VERDICT MOVED: {space.control.verdict} -> {got.verdict}. The space "
+            f"on disk no longer describes what this model does; rebuild it."
+        )
+    print("verdict reproduced")
+
+
+def _run_persona_list(args) -> None:
+    from .backend.persona import list_spaces, read_space
+
+    root = Path(args.out) / "persona"
+    ids = list_spaces(root)
+    if not ids:
+        print(f"no persona spaces under {root}")
+        return
+    for sid in ids:
+        s = read_space(sid, root)
+        print(f"{sid}  L{s.layer}  pc1_evr={s.control.pc1_evr:.4f} "
+              f"null_p95={s.control.pc1_evr_null_p95:.4f}  {s.control.verdict}")
+
+
+def _add_persona_model_args(q) -> None:
+    q.add_argument(
+        "--model",
+        default="HuggingFaceTB/SmolLM2-135M-Instruct",
+        help="instruct model the space is built in (default: SmolLM2-135M-Instruct)",
+    )
+    q.add_argument(
+        "--revision",
+        default="main",
+        help="pinned commit sha. With --local-dir this is the *claim* about which "
+        "commit those bytes are, and it is what lands in the space's provenance",
+    )
+    q.add_argument(
+        "--local-dir",
+        default=None,
+        help="directory holding config.json / model.safetensors / tokenizer.json, "
+        "instead of downloading from the hub",
+    )
+    q.add_argument("--out", default="out", help="output directory root")
+    q.add_argument(
+        "--control-n",
+        type=int,
+        default=500,
+        help="label-permutation draws (default: 500). Lower it only to iterate; "
+        "a published space uses 500",
+    )
+
+
 def main() -> None:
     p = argparse.ArgumentParser(
         prog="nebulai",
@@ -1733,6 +1874,46 @@ def main() -> None:
     c.add_argument("--embed-model", default="mxbai-embed-large")
     c.add_argument("--seed", type=int, default=42)
     c.set_defaults(fn=_run_compare)
+
+    # ── persona (Attractors P2 / D4) ─────────────────────────────────────
+    pers = sub.add_parser(
+        "persona",
+        help="build/verify the persona PCA space trajectories are drawn in",
+    )
+    pers_sub = pers.add_subparsers(dest="persona_cmd", required=True)
+
+    pb = pers_sub.add_parser(
+        "build",
+        help="run the frozen archetype set through a model and fit the PCA space",
+    )
+    _add_persona_model_args(pb)
+    pb.add_argument(
+        "--prompt-set",
+        default="personas.v1",
+        help="frozen prompt set id (default: personas.v1). Changing a set's "
+        "contents makes a NEW space_id — it is never an edit in place",
+    )
+    pb.add_argument(
+        "--layer",
+        type=int,
+        default=None,
+        help="residual layer to read (default: two-thirds of the way up)",
+    )
+    pb.add_argument("--batch-size", type=int, default=16)
+    pb.add_argument("--quiet", action="store_true", help="no progress lines")
+    pb.set_defaults(fn=_run_persona_build)
+
+    pv = pers_sub.add_parser(
+        "verify",
+        help="re-run the control against an existing space and check the freeze",
+    )
+    pv.add_argument("space_id", help="space id under <out>/persona/")
+    _add_persona_model_args(pv)
+    pv.set_defaults(fn=_run_persona_verify)
+
+    pl = pers_sub.add_parser("list", help="list built persona spaces and their verdicts")
+    pl.add_argument("--out", default="out", help="output directory root")
+    pl.set_defaults(fn=_run_persona_list)
 
     args = p.parse_args()
     args.fn(args)

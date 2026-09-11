@@ -303,6 +303,52 @@ def _cmd_show(args: argparse.Namespace, store: EventStore) -> int:
     return 0
 
 
+# ── place (Attractors P2 / D5) ───────────────────────────────────────────────
+
+_PLACE_DEFAULT_URL = "http://127.0.0.1:8123"
+
+
+def _cmd_place(args: argparse.Namespace, store: EventStore) -> int:
+    from .place import PlaceError, place_run, write_placement
+
+    roles = tuple(r.strip() for r in args.roles.split(",") if r.strip())
+    try:
+        p = place_run(
+            store,
+            args.run_id,
+            args.space_id,
+            live_url=args.live_url or _PLACE_DEFAULT_URL,
+            in_process=args.in_process,
+            out_root=args.out,
+            local_dir=args.local_dir,
+            roles=roles,
+        )
+    except PlaceError as e:
+        sys.stderr.write(f"{e}\n")
+        return 2
+    path = write_placement(store, p)
+    if args.json:
+        print(json.dumps(p.to_dict(), indent=2))
+        return 0
+    w = sys.stdout.write
+    w(f"run     {p.run_id}\n")
+    w(f"space   {p.space_id}  (layer {p.layer}, {p.model} @ {p.revision})\n")
+    w(f"source  {p.source} via {p.transport}  fidelity={p.fidelity}\n")
+    if p.pc1_evr is not None:
+        w(f"control pc1_evr={p.pc1_evr:.4f} null_p95={p.pc1_evr_null_p95:.4f} "
+          f"verdict={p.verdict}\n")
+        if p.verdict != "above_null":
+            w("        PC1 did not clear its null — these coordinates are a real\n"
+              "        projection but NOT the default trajectory frame.\n")
+    w(f"placed  {len(p.points)} turns\n")
+    d = p.to_dict()
+    if d["n_skipped"]:
+        w(f"skipped {d['n_skipped']} "
+          f"({d['n_dropped_by_policy']} dropped_by_policy, {d['n_missing']} missing)\n")
+    w(f"wrote   {path}\n")
+    return 0
+
+
 def _print_comparison(views: list[RunView]) -> None:
     c = compare_views(views)
     w = sys.stdout.write
@@ -690,6 +736,57 @@ def _add_subcommands(p: argparse.ArgumentParser) -> None:
     sh.add_argument("run_id")
     sh.add_argument("--json", action="store_true")
     sh.set_defaults(seer_fn=_cmd_show)
+
+    # ── place (Attractors P2 / D5: built in Nebul.AI, drawn in Seer) ─────
+    pl = s.add_parser(
+        "place",
+        help="project a run's turns into a Nebul.AI persona space",
+        description=(
+            "Writes placement.json beside the run: one (pc1, pc2) coordinate "
+            "per placeable turn, in a coordinate system that was frozen when "
+            "the space was built. Nothing is fitted here.\n\n"
+            "A turn whose text was not captured gets no coordinate and is "
+            "listed under `skipped` with the reason — `dropped_by_policy` "
+            "when the text existed and was refused at ingress, `missing` when "
+            "there was nothing to capture. Neither becomes a point at the "
+            "origin."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    pl.add_argument("run_id")
+    pl.add_argument("--space", required=True, dest="space_id", help="persona space id")
+    pl.add_argument(
+        "--live-url",
+        default=None,
+        help=f"live_server base URL (default: {_PLACE_DEFAULT_URL})",
+    )
+    pl.add_argument(
+        "--in-process",
+        action="store_true",
+        help="load the model into THIS process instead of calling a live "
+             "server. Not the default: placement is meant to cross the "
+             "Nebul.AI/Seer boundary as HTTP and a file, and a Seer process "
+             "holding resident model weights competes for RAM with the agent "
+             "it is watching. Use it on a laptop with no server running",
+    )
+    pl.add_argument(
+        "--out",
+        default="out",
+        help="[--in-process] Nebul.AI output root holding persona/<space>/space.json",
+    )
+    pl.add_argument(
+        "--local-dir",
+        default=None,
+        help="[--in-process] weights directory for a space built from local weights",
+    )
+    pl.add_argument(
+        "--roles",
+        default="assistant",
+        help="comma-separated turn roles to place: assistant, user, or both "
+             "(default: assistant)",
+    )
+    pl.add_argument("--json", action="store_true")
+    pl.set_defaults(seer_fn=_cmd_place)
 
     cp = s.add_parser("compare", help="compare runs, and refuse where it is not meaningful")
     cp.add_argument("run_ids", nargs="+")
