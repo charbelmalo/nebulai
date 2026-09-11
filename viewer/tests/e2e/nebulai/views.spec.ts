@@ -88,6 +88,77 @@ test("atlas: confidence floor culls low-confidence points (gate direction locked
   expect(open).toBeGreaterThan(culled * 1.05);
 });
 
+test("hand control is reachable from the sidebar, and only where it steers", async ({
+  page,
+}, testInfo) => {
+  test.skip(rungOf(testInfo) === "webgpu", "chrome is identical on both rungs");
+  // Granted up front: the panel mounts the instant the setting flips and asks
+  // for the camera immediately. Headless has no device, so the rig lands in its
+  // error phase — which is the honest outcome here. What is under test is the
+  // control's reachability, not the tracker.
+  await page.context().grantPermissions(["camera"]);
+  await bootApp(page, "webgl");
+
+  // The bug this pins: the rig shipped with its only switch at the bottom of
+  // the Settings overlay's General tab, so the feature was invisible from the
+  // view it drives and nobody could turn it on.
+  const sidebar = page.locator(".sidebar");
+  const toggle = sidebar.getByRole("switch", { name: "Hand control" });
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toBeEnabled(); // localhost is a secure context
+  await expect(page.locator(".hand-rig")).toHaveCount(0);
+
+  await toggle.click();
+  await expect(page.locator(".hand-rig")).toBeVisible();
+  expect(await page.evaluate(() => window.__store.getState().settings.handTracking)).toBe(true);
+
+  // The effects toggle appears only once the rig is on, and starts OFF. There
+  // used to be a three-way steering picker here; the modes are gone, and what
+  // replaced them is the one thing the operator genuinely has to choose —
+  // whether their free hand may throw effects at the map they are reading.
+  const effects = sidebar.getByRole("switch", { name: "Hand effects" });
+  await expect(effects).toBeVisible();
+  expect(await page.evaluate(() => window.__store.getState().settings.handEffects)).toBe(false);
+
+  // The legend must describe what is actually in force. With effects off, the
+  // three effect gestures do nothing at all, and an operator following
+  // instructions that do nothing concludes the camera is broken rather than
+  // that they are reading the wrong page.
+  await page.locator(".hand-rig-legend-toggle").click();
+  const legend = page.locator(".hand-rig-legend");
+  await expect(legend).toContainText("Open palm");
+  await expect(legend).toContainText("further is faster");
+  await expect(legend).toContainText("Flies to whatever you are pointing at");
+  await expect(legend).toContainText("Freezes everything");
+  await expect(legend).not.toContainText("Shockwave");
+
+  await effects.click();
+  expect(await page.evaluate(() => window.__store.getState().settings.handEffects)).toBe(true);
+  await expect(legend).toContainText("Shockwave");
+  // Named as the free hand's, everywhere it is described: the whole correction
+  // is that a cast rides the hand that is not steering.
+  await expect(legend).toContainText("Free hand");
+
+  await effects.click();
+  await expect(legend).not.toContainText("Shockwave");
+
+  // Turning the rig on must not silently change the view. An earlier revision
+  // flipped the atlas into 3-D on the operator's behalf, because one of the
+  // three steering laws could not work in 2-D — a mode that needed the map
+  // rebuilt around it was a mode that did not belong on a hand.
+  expect(await page.evaluate(() => window.__store.getState().dims)).toBe(2);
+
+  // The panel's own Turn off must be a real second exit, not decoration.
+  await page.locator(".hand-rig-stop").click();
+  await expect(page.locator(".hand-rig")).toHaveCount(0);
+  expect(await page.evaluate(() => window.__store.getState().settings.handTracking)).toBe(false);
+
+  // Only the atlas has a driver to steer, so the row must not advertise itself
+  // in a view where turning it on would do nothing.
+  await page.evaluate(() => window.__store.getState().setViewMode("chord"));
+  await expect(sidebar.getByRole("switch", { name: "Hand control" })).toHaveCount(0);
+});
+
 test("v1-style hierarchy gating: radio disabled only without edges", async ({ page }, testInfo) => {
   test.skip(rungOf(testInfo) === "webgpu", "chrome is identical on both rungs");
   await bootApp(page, "webgl");

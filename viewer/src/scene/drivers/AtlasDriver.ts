@@ -68,6 +68,11 @@ const TILT_RAD = (38 * Math.PI) / 180;
 const MORPH_MS = 900;
 const ID_PICK_INTERVAL_MS = 33; // ~30Hz async id-buffer hover in 3D
 
+// hand rig: Gaussian half-width of the shockwave packet, in viewport widths at
+// cast time. Narrow enough that the front reads as a front rather than as the
+// whole cloud breathing, wide enough to survive a 4.5px sprite.
+const HAND_PULSE_WIDTH = 0.055;
+
 export class AtlasDriver implements SceneDriver {
   readonly cam = new Camera2D();
 
@@ -117,6 +122,17 @@ export class AtlasDriver implements SceneDriver {
   private orbitLast: { x: number; y: number } | null = null;
   private orbitAz = 0;
   private orbitEl = 0;
+  // hand rig (src/hands): the rig reaches the camera only as pan and zoom
+  // *deltas*, composed on top of whatever the pointer already did. It had two
+  // more offsets — an orbit and a confidence-floor override — and both were
+  // deleted with the gestures that drove them: orbit because a semantic map has
+  // no back side worth walking around, and the floor because culling the map
+  // out from under someone off a probabilistic hand pose is not a gesture, it is
+  // a setting with a slider.
+  /** Hand-rig point-size multiplier, applied on top of settings.pointScale. */
+  private handGain = 1;
+  /** World anchor + scale of the running shockwave, snapshotted at cast time. */
+  private handPulseAt: { x: number; y: number; scale: number } | null = null;
   // orbit pivot: the world point the camera rotates around. Resolved at
   // gesture start (raycasted node → selection → view-center cloud depth →
   // ground plane) and held in both frames because the rendered cloud is
@@ -221,10 +237,7 @@ export class AtlasDriver implements SceneDriver {
           this.cameraDirty = true;
         }
         if (s.settings !== prev.settings) {
-          if (this.points) {
-            this.points.uScale.value = s.settings.pointScale;
-            this.points.uConfFloor.value = s.settings.confidenceFloor;
-          }
+          this.applyPointSettings();
           this.bloomOn = this.bloomPipe !== null && s.settings.bloom;
         }
         if (s.appearance !== prev.appearance) {
@@ -364,9 +377,7 @@ export class AtlasDriver implements SceneDriver {
     this.badges?.clear();
     this.applyBeamsVisibility(t.beams);
     this.points.uNoiseVis.value = t.noise ? 1 : 0;
-    const settings = appStore.getState().settings;
-    this.points.uScale.value = settings.pointScale;
-    this.points.uConfFloor.value = settings.confidenceFloor;
+    this.applyPointSettings();
 
     // fresh layers start flat — re-apply the current dimension morph
     this.applyMorph();
@@ -456,9 +467,10 @@ export class AtlasDriver implements SceneDriver {
    *  (pan, hover, fly-to framing) reads them from here so they can't drift out
    *  of step with the matrix frame() builds. */
   private orbitAngles(): [az: number, el: number] {
+    const el = Math.min(Math.max(this.orbitEl, ORBIT_EL_MIN), ORBIT_EL_MAX);
     return [
       this.morph * this.orbitAz,
-      Math.min(this.morph * (TILT_RAD + this.orbitEl), EL_CLAMP_MAX),
+      Math.min(this.morph * (TILT_RAD + el), EL_CLAMP_MAX),
     ];
   }
 
@@ -903,6 +915,120 @@ export class AtlasDriver implements SceneDriver {
     this.userDroveCamera = true;
     const wpp = Math.max((hullRadius(hull) * 2) / fitPx, this.cam.minWpp);
     this.cam.flyTo(hull.anchor[0], hull.anchor[1], wpp, performance.now());
+  }
+
+  // ── hand rig ────────────────────────────────────────────────────────────
+  // The webcam rig (src/hands) drives the camera through these, and through
+  // nothing else. Every one of them is an *offset* composed onto whatever the
+  // pointer path already did, so the rig can never take authority away from the
+  // mouse mid-gesture, and dropping every hand provably returns the rig's
+  // contribution to zero rather than to some remembered pose.
+
+  /** Point size and confidence floor. The floor is now the user's setting and
+   *  nothing else — the rig's override went with the two-hand gesture that used
+   *  to drive it. Point size still carries the rig's snap flash on top. */
+  private applyPointSettings(): void {
+    if (!this.points) return;
+    const settings = appStore.getState().settings;
+    this.points.uScale.value = settings.pointScale * this.handGain;
+    this.points.uConfFloor.value = settings.confidenceFloor;
+  }
+
+  /** Viewport size in CSS px — the rig's channels are in viewport widths. */
+  viewportSize(): { width: number; height: number } {
+    return { width: this.cam.viewportW, height: this.cam.viewportH };
+  }
+
+  /** Pan by a screen-space delta, through the same orbit-aware path as a drag. */
+  handPan(dxPx: number, dyPx: number): void {
+    if (dxPx === 0 && dyPx === 0) return;
+    this.panScreen(dxPx, dyPx);
+  }
+
+  /** Zoom by a multiplicative factor, anchored at the viewport centre. A hand
+   *  has no cursor to anchor to, and anchoring on the palm would make the map
+   *  slide sideways whenever the operator's hand was off-centre. */
+  handZoom(factor: number): void {
+    if (!Number.isFinite(factor) || Math.abs(factor - 1) < 1e-5) return;
+    this.cam.zoomAt(this.cam.viewportW / 2, this.cam.viewportH / 2, factor);
+    this.userDroveCamera = true;
+    this.cameraDirty = true;
+    this.hoverDirty = true;
+  }
+
+  /** Set the rig's point-size multiplier (1 = neutral). */
+  handPointGain(gain: number): void {
+    if (gain === this.handGain) return;
+    this.handGain = gain;
+    this.applyPointSettings();
+  }
+
+  /** Anchor a shockwave at a point in *viewport* coordinates (both axes 0..1).
+   *
+   *  The world origin and the viewport→world scale are both snapshotted here
+   *  rather than recomputed per frame: the wave lives for about a second, and a
+   *  camera move during it would otherwise drag the front across the map and
+   *  stretch it, which reads as the wave being painted on the glass rather than
+   *  running through the cloud. */
+  handShockwave(x: number, y: number): void {
+    const world = this.cam.screenToWorld(x * this.cam.viewportW, y * this.cam.viewportH);
+    this.handPulseAt = { x: world[0], y: world[1], scale: this.cam.viewportW * this.cam.wpp };
+  }
+
+  /** Advance the running shockwave. Radius and amplitude are in viewport widths
+   *  at cast time; amplitude 0 retires the wave. */
+  handPulse(radius: number, amplitude: number): void {
+    if (!this.points) return;
+    const at = this.handPulseAt;
+    if (!at || amplitude <= 0) {
+      if (this.points.uPulse.value.w !== 0) {
+        this.points.uPulse.value.set(0, 0, 0, 0);
+        this.cameraDirty = true;
+      }
+      if (amplitude <= 0) this.handPulseAt = null;
+      return;
+    }
+    this.points.uPulse.value.set(at.x, at.y, radius * at.scale, amplitude * at.scale);
+    this.points.uPulseWidth.value = HAND_PULSE_WIDTH * at.scale;
+    this.cameraDirty = true;
+  }
+
+  /** Every point id inside a lasso given in viewport coordinates (axes 0..1).
+   *
+   *  Screen space, not world: the operator drew the loop over what they could
+   *  see, and the cloud they were looking at is the projected one. Projecting
+   *  each point out through the live camera is also the only version that works
+   *  in the flythrough, where the map has no single world plane to test against.
+   */
+  handLassoPick(contains: (x: number, y: number) => boolean): number[] {
+    if (!this.dataset) return [];
+    const { viewportW: w, viewportH: h } = this.cam;
+    if (w < 2 || h < 2) return [];
+    const cols = this.dataset.columns;
+    const n = cols.count;
+    const flat = this.morph <= 0.02;
+    const inside: number[] = [];
+    for (let i = 0; i < n; i++) {
+      let x: number | undefined;
+      let y: number | undefined;
+      if (flat) {
+        x = cols.pos2[i * 2];
+        y = cols.pos2[i * 2 + 1];
+      } else {
+        const p = this.projectWorld(
+          cols.pos3[i * 3] ?? 0,
+          cols.pos3[i * 3 + 1] ?? 0,
+          cols.pos3[i * 3 + 2] ?? 0,
+        );
+        if (!p) continue;
+        if (contains(p[0] / w, p[1] / h)) inside.push(i);
+        continue;
+      }
+      if (x === undefined || y === undefined) continue;
+      const [sx, sy] = this.cam.worldToScreen(x, y);
+      if (contains(sx / w, sy / h)) inside.push(i);
+    }
+    return inside;
   }
 
   private clearLayers(): void {

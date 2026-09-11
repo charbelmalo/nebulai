@@ -61,6 +61,17 @@ export interface Settings {
   /** Internals cross-view linking: clicking a head/token/SAE feature in one
    *  view highlights it in every other view that shows the same unit. */
   crossLink: boolean;
+  /** Webcam hand control (src/hands). Off by default and never auto-enabled:
+   *  turning it on is what triggers the camera permission prompt and the ~19 MB
+   *  of MediaPipe runtime + model, so it has to be an explicit act. */
+  handTracking: boolean;
+  /** Whether the free — non-steering — hand may cast the two visual effects.
+   *  Off by default: the rig's job is navigation, and an effect fired by someone
+   *  who was trying to pan is the failure that made the previous vocabulary
+   *  unusable. Held here rather than on the rig because it is a preference that
+   *  must survive the tracker being torn down and rebuilt, and because the
+   *  Settings UI has to read it without importing the tracker. */
+  handEffects: boolean;
 }
 
 export interface ShellSlice {
@@ -94,6 +105,8 @@ export const createShellSlice: StateCreator<AppState, [], [], ShellSlice> = (set
     animationSpeed: 1,
     reducedMotion: false,
     crossLink: true,
+    handTracking: false,
+    handEffects: false,
   },
   settingsOpen: false,
   page: "map",

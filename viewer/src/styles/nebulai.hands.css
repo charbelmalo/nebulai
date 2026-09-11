@@ -1,0 +1,287 @@
+/* nebulai.hands.css — Nebulai: webcam hand control (src/hands, chrome/HandRig).
+   Owner: Nebulai (map). Imported after nebulai.map.css by nebulai.css only —
+   Seer has no atlas to steer and never loads this.
+
+   The panel is bottom-left, opposite the legend and clear of the search panel,
+   because the operator's hand is in front of the camera and their eyes are on
+   the cloud: the console is a thing to glance at, not a thing to work in.
+
+   `left: 32px` is the left rail every other floating panel uses (.sidebar), and
+   `bottom: 80px` is the legend's clearance over the centred MetaLine pill at
+   bottom:32 — the map views keep dataset provenance visible at all times, and a
+   248px panel at bottom:16 covers it as soon as the pill is wide enough to
+   reach the left edge, which it is on anything under ~1200px. */
+
+.hand-rig {
+  position: absolute;
+  left: 32px;
+  bottom: 80px;
+  z-index: 6;
+  width: 248px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-card);
+  font-family: var(--font-ui);
+  color: var(--text);
+}
+
+.hand-rig.is-error {
+  border-color: var(--danger);
+}
+
+/* The rig outranks the sidebar (z-index 6 against auto), so on a short viewport
+   it paints over the sidebar's own lower controls — including the toggle that
+   turned it on, and the one that turns it off. They clear each other above
+   roughly 800px of height and only meet below it, so this caps the sidebar
+   rather than moving either panel. Written as a sibling `:has()` so it depends
+   on the rig being mounted, not on a container class; a browser without `:has()`
+   simply keeps today's behaviour. */
+.sidebar:has(~ .hand-rig) {
+  max-height: max(220px, calc(100vh - 470px));
+}
+
+/* ── preview ──────────────────────────────────────────────────────────── */
+
+.hand-rig-stage {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border-radius: var(--radius-card-sm);
+  background: var(--bg);
+}
+
+/* The feed is mirrored so the operator can aim. `features.ts` mirrors the
+   landmark coordinates to match; the two must flip together or the skeleton
+   sits on the wrong hand. */
+.hand-rig-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+  opacity: 0.75;
+}
+
+.hand-rig-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* The skeleton's colours ARE the information — a forced palette would erase
+     the one thing this canvas exists to show. */
+  forced-color-adjust: none;
+}
+
+/* Charge meter. Written straight to `transform` by the tracker's subscription,
+   never through a render — see the note in HandRig.tsx. */
+.hand-rig-meter {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--hairline);
+  overflow: hidden;
+}
+
+.hand-rig-meter-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
+  background: var(--data-hot);
+}
+
+/* ── status ───────────────────────────────────────────────────────────── */
+
+.hand-rig-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.hand-rig-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.hand-rig-dot.is-tracking {
+  background: var(--success);
+}
+
+.hand-rig-dot.is-requesting,
+.hand-rig-dot.is-loading {
+  background: var(--accent);
+}
+
+.hand-rig-dot.is-error {
+  background: var(--danger);
+}
+
+.hand-rig-phase {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.hand-rig-stop {
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: var(--bg-pill);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.hand-rig-stop:hover {
+  color: var(--text);
+  border-color: var(--hairline-strong);
+}
+
+.hand-rig-diag {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+/* Announcements only. Kept in the layout rather than `display: none`, which
+   would take it out of the accessibility tree along with the announcement. */
+.hand-rig-live {
+  margin: 0;
+  font-size: 11px;
+  min-height: 1em;
+  color: var(--accent);
+}
+
+/* ── legend ───────────────────────────────────────────────────────────── */
+
+.hand-rig-legend-toggle {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 10px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.hand-rig-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* Bounded in px as well as vh: 40vh alone lets an opened legend push the
+     panel's top edge into the sidebar on exactly the tall viewports that
+     otherwise clear it. */
+  max-height: min(40vh, 260px);
+  overflow-y: auto;
+}
+
+.hand-rig-legend-title {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.hand-rig-legend-list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.hand-rig-legend-row dt {
+  font-size: 11px;
+  color: var(--text);
+}
+
+.hand-rig-legend-row dd {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+.hand-rig-note {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+/* ── accessibility ────────────────────────────────────────────────────── */
+
+/* Nothing in this panel animates through CSS — the preview and the overlay are
+   the motion, and both are the subject rather than decoration. What reduced
+   motion buys here is the expanding cast rings, which the canvas suppresses
+   itself (see drawCasts); the rule below drops the panel's own translucency so
+   the still image behind it stops competing. */
+@media (prefers-reduced-motion: reduce) {
+  .hand-rig {
+    backdrop-filter: none;
+    background: var(--bg);
+  }
+}
+
+@media (forced-colors: active) {
+  .hand-rig {
+    background: Canvas;
+    border-color: CanvasText;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+
+  .hand-rig-phase,
+  .hand-rig-diag,
+  .hand-rig-note,
+  .hand-rig-legend-row dd {
+    color: CanvasText;
+  }
+
+  .hand-rig-live {
+    color: LinkText;
+  }
+
+  .hand-rig-stop {
+    border-color: ButtonText;
+    background: ButtonFace;
+    color: ButtonText;
+  }
+
+  /* A status colour carried only by a dot is invisible under a forced palette,
+     so the dot becomes a ring the border-style distinguishes. */
+  .hand-rig-dot {
+    background: CanvasText;
+  }
+
+  .hand-rig-meter {
+    border: 1px solid CanvasText;
+    background: Canvas;
+  }
+
+  .hand-rig-meter-fill {
+    background: Highlight;
+  }
+}

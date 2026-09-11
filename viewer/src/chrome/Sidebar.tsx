@@ -19,6 +19,7 @@ import {
   $viewMode,
   openPanel,
 } from "./state";
+import { handControlUnavailableReason } from "../hands/types";
 import { SelectRow, SliderRow, Tabs, ToggleRow } from "@psychix/viz/controls";
 
 const TOGGLE_ROWS: { key: keyof Toggles; label: string }[] = [
@@ -35,6 +36,7 @@ export function Sidebar() {
   const caps = $capabilities.value;
   const toggles = $toggles.value;
   const settings = $settings.value;
+  const handReason = handControlUnavailableReason();
 
   if (!$sidebarOpen.value) {
     return (
@@ -122,6 +124,35 @@ export function Sidebar() {
                 />
               ))}
             </>
+          )}
+          {/* Atlas-gated because the rig only steers the atlas — the same
+              condition that mounts <HandRig/> in apps/nebulai.tsx. Kept on the
+              Settings tab rather than under Additional: a control nobody can
+              find is a feature nobody has, and this one is off by default and
+              needs a camera grant, so it has to be visible where the operator
+              is already looking. */}
+          {$viewMode.value === "atlas" && (
+            <ToggleRow
+              label="Hand control"
+              checked={settings.handTracking}
+              disabled={handReason !== null}
+              hint={handReason ?? "webcam gestures — video never leaves this machine"}
+              onChange={(v) => appStore.getState().setSetting("handTracking", v)}
+            />
+          )}
+          {/* Only once the rig is on, and off by default when it is. Navigation
+              is what the rig is for; the two visual casts are a thing to opt
+              into afterwards, and they are the reason this is a toggle rather
+              than always-on — they ride the hand that is NOT steering, so with
+              one hand raised they cost nothing and with two they are the whole
+              difference between a spare hand and an accident. */}
+          {$viewMode.value === "atlas" && settings.handTracking && (
+            <ToggleRow
+              label="Hand effects"
+              checked={settings.handEffects}
+              hint="your free hand can throw a shockwave or snap the cloud bright"
+              onChange={(v) => appStore.getState().setSetting("handEffects", v)}
+            />
           )}
           <div class="sidebar-sep" />
           <button

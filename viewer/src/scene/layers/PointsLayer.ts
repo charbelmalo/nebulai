@@ -45,6 +45,11 @@ export class PointsLayer {
   readonly uConfFloor = uniform(0);
   /** 1 = a keyword search is active: non-matches dim to a faint ghost */
   readonly uSearchMode = uniform(0);
+  /** hand-rig shockwave: (origin.x, origin.y, front radius, amplitude), all in
+   *  world units. amplitude 0 — the rest value — makes the whole term vanish. */
+  readonly uPulse = uniform(new THREE.Vector4(0, 0, 0, 0));
+  /** Gaussian half-width of the shockwave packet, world units. */
+  readonly uPulseWidth = uniform(1);
 
   private material: THREE.SpriteNodeMaterial;
   private idSprite: THREE.Sprite | null = null;
@@ -108,7 +113,7 @@ export class PointsLayer {
       blending: THREE.AdditiveBlending,
     });
 
-    material.positionNode = mix(vec3(iPos2, 0), iPos3, this.uMorph);
+    material.positionNode = this.positionExpression();
 
     const hovered = instanceIndex.toFloat().equal(this.uHover);
     // matches grow slightly while a search is live so they read at map zoom
@@ -136,6 +141,42 @@ export class PointsLayer {
     this.object.frustumCulled = false;
   }
 
+  /** The one position expression, shared by the visual sprite and the id mesh.
+   *
+   *  Base is the 2D↔3D morph. On top of it rides the hand rig's shockwave: a
+   *  radial Gabor packet — a Gaussian envelope on a single sine cycle, so one
+   *  compression front is followed by one rarefaction — displacing each point
+   *  along the ray from the wave's origin. A bare bump would read as a
+   *  travelling smudge; the signed pair is what makes it read as a wave.
+   *
+   *  This is deliberately a displacement of the geometry rather than an overlay
+   *  drawn on top of it. Because `createIdMesh()` builds from the same method,
+   *  the id-buffer picker sees the displaced positions too — a point caught in
+   *  the front is genuinely where it appears to be, and stays clickable there.
+   *  Anything that only touched `colorNode`/`opacityNode` would be a decal that
+   *  the picker could see through.
+   *
+   *  `uPulse.w` is 0 at rest, which zeroes the whole term, so a session that
+   *  never casts renders the identical expression it did before the rig existed.
+   */
+  private positionExpression(): ReturnType<typeof vec3> {
+    const base = mix(vec3(this.iPos2, 0), this.iPos3, this.uMorph);
+    const offset = base.xy.sub(this.uPulse.xy);
+    const dist = offset.length();
+    // The ray outward from the origin. Guarded because a point sitting exactly
+    // on the origin has no direction, and 0/0 poisons the whole vertex.
+    const ray = offset.div(dist.max(float(1e-6)));
+    const ring = dist.sub(this.uPulse.z);
+    const envelope = ring
+      .mul(ring)
+      .div(this.uPulseWidth.mul(this.uPulseWidth).mul(2))
+      .negate()
+      .exp();
+    const wave = ring.div(this.uPulseWidth).mul(2).sin();
+    const strain = this.uPulse.w.mul(envelope).mul(wave);
+    return vec3(base.xy.add(ray.mul(strain)), base.z);
+  }
+
   setHover(index: number | null): void {
     this.uHover.value = index ?? -1;
   }
@@ -158,7 +199,7 @@ export class PointsLayer {
   createIdMesh(): THREE.Sprite {
     const material = new THREE.SpriteNodeMaterial({ transparent: false });
 
-    material.positionNode = mix(vec3(this.iPos2, 0), this.iPos3, this.uMorph);
+    material.positionNode = this.positionExpression();
     // slightly fatter than the visual point so hover is finger-friendly
     material.scaleNode = this.uSize.mul(this.uScale).mul(1.8);
 

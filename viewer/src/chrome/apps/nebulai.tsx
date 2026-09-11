@@ -8,6 +8,7 @@
 
 import { ComparePanel, CompareTransport } from "../ComparePanel";
 import { GuidePage } from "../GuidePage";
+import { HandRig } from "../HandRig";
 import { InterpPage } from "../InterpPage";
 import { LegendCard } from "../LegendCard";
 import { SearchPanel } from "../SearchPanel";
@@ -28,6 +29,9 @@ function MapPanels() {
       {view === "compare" ? <ComparePanel /> : <LegendCard />}
       {view === "compare" && <CompareTransport />}
       {view === "atlas" && <SearchPanel />}
+      {/* Hand control steers the AtlasDriver and nothing else, so the console
+          appears with the view it can actually drive. */}
+      {view === "atlas" && <HandRig />}
     </>
   );
 }

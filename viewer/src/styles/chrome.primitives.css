@@ -706,6 +706,17 @@
   font: 400 11.5px/1.55 var(--font-ui);
 }
 
+/* A line of prose sitting *inside* a section body, explaining the control
+   directly above it — as opposed to `.settings-section-head p`, which explains
+   the section as a whole before any control is shown. Indented to the depth of
+   a control row's label so it reads as belonging to that row rather than as a
+   second section hint that drifted down the page. */
+.settings-note {
+  margin: 2px 0 6px;
+  color: var(--text-dim);
+  font: 400 11.5px/1.5 var(--font-ui);
+}
+
 .settings-section-body {
   padding: 10px 22px 18px;
   display: flex;

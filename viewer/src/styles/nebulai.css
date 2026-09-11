@@ -16,5 +16,6 @@
 @import "./chrome.base.css";
 @import "./chrome.primitives.css";
 @import "./nebulai.map.css";
+@import "./nebulai.hands.css";
 @import "./nebulai.interp.css";
 @import "./chrome.responsive.css";

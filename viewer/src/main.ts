@@ -36,6 +36,7 @@ import { loadCompare } from "./data/compare";
 import { evictDataset, loadDataset, loadIndex } from "./data/loader";
 import { DATA_BASE } from "./data/base";
 import { isLiveTrace } from "./data/interp";
+import { handRig } from "./hands/rig";
 import { findFeature } from "./scene/interp/registry";
 import { AtlasDriver } from "./scene/drivers/AtlasDriver";
 import { ChordDriver } from "./scene/drivers/ChordDriver";
@@ -152,6 +153,12 @@ async function bootAtlas(shell: BootedShell, t0: number) {
   const driver = new AtlasDriver();
   await driver.init(canvas, caps.tier);
   window.__driver = driver; // e2e + debugging handle
+
+  // Webcam hand control (src/hands). Pointing the rig at the driver costs
+  // nothing on its own — no camera, no model, no frame loop — until the
+  // Settings toggle turns it on, which is what `watchSettings` waits for.
+  handRig.setTarget(driver);
+  handRig.watchSettings();
 
   // view-manager state — declared before applySize so the resize handler can
   // see the compare driver once it exists

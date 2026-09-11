@@ -8,6 +8,7 @@ import { useEffect } from "preact/hooks";
 import { useSignal } from "@preact/signals";
 import { requestDataset, requestViewMode } from "../app/actions";
 import { appStore, type ViewMode } from "../app/store";
+import { handControlUnavailableReason, HAND_LEGEND } from "../hands/types";
 import {
   $buildHealth,
   $buildModels,
@@ -121,6 +122,7 @@ export function SettingsPage() {
 function GeneralTab() {
   const settings = $settings.value;
   const caps = $capabilities.value;
+  const handReason = handControlUnavailableReason();
   return (
     <>
       <SettingsSection
@@ -195,6 +197,40 @@ function GeneralTab() {
           hint={caps?.tier !== "webgpu" ? "webgpu only" : undefined}
           onChange={(v) => appStore.getState().setSetting("bloom", v)}
         />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Hand control"
+        hint="Steer the map with a webcam. Video is processed on this machine and never leaves it — no frame is uploaded, stored or sent anywhere."
+      >
+        <ToggleRow
+          label="Webcam hand control"
+          checked={settings.handTracking}
+          disabled={handReason !== null}
+          hint={
+            handReason ??
+            "asks for camera permission, then downloads ~19 MB of hand-tracking runtime once"
+          }
+          onChange={(v) => appStore.getState().setSetting("handTracking", v)}
+        />
+        <ToggleRow
+          label="Hand effects"
+          checked={settings.handEffects}
+          disabled={handReason !== null}
+          hint="lets your free hand throw a shockwave or snap the cloud bright — navigation only, when off"
+          onChange={(v) => appStore.getState().setSetting("handEffects", v)}
+        />
+        {/* The vocabulary in full. This is the one surface with room for it, and
+            it is short enough to print because the rebuild made it short: three
+            hand shapes, five outcomes, no modes to choose between. The rig's own
+            legend shows the same list without leaving the map. */}
+        <ul class="settings-note settings-gestures">
+          {HAND_LEGEND.map((entry) => (
+            <li key={entry.pose}>
+              <b>{entry.pose}</b> — {entry.effect}
+            </li>
+          ))}
+        </ul>
       </SettingsSection>
     </>
   );
