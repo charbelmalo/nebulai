@@ -61,6 +61,13 @@ export interface UrlState {
   channel?: string;
   /** the lens's filter window, `lo,hi` in the channel's own raw units */
   crange?: [number, number];
+  /** map-page direction axis: a direction id from the model's `directions.json` */
+  axis?: string;
+  /** how far the map has travelled onto that axis, 0–1 */
+  axist?: number;
+  /** `0` when the null cloud was switched OFF. Written only in that case, so
+   *  the ghost is in every link that does not explicitly say otherwise. */
+  axisnull?: boolean;
   /** episode being played, and how far into it */
   episode?: string;
   step?: number;
@@ -111,6 +118,19 @@ export function readUrlState(): UrlState {
       out.crange = [lo, hi];
     }
   }
+  // Same argument as `channel` above: which directions exist is a property of
+  // an artifact nobody has fetched yet, so the id travels as-is and the driver
+  // drops it if this map cannot draw it. That keeps "unknown direction" with
+  // exactly one answer, in the place that already owns R5 and D2.
+  const axis = p.get("axis");
+  if (axis && axis.trim()) {
+    out.axis = axis.trim();
+    const t = Number(p.get("axist") ?? "1");
+    // a permalink naming an axis but no position means "all the way onto it" —
+    // the picture the link was written to show
+    out.axist = Number.isFinite(t) ? Math.min(1, Math.max(0, t)) : 1;
+    if (p.get("axisnull") === "0") out.axisnull = false;
+  }
   const episode = p.get("episode");
   if (episode && (interpHooks.knownEpisode?.(episode) ?? false)) {
     out.episode = episode;
@@ -131,6 +151,11 @@ export function applyUrlState(u: UrlState): void {
   // after the boot dataset load, so the labels to search are resident
   if (u.q) st.setMapQuery(u.q);
   if (u.channel) st.setChannel(u.channel, u.crange ?? null);
+  if (u.axis) {
+    st.setAxisDirection(u.axis);
+    st.setAxisT(u.axist ?? 1);
+    if (u.axisnull === false) st.setAxisNull(false);
+  }
   if (u.page) st.setPage(u.page);
   if (u.view && u.view !== "atlas") requestViewMode(u.view);
   // last, because an episode step rewrites page, model, channel and selection:
@@ -152,6 +177,15 @@ function buildHash(): string {
       // the window travels in RAW units, so the link states what it filtered on
       // even to someone reading the URL rather than opening it
       if (st.channel.window) p.set("crange", st.channel.window.join(","));
+    }
+    if (st.axis.directionId) {
+      p.set("axis", st.axis.directionId);
+      // the blend position travels too: "which direction" and "how far along
+      // it" are different pictures and a link has to be able to name either
+      p.set("axist", st.axis.t.toFixed(2));
+      // only the OFF state is written. A link that says nothing about the null
+      // opens with the null on, which is the only default R5 allows.
+      if (!st.axis.showNull) p.set("axisnull", "0");
     }
   } else if (st.page === "interp") {
     p.set("feature", st.interp.featureId);

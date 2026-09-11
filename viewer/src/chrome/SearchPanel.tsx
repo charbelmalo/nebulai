@@ -3,6 +3,7 @@
  *  check ("where does the model put ship-words?"). Matching is honest
  *  case-insensitive substring — no fuzzy ranking that would fake semantics. */
 
+import { signal } from "@preact/signals";
 import { requestFlyToCluster, requestFlyToPoint } from "../app/actions";
 import { appStore } from "../app/store";
 import { channelFor, channelsFor, lowestBy, type Channel } from "../data/channels";
@@ -97,6 +98,8 @@ export function SearchPanel() {
       />
 
       <ChannelLens />
+
+      <DirectionMaker />
 
       {results && results.total === 0 && (
         <p class="search-empty">
@@ -253,6 +256,120 @@ function LensReadout({ ch }: { ch: Channel }) {
         >
           {narrowed ? "show the whole range" : `filter to ${lo.toFixed(3)}–${nth.toFixed(3)}`}
         </button>
+      )}
+    </div>
+  );
+}
+
+
+/* ── a direction from two selections (R6) ─────────────────────────────────── */
+
+/** One captured side of a contrast. Either a whole cluster or an explicit set
+ *  of point indices — the two things a user can actually have picked. */
+type Side = { kind: "cluster"; id: number; title: string } | { kind: "ids"; ids: number[]; title: string };
+
+const $sideA = signal<Side | null>(null);
+const $sideB = signal<Side | null>(null);
+
+/** Reset when the map underneath changes: a point index means a different
+ *  token in a different vocabulary, so a side captured on gpt2 is nonsense on
+ *  pythia. Subscribing here rather than in the component keeps it to one
+ *  listener regardless of how often the panel re-renders. */
+appStore.subscribe((st, prev) => {
+  if (st.datasetId !== prev.datasetId) {
+    $sideA.value = null;
+    $sideB.value = null;
+  }
+});
+
+function currentSide(): Side | null {
+  const sel = $selection.value;
+  const q = $mapQuery.value;
+  if (sel?.kind === "cluster") {
+    const ds = $dataset.value;
+    const title = ds?.columns.clusters.find((c) => c.id === sel.id)?.title ?? `cluster ${sel.id}`;
+    return { kind: "cluster", id: sel.id, title };
+  }
+  const ids = q.results?.matchIds;
+  if (ids && ids.length > 0) {
+    return { kind: "ids", ids: Array.from(ids), title: `${ids.length} matches of “${q.text.trim()}”` };
+  }
+  return null;
+}
+
+function sideArgs(side: Side, which: "a" | "b"): string {
+  return side.kind === "cluster"
+    ? `--${which}-cluster ${side.id}`
+    : `--${which}-ids ${side.ids.join(" ")}`;
+}
+
+/** The two-selection gesture, honestly.
+ *
+ *  R6 asks for one gesture that serves a researcher and an amateur: pick two
+ *  sets of points, get the direction between them. The gesture is here. The
+ *  ARITHMETIC is not, and cannot be: a direction is a vector in the model's
+ *  own space — 768-dimensional for GPT-2 — and this bundle holds only the 2-D
+ *  and 3-D layouts. A difference of means computed from `pos2` would be a
+ *  direction in the UMAP picture, which is a projection of a projection and
+ *  says nothing about the model. Computing it anyway and calling it a
+ *  direction is precisely the failure the space tags exist to prevent (D2).
+ *
+ *  So the panel captures the two sides, names them, and hands back the exact
+ *  command that computes the direction where the vectors actually live. The
+ *  result lands in `directions.json` and the rail above picks it up.
+ */
+function DirectionMaker() {
+  const ds = $dataset.value;
+  const dsId = $datasetId.value;
+  if (!ds || !dsId) return null;
+  const a = $sideA.value;
+  const b = $sideB.value;
+  const pending = currentSide();
+  const both = a && b;
+  const overlapping =
+    both && a.kind === "cluster" && b.kind === "cluster" && a.id === b.id;
+  const cmd = both
+    ? `nebulai direction make ${dsId} ${sideArgs(a, "a")} ${sideArgs(b, "b")}`
+    : null;
+
+  return (
+    <div class="dirmake-block">
+      <div class="dirmake-head">a direction from two selections</div>
+      <div class="dirmake-sides">
+        {(["A", "B"] as const).map((k) => {
+          const side = k === "A" ? a : b;
+          const set = k === "A" ? $sideA : $sideB;
+          return (
+            <div class="dirmake-side" key={k}>
+              <span class="dirmake-k">{k}</span>
+              <span class="dirmake-v">{side ? side.title : "nothing captured"}</span>
+              <button
+                type="button"
+                class="dirmake-btn"
+                disabled={!pending}
+                title={
+                  pending
+                    ? `capture ${pending.title}`
+                    : "select a cluster, or run a search, then capture it"
+                }
+                onClick={() => (set.value = pending)}
+              >
+                {side ? "replace" : "capture"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {overlapping && <p class="dirmake-note">a cluster does not differ from itself</p>}
+      {cmd && !overlapping && (
+        <>
+          <pre class="dirmake-cmd">{cmd}</pre>
+          <p class="dirmake-note">
+            run this where the model's vectors are — the browser has only the 2-D
+            and 3-D layouts, and a difference of means taken from those would be a
+            direction in the picture rather than in the model
+          </p>
+        </>
       )}
     </div>
   );

@@ -35,6 +35,11 @@ export interface TourStep {
   search?: string;
   /** map-page pick to pin — a cluster or a point index in THIS dataset */
   mapSelection?: MapSelection | null;
+  /** direction id to lay the map out on, or null to put the axis away. Same
+   *  three-state convention as `channel`: `undefined` leaves it alone. */
+  axis?: string | null;
+  /** how far onto that axis, 0–1. Ignored unless `axis` is set. */
+  axisT?: number;
 
   title: string;
   caption: string;
@@ -56,6 +61,13 @@ export interface TourManifest {
   dataset?: string;
   /** channel ids that must exist in that dataset's `channels.json` */
   channels?: string[];
+  /** direction ids that must exist in that dataset's `directions.json`.
+   *
+   *  Checked for PRESENCE, not for renderability. An episode may legitimately
+   *  be about a direction that cannot be drawn — the refusal-style one below
+   *  is exactly that — and gating such an episode on the very property it
+   *  exists to explain would delete the explanation along with the figure. */
+  directions?: string[];
   /** Internals feature ids that must be live in the registry */
   features?: string[];
   /** the space tag every quantity in this episode lives in (see spaces.py).
@@ -245,6 +257,11 @@ export interface EpisodeContext {
   /** true once the channel sidecar for a dataset has been fetched — "still
    *  loading" and "measured and absent" must not render the same way */
   channelsLoaded?(datasetId: string): boolean;
+  /** direction ids for a dataset, or null when it has no `directions.json`
+   *  (or when that sidecar has not been fetched yet) */
+  directionsFor?(datasetId: string): string[] | null;
+  /** true once the direction sidecar for a dataset has been fetched */
+  directionsLoaded?(datasetId: string): boolean;
 }
 
 export type EpisodeAvailability =
@@ -285,6 +302,21 @@ export function episodeAvailability(tour: Tour, ctx: EpisodeContext): EpisodeAva
       };
     }
   }
+  if (m.directions?.length) {
+    const dsId = m.dataset ?? tour.model;
+    const loaded = ctx.directionsLoaded?.(dsId) ?? true;
+    const have = ctx.directionsFor?.(dsId) ?? null;
+    if (!loaded && have === null) {
+      return { state: "pending", reason: `reading ${dsId}/directions.json…` };
+    }
+    const missing = m.directions.filter((d) => !(have ?? []).includes(d));
+    if (missing.length) {
+      return {
+        state: "unavailable",
+        reason: `needs ${missing.join(", ")} in ${dsId}/directions.json.${hint}`,
+      };
+    }
+  }
   if (m.features?.length) {
     const missing = m.features.filter((f) => !ctx.features.includes(f));
     if (missing.length) {
@@ -321,5 +353,12 @@ export function applyTourStep(tour: Tour, stepIdx: number): void {
     else if (step.channelWindow !== undefined) st.setChannelWindow(step.channelWindow);
     if (step.search !== undefined) st.setMapQuery(step.search);
     if (step.mapSelection !== undefined) st.setSelection(step.mapSelection);
+    // The axis is applied AFTER the selection because `setAxisDirection` does
+    // not touch the selection and the reverse is also true — order is only
+    // fixed so a reader of a step can predict the final state exactly.
+    if (step.axis !== undefined) {
+      st.setAxisDirection(step.axis);
+      if (step.axis !== null) st.setAxisT(step.axisT ?? 1);
+    } else if (step.axisT !== undefined) st.setAxisT(step.axisT);
   }
 }

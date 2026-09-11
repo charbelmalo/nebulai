@@ -555,3 +555,83 @@ def test_contrast_is_reproducible_for_a_fixed_seed():
     v = a.mean(axis=0) - b.mean(axis=0)
     assert contrast(a, b, v, seed=11) == contrast(a, b, v, seed=11)
     assert contrast(a, b, v, seed=11) != contrast(a, b, v, seed=12)
+
+
+# ── frozen prompt sets ───────────────────────────────────────────────────────
+#
+# The prompt sets exist because every published refusal direction is the wrong
+# width for every model here, so the only available refusal-*style* direction is
+# one computed from data this repository can show you. The tests below are about
+# that word "frozen": if the data can move without the protocol string changing,
+# the protocol string is decoration.
+
+
+def test_the_refusal_style_set_is_two_matched_halves():
+    from nebulai.backend.prompt_sets import REFUSAL_STYLE as ps
+
+    assert len(ps.pos) == len(ps.neg) == 32
+    assert len(set(ps.pos)) == 32 and len(set(ps.neg)) == 32
+    # no string appears on both sides — a shared member would pull the two means
+    # toward each other and make the contrast look weaker than the data is
+    assert not (set(ps.pos) & set(ps.neg))
+
+
+def test_the_two_halves_open_with_the_same_verbs():
+    """Surface form is matched deliberately, and the test says by how much.
+
+    Not because matching removes the topic difference — it does not, and the
+    set's own caveat says so — but because an unmatched pair would make the
+    direction partly a direction about sentence shape, which is a third thing
+    nobody wants in there.
+    """
+    from nebulai.backend.prompt_sets import REFUSAL_STYLE as ps
+
+    first = lambda xs: [x.split()[0] for x in xs]  # noqa: E731
+    assert first(ps.pos) == first(ps.neg)
+
+
+def test_the_sha_changes_when_a_single_character_does():
+    from dataclasses import replace
+
+    from nebulai.backend.prompt_sets import REFUSAL_STYLE as ps
+
+    before = ps.sha
+    moved = replace(ps, pos=(ps.pos[0] + ".",) + ps.pos[1:])
+    assert moved.sha != before
+    # and is stable across calls: a digest that drifted would make every
+    # protocol string written from it unverifiable
+    assert ps.sha == before
+
+
+def test_the_protocol_names_the_set_the_model_the_layer_and_the_position():
+    from nebulai.backend.prompt_sets import REFUSAL_STYLE as ps
+
+    proto = ps.protocol(model="gpt2", revision="607a30d7", layer=8, position=-1)
+    for needle in ("refusal-style-v1", ps.sha, "gpt2", "607a30d7", "resid.L8", "-1"):
+        assert needle in proto, needle
+    # and it carries the caveat, so the sentence that distrusts the direction
+    # travels inside the direction rather than beside it
+    assert "base model" in proto
+
+
+def test_a_direction_fitted_on_the_set_records_the_sha_in_its_source():
+    from nebulai.backend.directions import diff_of_means
+    from nebulai.backend.prompt_sets import REFUSAL_STYLE as ps
+
+    rng = np.random.default_rng(3)
+    a = rng.normal(size=(32, 16))
+    b = rng.normal(size=(32, 16)) + 1.0
+    d = diff_of_means(
+        a,
+        b,
+        "resid.L8",
+        id="x",
+        label="x",
+        protocol=ps.protocol(model="gpt2", revision="r", layer=8, position=-1),
+        source={"prompt_set": ps.id, "prompt_set_sha": ps.sha},
+    )
+    assert d.source["prompt_set_sha"] == ps.sha
+    assert d.space == "resid.L8"
+    # and it is NOT renderable on a W_E map, which is the whole point of the
+    # space tag travelling with the vector
+    assert d.null is None

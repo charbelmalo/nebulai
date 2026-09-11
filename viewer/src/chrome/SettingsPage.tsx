@@ -20,7 +20,14 @@ import {
 } from "./probe";
 import { channelFor, channelsFor } from "../data/channels";
 import {
+  axisClaim,
+  axisMapClaim,
+  directionsFor,
+  renderableDirections,
+} from "../data/directions";
+import {
   $appearance,
+  $axis,
   $capabilities,
   $channel,
   $compareData,
@@ -1349,6 +1356,7 @@ function DataTab() {
         />
       )}
       <ChannelLensRow />
+      <AxisRow />
     </SettingsSection>
   );
 }
@@ -1422,6 +1430,107 @@ function ChannelLensRow() {
           <dd>
             {ui.window ? `${ui.window[0].toFixed(3)} – ${ui.window[1].toFixed(3)}` : "whole range"}
           </dd>
+        </dl>
+      )}
+    </>
+  );
+}
+
+/** The direction axis, in its Settings home.
+ *
+ *  The map's own rail can drive the same three knobs; this is the canonical
+ *  place per the SETTINGS_HOME rule, and — like the channel row above it — the
+ *  only surface that prints a direction's full provenance: the space it lives
+ *  in, the protocol it was derived by, the held-out separation, and the
+ *  random-direction baseline that separation has to beat.
+ *
+ *  Two things it deliberately does NOT do. It never offers a direction the
+ *  gate refused, and it never hides one either: refused directions are listed
+ *  under the select with their reason, so a map whose axis will not draw says
+ *  why here rather than simply having one option fewer.
+ */
+function AxisRow() {
+  const dsId = $datasetId.value;
+  const ui = $axis.value;
+  const set = directionsFor(dsId);
+  const { ok, drops } = renderableDirections(dsId);
+  const active = ui.directionId ? (ok.find((d) => d.id === ui.directionId) ?? null) : null;
+
+  if (!set) {
+    return (
+      <SelectRow
+        label="Direction axis"
+        value=""
+        disabled
+        options={[
+          {
+            value: "",
+            label: dsId
+              ? `no directions for this map — run \`nebulai direction make ${dsId} …\``
+              : "no map loaded",
+          },
+        ]}
+        onChange={() => {}}
+      />
+    );
+  }
+
+  return (
+    <>
+      <SelectRow
+        label="Direction axis"
+        value={ui.directionId ?? ""}
+        options={[
+          { value: "", label: "off — the map's own layout" },
+          ...ok.map((d) => ({ value: d.id, label: d.label })),
+        ]}
+        onChange={(v) => appStore.getState().setAxisDirection(v ? v : null)}
+      />
+      {active && (
+        <>
+          <SliderRow
+            label="Blend onto the axis"
+            value={ui.t}
+            min={0}
+            max={1}
+            step={0.01}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => appStore.getState().setAxisT(v)}
+          />
+          <ToggleRow
+            label="Show the null cloud"
+            hint="the same points on a random unit direction"
+            checked={ui.showNull}
+            onChange={(v) => appStore.getState().setAxisNull(v)}
+          />
+          <dl class="settings-dl">
+            <dt>Space</dt>
+            <dd>{active.space}</dd>
+            <dt>Method</dt>
+            <dd>{active.method}</dd>
+            <dt>Width</dt>
+            <dd>{active.d} dimensions</dd>
+            <dt>Protocol</dt>
+            <dd>{active.source.protocol}</dd>
+            <dt>Its own two sets</dt>
+            <dd>{axisClaim(active)}</dd>
+            <dt>Across this map</dt>
+            <dd>{axisMapClaim(active)}</dd>
+            <dt>Null</dt>
+            <dd>
+              {active.null
+                ? `${active.null.n} × ${active.null.method}, seed ${active.null.seed}`
+                : "none — this direction is not renderable"}
+            </dd>
+          </dl>
+        </>
+      )}
+      {drops.length > 0 && (
+        <dl class="settings-dl">
+          {drops.map((x) => [
+            <dt key={`${x.direction.id}-k`}>{x.direction.id}</dt>,
+            <dd key={`${x.direction.id}-v`}>{x.reason}</dd>,
+          ])}
         </dl>
       )}
     </>

@@ -358,8 +358,15 @@ def _map_space(meta: dict) -> str:
     )
 
 
-def _load_map_vectors(out_dir: Path, model: str) -> tuple[dict, np.ndarray, list[int]]:
-    """(map doc, source vectors, unit indices) for a built token map.
+def _load_map_vectors(
+    out_dir: Path, model: str
+) -> tuple[dict, np.ndarray, list[int], str]:
+    """(map doc, source vectors, unit indices, resolved revision) for a token map.
+
+    The revision comes back from the loader rather than out of `nebulai.json`:
+    a map built before the meta carried one has no `revision` key at all, and
+    writing the empty string into a sidecar would silently replace a resolved
+    commit sha with nothing (§2.2 — the sha is recorded, never blank).
 
     Rebuilds the front-end's `Units` and proves the curation still lines up with
     the exported points, exactly as `_run_channels` does — a direction projected
@@ -389,7 +396,12 @@ def _load_map_vectors(out_dir: Path, model: str) -> tuple[dict, np.ndarray, list
             f"map (first difference at {first}). Projections are aligned by "
             f"INDEX — refusing to write one. Rebuild the map."
         )
-    return doc, np.asarray(units.vectors, dtype=np.float32), want
+    return (
+        doc,
+        np.asarray(units.vectors, dtype=np.float32),
+        want,
+        str(units.meta.get("revision", "")),
+    )
 
 
 def _direction_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
@@ -446,7 +458,7 @@ def _run_direction_add(args: argparse.Namespace) -> None:
     from .backend.directions import write_directions
 
     out_dir, dpath, _ = _direction_paths(args)
-    doc, vectors, _ = _load_map_vectors(out_dir, args.model)
+    doc, vectors, _, revision = _load_map_vectors(out_dir, args.model)
     space = _map_space(doc["meta"])
     target_d = int(vectors.shape[1])
 
@@ -476,7 +488,7 @@ def _run_direction_add(args: argparse.Namespace) -> None:
     write_directions(
         dpath,
         model=doc["meta"].get("model", args.model),
-        revision=str(doc["meta"].get("revision", "")),
+        revision=revision,
         directions=[d],
     )
     print(f"{out_dir.name}: imported {d.id} ({d.method}, d={d.d}, {d.space})")
@@ -494,7 +506,7 @@ def _run_direction_survey(args: argparse.Namespace) -> None:
     from .backend import import_directions as imp
 
     out_dir, _, _ = _direction_paths(args)
-    doc, vectors, _ = _load_map_vectors(out_dir, args.model)
+    doc, vectors, _, revision = _load_map_vectors(out_dir, args.model)
     target_d = int(vectors.shape[1])
     model = doc["meta"].get("model", args.model)
     print(f"{out_dir.name}: {model} has d={target_d}, space {_map_space(doc['meta'])}")
@@ -518,7 +530,7 @@ def _run_direction_make(args: argparse.Namespace) -> None:
     from .backend.directions import from_two_selections, write_directions
 
     out_dir, dpath, _ = _direction_paths(args)
-    doc, vectors, _ = _load_map_vectors(out_dir, args.model)
+    doc, vectors, _, revision = _load_map_vectors(out_dir, args.model)
     space = _map_space(doc["meta"])
     points = doc["points"]
     titles = {c["id"]: c["title"] for c in doc.get("clusters", [])}
@@ -561,7 +573,7 @@ def _run_direction_make(args: argparse.Namespace) -> None:
     write_directions(
         dpath,
         model=doc["meta"].get("model", args.model),
-        revision=str(doc["meta"].get("revision", "")),
+        revision=revision,
         directions=[d],
     )
     print(f"{out_dir.name}: made {d.id} — {d.label}")
@@ -590,6 +602,109 @@ def _run_direction_make(args: argparse.Namespace) -> None:
         _project_one(args, d.id)
 
 
+def _run_direction_prompts(args: argparse.Namespace) -> None:
+    """Fit a direction on two frozen prompt sets, in the model's own residual stream.
+
+    This is the branch that exists because the import branch always refuses.
+    `nebulai direction survey` prints the reason in full: every published
+    refusal direction is 2048-5120 numbers wide and every model here is
+    512-1024, so `check_dimensionality` rejects all of them. Rather than leave
+    the story at "we could not get one", this computes one - and records, in
+    the protocol string that travels with it, exactly which 64 strings, which
+    layer, which token position and which model produced it.
+
+    The result is almost never renderable on a token map, and that is correct
+    rather than a bug: the direction lives in `resid.L<k>` and the map's points
+    live in `W_E.centered`. Projecting one onto the other yields a number, and
+    that number would mean nothing (D2). `direction list` says so per entry.
+    """
+    from .backend.directions import diff_of_means, write_directions
+    from .backend.interp.gpt2_numpy import GPT2Numpy
+    from .backend.prompt_sets import PROMPT_SETS
+    from .spaces import resid
+
+    out_dir, dpath, _ = _direction_paths(args)
+    ps = PROMPT_SETS.get(args.set)
+    if ps is None:
+        raise SystemExit(f"unknown prompt set {args.set!r}; have {sorted(PROMPT_SETS)}")
+
+    t = _timer()
+    model = GPT2Numpy(args.model)
+    layer = args.layer if args.layer >= 0 else model.n_layer + args.layer
+    if not (-1 <= layer < model.n_layer):
+        raise SystemExit(
+            f"--layer {args.layer} is outside this model's {model.n_layer} blocks"
+        )
+
+    def rows(prompts) -> np.ndarray:
+        out = []
+        for text in prompts:
+            tr = model.forward(text)
+            # resid[L] is the input to block L, so the output of block L is
+            # resid[L+1]; layer -1 is the embedding output before block 0.
+            out.append(tr.resid[layer + 1][args.position].astype(np.float64))
+        return np.stack(out)
+
+    pos, neg = rows(ps.pos), rows(ps.neg)
+    # Resolve "main" to the commit sha the weights actually came from. A
+    # direction whose protocol says "main" pins nothing: the branch moves and
+    # the protocol string silently starts describing a different model.
+    revision = str(args.revision)
+    if revision in ("", "main"):
+        from .weights import resolve_revision
+
+        try:
+            revision = resolve_revision(args.model, "main", None)
+        except Exception:  # offline: say "main", do not pretend to a sha
+            revision = "main"
+
+    d = diff_of_means(
+        pos,
+        neg,
+        str(resid(layer)),
+        id=args.id or f"{ps.id}-L{layer}",
+        label=args.label or ps.label,
+        protocol=ps.protocol(
+            model=args.model, revision=revision, layer=layer, position=args.position
+        ),
+        source={
+            "prompt_set": ps.id,
+            "prompt_set_sha": ps.sha,
+            "layer": layer,
+            "token_position": args.position,
+            "axis": ps.axis,
+        },
+    )
+    write_directions(dpath, model=args.model, revision=revision, directions=[d])
+    print(f"{out_dir.name}: fitted {d.id} on {len(ps.pos)}+{len(ps.neg)} prompts [{t()}]")
+    print(f"  {d.space}  d={d.d}  set sha {ps.sha}")
+    c = d.source.get("contrast") or {}
+    if c:
+        print(
+            f"  contrast on its own two sets: cohen's d {c['cohens_d']:+.4f}, "
+            f"overlap {c['overlap']:.4f}"
+        )
+        print(
+            f"  the same two sets on {c['null_n']} random unit directions "
+            f"(seed {c['null_seed']}): mean |d| {c['null_cohens_d_mean']:.4f}, "
+            f"p95 |d| {c['null_cohens_d_p95']:.4f}"
+        )
+        hd = c.get("heldout_cohens_d")
+        if hd == "missing":
+            print("  held out: missing - a set with fewer than 4 members cannot be split")
+        else:
+            print(
+                f"  held out (fit on half, scored on the other half, "
+                f"n={c['heldout_n_pos']}/{c['heldout_n_neg']}): cohen's d "
+                f"{hd:+.4f}, overlap {c['heldout_overlap']:.4f}"
+            )
+    print(
+        "  NOT RENDERABLE on this map by construction: the direction is in "
+        f"{d.space} and the map's points are in a W_E space. That is D2, not a "
+        "missing step."
+    )
+
+
 def _project_one(args: argparse.Namespace, direction_id: str) -> None:
     """Compute a direction's four channels and mark it renderable."""
     from .backend.channels import write_channels
@@ -611,7 +726,7 @@ def _project_one(args: argparse.Namespace, direction_id: str) -> None:
             f"{[x.get('id') for x in reg['directions']]}"
         )
     d = Direction.from_json(raw)
-    doc, vectors, _ = _load_map_vectors(out_dir, args.model)
+    doc, vectors, _, revision = _load_map_vectors(out_dir, args.model)
     space = _map_space(doc["meta"])
     if d.space != space:
         raise SystemExit(
@@ -626,14 +741,14 @@ def _project_one(args: argparse.Namespace, direction_id: str) -> None:
     write_channels(
         cpath,
         model=doc["meta"].get("model", args.model),
-        revision=str(doc["meta"].get("revision", "")),
+        revision=revision,
         n_points=len(doc["points"]),
         channels=chans,
     )
     write_directions(
         dpath,
         model=doc["meta"].get("model", args.model),
-        revision=str(doc["meta"].get("revision", "")),
+        revision=revision,
         directions=[d],
     )
     s = d.projection["stats"]
@@ -2265,6 +2380,32 @@ def main() -> None:
         "`direction project` gives it a null",
     )
     dm.set_defaults(fn=_run_direction_make)
+
+    dpr = _common(
+        drsub.add_parser(
+            "prompts",
+            help="fit a diff-of-means direction on a frozen prompt set, in the "
+            "model's own residual stream (the branch that exists because every "
+            "published refusal direction is the wrong width - see `survey`)",
+        )
+    )
+    dpr.add_argument("--set", default="refusal-style-v1", help="frozen prompt-set id")
+    dpr.add_argument(
+        "--layer",
+        type=int,
+        default=8,
+        help="fit on the output of this block; -1 is the embedding output",
+    )
+    dpr.add_argument(
+        "--position",
+        type=int,
+        default=-1,
+        help="token position within each prompt (-1 = the last token)",
+    )
+    dpr.add_argument("--revision", default="main", help="recorded in the protocol string")
+    dpr.add_argument("--id", default=None)
+    dpr.add_argument("--label", default=None)
+    dpr.set_defaults(fn=_run_direction_prompts)
 
     dp = _common(
         drsub.add_parser(

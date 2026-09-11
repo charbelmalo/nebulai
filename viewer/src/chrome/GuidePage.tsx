@@ -8,6 +8,12 @@
 import { requestEpisodeStep } from "../app/actions";
 import { appStore } from "../app/store";
 import { $channels, channelsFor, channelsLoaded, ensureChannels } from "../data/channels";
+import {
+  $directions,
+  directionsFor,
+  directionsLoaded,
+  ensureDirections,
+} from "../data/directions";
 import type { GuideFormula, InterpGroup } from "../scene/interp/InterpDriver";
 import { GROUP_LABEL, INTERP_FEATURES } from "../scene/interp/registry";
 import { guideResearchFor } from "./guideResearch";
@@ -79,6 +85,7 @@ function EpisodeSection() {
   // touching the signal here is what subscribes this component to the fetch
   // resolving, so a "pending" card becomes a "ready" one without a click
   void $channels.value;
+  void $directions.value;
 
   // kick off the sidecar fetch for every dataset an episode names, with the
   // point count the index already knows — the same expected length the map
@@ -90,11 +97,21 @@ function EpisodeSection() {
     const entry = entries.find((e) => e.id === dsId);
     if (entry) ensureChannels(dsId, entry.n_points);
   }
+  // and the direction sidecar for every episode that names one. Separate loop
+  // because an episode may name directions without naming channels — the
+  // refusal-style one does exactly that, since its direction is in resid.L8
+  // and therefore has no channels on this map at all.
+  for (const t of TOURS) {
+    const dsId = t.manifest?.directions?.length ? (t.manifest.dataset ?? t.model) : null;
+    if (dsId && entries.some((e) => e.id === dsId)) ensureDirections(dsId);
+  }
 
   const ctx: EpisodeContext = {
     datasets: entries.map((e) => e.id),
     channelsFor: (id) => channelsFor(id)?.channels.map((c) => c.id) ?? null,
     channelsLoaded: (id) => channelsLoaded(id),
+    directionsFor: (id) => directionsFor(id)?.directions.map((d) => d.id) ?? null,
+    directionsLoaded: (id) => directionsLoaded(id),
     features: INTERP_FEATURES.map((f) => f.id),
   };
 
@@ -138,6 +155,12 @@ function EpisodeSection() {
                 <div class="guide-card-row">
                   <span class="guide-card-tag">Channels</span>
                   <span class="guide-card-source">{m.channels.join(", ")}</span>
+                </div>
+              ) : null}
+              {m?.directions?.length ? (
+                <div class="guide-card-row">
+                  <span class="guide-card-tag">Directions</span>
+                  <span class="guide-card-source">{m.directions.join(", ")}</span>
                 </div>
               ) : null}
               {av.state !== "ready" && (

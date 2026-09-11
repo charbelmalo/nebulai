@@ -7,6 +7,7 @@
 import { signal } from "@preact/signals";
 import {
   appStore,
+  type AxisUI,
   type ChannelUI,
   type CompareUI,
   type MapQuery,
@@ -33,6 +34,9 @@ export const $toggles = signal<Toggles>(s.toggles);
 /** The channel lens: which per-point scalar the map is painted by, and the
  *  filter window in that channel's raw units. */
 export const $channel = signal<ChannelUI>(s.channel);
+/** The direction axis: which direction the map is laid out on, how far the
+ *  blend has travelled, and whether the null cloud is in the picture. */
+export const $axis = signal<AxisUI>(s.axis);
 export const $compareData = signal<CompareData | null>(s.compareData);
 export const $compare = signal<CompareUI>(s.compare);
 

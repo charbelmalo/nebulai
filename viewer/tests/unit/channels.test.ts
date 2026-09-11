@@ -327,11 +327,21 @@ describe.skipIf(!hasArtifact)("out/gpt2/channels.json", () => {
     expect(set.nPoints).toBe(49857);
     expect(set.model).toBe("gpt2");
     expect(set.revision).toBe("607a30d783dfa663caf39e06633721c8d4cfcd7e");
-    expect([...set.byId.keys()].sort()).toEqual(["we_centroid_dist", "we_norm"]);
-    for (const ch of set.channels) {
-      expect(ch.space).toBe("W_E.raw");
-      expect(ch.fidelity).toBe("deterministic");
-      expect(ch.stats.n_missing).toBe(0);
+    // The two lens channels are a SUBSET: phase 1's `direction project` appends
+    // four `proj.*` columns to the same file, and they are in the map's own
+    // space rather than the raw one, so the space assertion below is scoped to
+    // the two this test is actually about.
+    const ids = [...set.byId.keys()];
+    expect(ids).toContain("we_norm");
+    expect(ids).toContain("we_centroid_dist");
+    for (const extra of ids.filter((i) => i !== "we_norm" && i !== "we_centroid_dist")) {
+      expect(extra.startsWith("proj."), extra).toBe(true);
+    }
+    for (const id of ["we_norm", "we_centroid_dist"]) {
+      const ch = set.byId.get(id)!;
+      expect(ch.space, id).toBe("W_E.raw");
+      expect(ch.fidelity, id).toBe("deterministic");
+      expect(ch.stats.n_missing, id).toBe(0);
     }
   });
 

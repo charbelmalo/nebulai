@@ -135,6 +135,92 @@ interactive HTML labels all, with per-point `hover_text=repr(label)` (so a
 leading-space token like `' cat'` is visibly distinct from `'cat'`) and search.
 Noise → `noise_label="Unlabelled"`.
 
+## Sidecars: channels + directions (never `nebulai.json`)
+
+`nebulai.json` is schema **v2** and stays there. Two later artifacts are written
+BESIDE it, aligned to it by point INDEX, and read independently by the viewer:
+a map with neither renders exactly as it always did.
+
+```
+out/<model>/
+  nebulai.json      # schema v2 — untouched by everything below
+  channels.json     # backend/channels.py  — per-point scalars
+  directions.json   # backend/directions.py — unit vectors + their nulls
+```
+
+### `channels.json` (`backend/channels.py`)
+
+```jsonc
+{ "meta": { "model": "gpt2", "revision": "<resolved sha>", "n_points": 49857,
+            "point_source": "nebulai.json" },
+  "channels": [
+    { "id": "we_centroid_dist", "label": "…", "space": "W_E.raw",
+      "method": "l2", "formula": "‖x − mean(W_E)‖₂",
+      "fidelity": "deterministic",          // seer/contract.py vocabulary
+      "stats": { "min": …, "max": …, "mean": …, "n_missing": 0 },
+      "values": [ …, null, … ] }            // null = NOT MEASURED, never 0
+  ] }
+```
+
+- **`space` is a tag from the closed set** (`src/nebulai/spaces.py`):
+  `W_E.raw` · `W_E.centered` · `W_U.raw` · `resid.L<k>` · `mlp_out.L<k>` ·
+  `sae.L<k>.<repo>` · `text-embed.<model>` · `persona-pca.<id>`. Two channels
+  in different spaces are never plotted against each other (D2). `resid`/
+  `mlp_out` take layer `-1` for the embedding output before block 0.
+- `null` in `values` becomes `NaN` in the browser column and renders as
+  "not measured" — it is never a position, a colour stop or a zero.
+- A channel file whose `n_points` disagrees with the loaded map is dropped
+  WHOLE. An index-shifted column mislabels every point past the shift.
+- CLI: `nebulai channels <model>` writes the lens channels; `direction project`
+  appends four more per direction (below) to the same file.
+
+### `directions.json` (`backend/directions.py`)
+
+A direction is one unit vector in one named space plus the provenance that
+makes it readable and the statistics that make it checkable.
+
+```jsonc
+{ "meta": { "model": "gpt2", "revision": "<resolved sha>" },
+  "directions": [
+    { "id": "male-minus-female-names", "label": "…",
+      "space": "W_E.centered", "method": "diff_of_means", "d": 768,
+      "vector": [ … ],
+      "source": { "kind": "computed", "protocol": "<frozen identity of the two sets>",
+                  "contrast": { "cohens_d": …,            // IN SAMPLE — not evidence
+                                "heldout_cohens_d": …,    // refit on half, scored on the other half
+                                "null_cohens_d_mean": …, "null_cohens_d_p95": …,
+                                "n_pos": …, "n_neg": …, "heldout_n_pos": …, "heldout_n_neg": … } },
+      "projection": { "channel": "proj.<id>", "orth_channel": "proj.<id>.orth",
+                      "stats": { "cohens_d": …, "overlap": …, "n": … } },
+      "null": { "method": "random_unit", "seed": 0, "n": 32,
+                "channel": "proj.<id>.null", "orth_channel": "proj.<id>.null.orth" } }
+  ] }
+```
+
+Rules, all enforced by `renderable()` in Python and mirrored by `axisRefusal()`
+in `viewer/src/data/directions.ts` — **same two checks, same order**, pinned by
+`viewer/tests/unit/directions.test.ts`:
+
+1. **R5 — no `null` block, not renderable.** Not "renderable without a ghost".
+   The null cloud is the only thing that says an axis is an axis.
+2. **D2 — the four projection channels must exist and carry the direction's own
+   space tag.** A `resid.L8` direction projected onto a `W_E.centered` map
+   yields 49,857 perfectly ordinary numbers that mean nothing, so it is refused
+   with the reason printed rather than drawn.
+
+`methods`: `diff_of_means` · `pca` · `sae_decoder` · `lora_rank1` · `probe` ·
+`two_selection`. Two statistics, never merged: `source.contrast` is about the
+direction's OWN two sets (and only its held-out half is a measurement);
+`projection.stats` is real-vs-null across the whole map. They routinely
+disagree — the shipped gpt2 direction separates its two clusters at held-out
+d = +8.30 and is indistinguishable from random across the map (overlap 0.834).
+
+CLI: `nebulai direction list | survey | add | make | prompts | project | drop`.
+`survey` prints the published artifacts' widths against this model — the table
+behind every import refusal. `prompts` fits a direction on a frozen prompt set
+from `backend/prompt_sets.py` via `gpt2_numpy` residuals, for the case where
+nothing published is the right width.
+
 ## The rule for new pipelines
 
 To add a front-end: write `frontends/<name>.py` exposing `load_*_units(...) ->

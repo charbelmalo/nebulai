@@ -18,12 +18,23 @@
  *
  *      iFlags = (noise, confidence, searchMatch, channelValue)
  *
- *  which brings the sprite to **6** buffers and leaves room for the Phase-1
- *  axis lane (`iAxis`, also a packed vec4) with one slot still spare. Any new
- *  per-instance scalar belongs in a spare lane of an existing vec4, not in a
- *  new attribute — and a simplified diagnostic will not warn you, because TSL
- *  tree-shakes attributes the node graph does not reference, so a cut-down
- *  shader binds fewer buffers than the real one.
+ *  which brought the sprite to **6** buffers. Phase 1 spent one of the two
+ *  remaining slots on the axis lane, again a packed vec4:
+ *
+ *      iAxis = (realX, realY, nullX, nullY)
+ *
+ *  — the direction layout and its null's, both in world units, both computed
+ *  on the CPU by `scene/axisLayout.ts` so the two clouds share one ruler. The
+ *  sprite now binds **7** with one slot spare. Any new per-instance scalar
+ *  belongs in a spare lane of an existing vec4, not in a new attribute — and a
+ *  simplified diagnostic will not warn you, because TSL tree-shakes attributes
+ *  the node graph does not reference, so a cut-down shader binds fewer buffers
+ *  than the real one.
+ *
+ *  The ghost mesh (`createGhostMesh()`) is a THIRD sprite over the same
+ *  attributes, reading lanes z/w instead of x/y. It binds 5 (quad, iPos2,
+ *  iPos3, iFlags, iAxis) — it needs no colour or alpha of its own, because a
+ *  null has no clusters to be coloured by.
  *
  *  `iFlags` is `DynamicDrawUsage`: both the search lane and the channel lane are
  *  rewritten from the CPU (~800 KB per re-upload at 50K points, once per query
@@ -64,6 +75,11 @@ export const CHANNEL_MISSING = -3.4e38;
 /** Points with no value for the active channel. Deliberately off-ramp and
  *  desaturated: it can be mistaken for neither end of the scale. */
 const NOT_MEASURED_RGB: [number, number, number] = [0.34, 0.35, 0.40];
+
+/** The null cloud's alpha. Low enough to read as a ghost behind the real
+ *  points, high enough that a null which is NOT inside the real cloud is
+ *  impossible to miss — which is the case the whole apparatus exists for. */
+const GHOST_ALPHA = 0.09;
 
 /** Deterministic cluster hue: golden-ratio scramble so neighbors differ. */
 export function clusterColor(cid: number): [number, number, number] {
@@ -124,6 +140,12 @@ export class PointsLayer {
    *  the window to the knot must not re-stretch the ramp under it, or every
    *  screenshot would show a "full range" of colour whatever it contained. */
   readonly uChannel = uniform(new THREE.Vector4(0, 1, 0, 1));
+  /** 0 = the map's own layout, 1 = laid out on the active direction. The third
+   *  leg of the position blend: `mix(mix(pos2, pos3, uMorph), axis, uAxis)`. */
+  readonly uAxis = uniform(0);
+  /** ghost visibility multiplier, 0–1. The ghost mesh is also gated on
+   *  `uAxis`, so a null can never be on screen while the axis is not. */
+  readonly uGhost = uniform(1);
 
   private material: THREE.SpriteNodeMaterial;
   private idSprite: THREE.Sprite | null = null;
@@ -133,7 +155,14 @@ export class PointsLayer {
   private iPos2!: ReturnType<typeof instancedBufferAttribute<"vec2">>;
   private iPos3!: ReturnType<typeof instancedBufferAttribute<"vec3">>;
   private iFlags!: ReturnType<typeof instancedBufferAttribute<"vec4">>;
+  private iAxis!: ReturnType<typeof instancedBufferAttribute<"vec4">>;
   private count: number;
+  private ghostSprite: THREE.Sprite | null = null;
+  // (realX, realY, nullX, nullY) per instance, world units. Every lane starts
+  // at the point's own map position, so an unset axis is the identity blend
+  // rather than a cloud collapsed on the origin.
+  private axisArray: Float32Array;
+  private axisAttr: THREE.InstancedBufferAttribute;
   // (noise, confidence, searchMatch, channelValue) — see the buffer-budget note
   // at the top of this file. CPU-writable: setMatches() rewrites lane z and
   // setChannel() rewrites lane w.
@@ -175,6 +204,19 @@ export class PointsLayer {
     this.flagsAttr = new THREE.InstancedBufferAttribute(flags, 4);
     this.flagsAttr.setUsage(THREE.DynamicDrawUsage);
     const iFlags = instancedBufferAttribute<"vec4">(this.flagsAttr, "vec4");
+    const axisArr = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      const x = columns.pos2[i * 2] ?? 0;
+      const y = columns.pos2[i * 2 + 1] ?? 0;
+      axisArr[i * 4] = x;
+      axisArr[i * 4 + 1] = y;
+      axisArr[i * 4 + 2] = x;
+      axisArr[i * 4 + 3] = y;
+    }
+    this.axisArray = axisArr;
+    this.axisAttr = new THREE.InstancedBufferAttribute(axisArr, 4);
+    this.axisAttr.setUsage(THREE.DynamicDrawUsage);
+    this.iAxis = instancedBufferAttribute<"vec4">(this.axisAttr, "vec4");
     const iNoise = iFlags.x;
     const iConf = iFlags.y;
     const iMatch = iFlags.z;
@@ -262,8 +304,15 @@ export class PointsLayer {
    *  `uPulse.w` is 0 at rest, which zeroes the whole term, so a session that
    *  never casts renders the identical expression it did before the rig existed.
    */
-  private positionExpression(): ReturnType<typeof vec3> {
-    const base = mix(vec3(this.iPos2, 0), this.iPos3, this.uMorph);
+  private positionExpression(lane: "real" | "null" = "real"): ReturnType<typeof vec3> {
+    // Three-way blend. The 2-D↔3-D morph first, then the whole of that eases
+    // toward the direction layout — which is flat, so z fades out with it and
+    // an axis reached from the flythrough lands in the same picture as one
+    // reached from the map. `uAxis` at 0 leaves the expression bit-identical
+    // to the two-way blend it replaced.
+    const morphed = mix(vec3(this.iPos2, 0), this.iPos3, this.uMorph);
+    const axisXY = lane === "real" ? this.iAxis.xy : this.iAxis.zw;
+    const base = mix(morphed, vec3(axisXY, 0), this.uAxis);
     const offset = base.xy.sub(this.uPulse.xy);
     const dist = offset.length();
     // The ray outward from the origin. Guarded because a point sitting exactly
@@ -332,6 +381,74 @@ export class PointsLayer {
     this.uChannel.value.y = hi;
   }
 
+  /** Load the direction layout: `n × 4` of (realX, realY, nullX, nullY) in
+   *  world units, as built by `scene/axisLayout.ts`. `null` puts the axis away
+   *  and returns every lane to the point's own map position. */
+  setAxis(positions: Float32Array | null, pos2?: Float32Array): void {
+    const a = this.axisArray;
+    if (!positions) {
+      if (pos2) {
+        for (let i = 0; i < this.count; i++) {
+          const x = pos2[i * 2] ?? 0;
+          const y = pos2[i * 2 + 1] ?? 0;
+          a[i * 4] = x;
+          a[i * 4 + 1] = y;
+          a[i * 4 + 2] = x;
+          a[i * 4 + 3] = y;
+        }
+        this.axisAttr.needsUpdate = true;
+      }
+      this.uAxis.value = 0;
+      return;
+    }
+    a.set(positions.subarray(0, Math.min(a.length, positions.length)));
+    this.axisAttr.needsUpdate = true;
+  }
+
+  /** Move the blend. 0 is the map, 1 is the direction layout. */
+  setAxisT(t: number): void {
+    this.uAxis.value = Math.min(1, Math.max(0, t));
+  }
+
+  /** Show or hide the null cloud. */
+  setGhost(visible: boolean): void {
+    this.uGhost.value = visible ? 1 : 0;
+  }
+
+  /** The null's own point cloud: the same points, laid out on a random unit
+   *  direction instead of the chosen one.
+   *
+   *  It is drawn faint, in one flat off-ramp colour, and it fades in with the
+   *  axis — so it is present in every frame in which an axis makes a claim
+   *  (R5), and absent from every frame in which none does. It carries no
+   *  cluster colour because a null has no clusters: colouring it like the real
+   *  cloud would invite reading structure into a random projection.
+   */
+  createGhostMesh(): THREE.Sprite {
+    const material = new THREE.SpriteNodeMaterial({
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+    });
+    material.positionNode = this.positionExpression("null");
+    material.scaleNode = this.uSize.mul(this.uScale).mul(0.85);
+    material.colorNode = vec3(...NOT_MEASURED_RGB);
+    const d = uv().sub(0.5).length();
+    const disc = d.smoothstep(0.18, 0.5).oneMinus();
+    const gate = select(
+      this.iFlags.x.greaterThan(0.5),
+      this.uNoiseVis,
+      this.iFlags.y.step(this.uConfFloor),
+    );
+    material.opacityNode = disc.mul(GHOST_ALPHA).mul(gate).mul(this.uAxis).mul(this.uGhost);
+    const sprite = new THREE.Sprite(material);
+    sprite.count = this.count;
+    sprite.frustumCulled = false;
+    this.ghostSprite = sprite;
+    return sprite;
+  }
+
   /** Companion sprite that renders every point's instance index as a 24-bit
    *  RGB id (offset by 1; 0 = background) — the id-buffer 3D picker renders
    *  this into an offscreen target and reads one pixel. Shares this layer's
@@ -375,6 +492,10 @@ export class PointsLayer {
     // destroyed" every frame and a blank atlas after a dataset switch. The
     // per-instance data lives on the material's TSL nodes, freed by dispose().
     this.material.dispose();
+    if (this.ghostSprite) {
+      (this.ghostSprite.material as THREE.Material).dispose();
+      this.ghostSprite = null;
+    }
     if (this.idSprite) {
       (this.idSprite.material as THREE.Material).dispose();
       this.idSprite = null;

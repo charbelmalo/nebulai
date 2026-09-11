@@ -6,6 +6,7 @@
  *  (and through it all 25 interp drivers), the Sidebar, the legend and the
  *  search panel are not in its graph at all. */
 
+import { AxisRail } from "../AxisRail";
 import { ComparePanel, CompareTransport } from "../ComparePanel";
 import { GuidePage } from "../GuidePage";
 import { HandRig } from "../HandRig";
@@ -29,6 +30,9 @@ function MapPanels() {
       {view === "compare" ? <ComparePanel /> : <LegendCard />}
       {view === "compare" && <CompareTransport />}
       {view === "atlas" && <SearchPanel />}
+      {/* The axis rail renders nothing at all for a map with no
+          `directions.json` — it is not a disabled panel, it is absent. */}
+      {view === "atlas" && <AxisRail />}
       {/* Hand control steers the AtlasDriver and nothing else, so the console
           appears with the view it can actually drive. */}
       {view === "atlas" && <HandRig />}

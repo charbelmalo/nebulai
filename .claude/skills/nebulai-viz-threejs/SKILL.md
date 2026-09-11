@@ -63,6 +63,32 @@ traps and patterns, hardest-won first.
   GLSL but not WGSL. Write `1 - smoothstep(0.72, 1.0, d)`.
 - Morph = `positionNode: mix(pos2Attr, pos3Attr, uMorph)` with a single
   `uniform(0)` driven by an eased tween — no geometry rebuild.
+- **The atlas blend is three-way, not two.** Phase 1 added a direction axis on
+  top of the 2-D↔3-D morph:
+  `mix(mix(vec3(iPos2,0), iPos3, uMorph), vec3(axisXY,0), uAxis)`. The axis is
+  a LAYOUT STATE, not a `viewMode` — `viewMode` stays `"atlas"` throughout
+  (R1), and the whole thing is driven by two uniforms with no rebuild.
+  Real and null lanes are packed into ONE vec4 attribute `iAxis`
+  `(axisPar, axisOrth, nullPar, nullOrth)` and swizzled `.xy` / `.zw`, because
+  after this the sprite material binds **7** of the 8 vertex buffers (quad,
+  iPos2, iPos3, iColor, iAlpha, iFlags, iAxis) — two more scalar attributes
+  would have silently exceeded the budget. The ghost mesh reuses the same
+  buffers and binds 5.
+- **Anything that computes a position on the CPU must share that expression.**
+  The 2-D kdbush picker is INVALID the moment `uAxis > 0` (points are no longer
+  where `pos2` says), so hover routes to the id-buffer picker whenever
+  `morph > 0.02 || axisT > 0.02`, and tooltips/lasso go through
+  `blendedPosition()` in `viewer/src/scene/axisLayout.ts` — the CPU mirror of
+  the node graph, unit-tested against it. A second, "obviously equivalent"
+  copy of the blend is how the app ends up naming a different token than the
+  one under the cursor.
+- **The real cloud and its null share one ruler.** `axisLayout()` takes the
+  extents over the union of both columns. Normalising each cloud to its own
+  extent makes every random direction look exactly as structured as the real
+  one, which is the single thing the ghost exists to disprove. Points with no
+  measured projection stay at their map position and are counted — sliding
+  them to 0 would place them mid-axis, which is a confident claim about a
+  point nobody measured.
 - Share one 256×1 ramp `DataTexture` between points/beams/badges so colors
   can't drift from the CSS gradient (`tokens.ts` is unit-test-synced with
   `tokens.css`).

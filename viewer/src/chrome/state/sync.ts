@@ -29,6 +29,7 @@
 import { appStore } from "../../app/store";
 import { $appearance } from "./appearance";
 import {
+  $axis,
   $channel,
   $compare,
   $compareData,
@@ -62,6 +63,7 @@ appStore.subscribe((st) => {
   if (st.mapQuery !== $mapQuery.value) $mapQuery.value = st.mapQuery;
   if (st.toggles !== $toggles.value) $toggles.value = st.toggles;
   if (st.channel !== $channel.value) $channel.value = st.channel;
+  if (st.axis !== $axis.value) $axis.value = st.axis;
   if (st.settings !== $settings.value) $settings.value = st.settings;
   if (st.appearance !== $appearance.value) $appearance.value = st.appearance;
   if (st.probing !== $probing.value) $probing.value = st.probing;

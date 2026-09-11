@@ -1022,3 +1022,225 @@
   font-style: italic;
 }
 
+
+/* ── the direction axis rail (phase 1) ────────────────────────────────────
+   Docked under the search panel on the left. Everything here is gated on the
+   map actually having a `directions.json` whose projections are in this map's
+   channels and this map's space — a map without one renders no rail, rather
+   than a rail with an empty scale.
+
+   The histogram is two stacked paths on ONE ruler: the null's ghost behind,
+   the real projection in front. They are never auto-scaled apart, so a null
+   that sits inside the real distribution genuinely does. */
+
+.axis-rail {
+  position: absolute;
+  z-index: 6;
+  left: 16px;
+  bottom: 16px;
+  width: 300px;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--glass);
+  backdrop-filter: blur(14px);
+}
+
+.axis-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.axis-title {
+  margin: 0;
+  color: var(--text);
+  font: 600 11px/1.2 var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.axis-count {
+  color: var(--text-faint);
+  font: 400 9.5px/1.4 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.axis-card {
+  margin-top: 10px;
+}
+
+.axis-hist {
+  display: block;
+  width: 100%;
+  height: 72px;
+}
+
+/* the ghost is drawn first and filled, never outlined: an outline reads as a
+   second series, and this is a control */
+.axis-hist-null {
+  fill: rgb(244 245 247 / 14%);
+}
+
+.axis-hist-real {
+  fill: rgb(77 141 255 / 46%);
+  stroke: rgb(77 141 255 / 90%);
+  stroke-width: 0.7;
+}
+
+.axis-range {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-faint);
+  font: 400 9px/1.6 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.axis-controls {
+  margin-top: 8px;
+}
+
+.axis-slider {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.axis-slider input[type="range"] {
+  width: 100%;
+}
+
+.axis-slider-k {
+  color: var(--text-faint);
+  font: 400 9px/1.6 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.axis-ghost-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--text-dim);
+  font: 400 10px/1.5 var(--font-ui);
+  cursor: pointer;
+}
+
+.axis-claim {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font: 400 10px/1.55 var(--font-ui);
+}
+
+.axis-claim-map {
+  color: var(--text-faint);
+}
+
+.axis-drops {
+  margin: 10px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--hairline);
+  list-style: none;
+}
+
+.axis-drop {
+  margin-bottom: 6px;
+}
+
+.axis-drop-id {
+  display: block;
+  color: var(--text-dim);
+  font: 400 10px/1.5 var(--font-mono);
+}
+
+.axis-drop-why {
+  display: block;
+  color: var(--text-faint);
+  font: 400 9.5px/1.5 var(--font-ui);
+}
+
+/* ── a direction from two selections ──────────────────────────────────────
+   The gesture lives in the panel; the arithmetic lives where the vectors do.
+   The command block is mono with tabular digits and wraps rather than
+   scrolling, because a command you cannot read whole is a command you cannot
+   trust. */
+
+.dirmake-block {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.dirmake-head {
+  margin-bottom: 6px;
+  color: var(--text-faint);
+  font: 500 9.5px/1.4 var(--font-ui);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.dirmake-side {
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.dirmake-k {
+  color: var(--text-faint);
+  font: 500 9.5px/1.6 var(--font-mono);
+}
+
+.dirmake-v {
+  overflow: hidden;
+  color: var(--text-dim);
+  font: 400 10px/1.5 var(--font-ui);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dirmake-btn {
+  padding: 2px 7px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-dim);
+  font: 500 9.5px/1.4 var(--font-ui);
+  cursor: pointer;
+}
+
+.dirmake-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+
+.dirmake-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.dirmake-cmd {
+  overflow-wrap: anywhere;
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-ctl);
+  background: rgb(0 0 0 / 22%);
+  color: var(--text);
+  font: 400 9.5px/1.55 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: pre-wrap;
+}
+
+.dirmake-note {
+  margin: 5px 0 0;
+  color: var(--text-faint);
+  font: 400 9.5px/1.5 var(--font-ui);
+}

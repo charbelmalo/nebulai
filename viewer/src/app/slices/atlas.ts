@@ -70,6 +70,19 @@ export interface ChannelUI {
   window: [number, number] | null;
 }
 
+export interface AxisUI {
+  /** direction id from the dataset's `directions.json`, or null = no axis */
+  directionId: string | null;
+  /** 0 = the map's own layout, 1 = points laid out on the direction.
+   *  Continuous, because the interesting reading is the transition: which
+   *  clusters travel together and which come apart. */
+  t: number;
+  /** draw the null's positions as well as the real one's (R5). Defaults ON,
+   *  and turning it off is a deliberate act the rail keeps visible — the
+   *  ghost is the control, not a decoration. */
+  showNull: boolean;
+}
+
 export interface AtlasSlice {
   datasets: DatasetEntry[];
   datasetId: string | null;
@@ -85,6 +98,7 @@ export interface AtlasSlice {
   mapQuery: MapQuery;
   toggles: Toggles;
   channel: ChannelUI;
+  axis: AxisUI;
 
   setDatasets(d: DatasetEntry[]): void;
   setDataset(id: string, d: Dataset, opts?: { keepTour?: boolean }): void;
@@ -102,6 +116,9 @@ export interface AtlasSlice {
   setToggle(key: keyof Toggles, value: boolean): void;
   setChannel(id: string | null, window?: [number, number] | null): void;
   setChannelWindow(window: [number, number] | null): void;
+  setAxisDirection(id: string | null): void;
+  setAxisT(t: number): void;
+  setAxisNull(show: boolean): void;
 }
 
 export const createAtlasSlice: StateCreator<AppState, [], [], AtlasSlice> = (set, get) => ({
@@ -119,6 +136,7 @@ export const createAtlasSlice: StateCreator<AppState, [], [], AtlasSlice> = (set
   mapQuery: { text: "", results: null },
   toggles: { territories: true, labels: true, beams: true, halos: true, noise: true, legend: true },
   channel: { id: null, window: null },
+  axis: { directionId: null, t: 0, showNull: true },
 
   setDatasets: (datasets) => set({ datasets }),
   // unit ids are per-model, so a dataset switch clears the cross-view pick too
@@ -140,6 +158,9 @@ export const createAtlasSlice: StateCreator<AppState, [], [], AtlasSlice> = (set
       // pythia-70m are different numbers in different units, so a window
       // carried across would filter on a scale that no longer exists
       channel: { id: null, window: null },
+      // a direction is a vector in ONE model's space; carrying an axis across
+      // a dataset switch would lay out the new map on the old model's basis
+      axis: { directionId: null, t: 0, showNull: true },
     }),
   setCompareData: (compareData) => set({ compareData }),
   setCompareState: (state) => set((s) => ({ compare: { ...s.compare, state } })),
@@ -175,4 +196,13 @@ export const createAtlasSlice: StateCreator<AppState, [], [], AtlasSlice> = (set
   // distances by a norm's bounds
   setChannel: (id, window = null) => set({ channel: { id, window: id ? window : null } }),
   setChannelWindow: (window) => set((s) => ({ channel: { ...s.channel, window } })),
+  // Choosing a direction does NOT move the map: t stays where it is when you
+  // swap one axis for another (you are comparing two axes at the same blend),
+  // but clearing the axis snaps t back to 0 — an axis-less layout at t = 0.7
+  // would be the map claiming a position it has no direction to justify.
+  setAxisDirection: (directionId) =>
+    set((s) => ({ axis: { ...s.axis, directionId, t: directionId ? s.axis.t : 0 } })),
+  setAxisT: (t) =>
+    set((s) => ({ axis: { ...s.axis, t: Math.min(1, Math.max(0, t)) } })),
+  setAxisNull: (showNull) => set((s) => ({ axis: { ...s.axis, showNull } })),
 });

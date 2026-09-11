@@ -243,3 +243,260 @@ export const GROKKING: Tour = register({
     },
   ],
 });
+
+/* ── 4. The direction axis (P1) ───────────────────────────────────────────── */
+
+/** The one direction on the gpt2 map that can actually be drawn.
+ *
+ *  Every number quoted below was printed by `nebulai direction make gpt2
+ *  --a-cluster 200 --b-cluster 190` and the `direction project` that followed
+ *  it, and is stored in `out/gpt2/directions.json` + the four `proj.*` channels
+ *  in `out/gpt2/channels.json`. The cluster titles are the map's own, from the
+ *  namer recorded at build time.
+ *
+ *  The episode exists because the interesting part of this direction is the
+ *  part that says it is not a special axis of the map. In-sample it looks
+ *  enormous; held out it stays enormous; across all 49,857 points it is
+ *  indistinguishable from a random unit vector. All three are true at once and
+ *  each answers a different question — which is exactly why the rail prints all
+ *  three rather than the flattering one. */
+const NAMES_DIRECTION = "male-minus-female-names";
+
+export const A_DIRECTION: Tour = register({
+  id: "a-direction",
+  label: "A direction, and the thing that says it is one",
+  blurb:
+    "Two clusters of GPT-2's vocabulary make an axis. Its null cloud, its held-out " +
+    "refit and its map-wide overlap disagree about how impressive that is.",
+  model: "gpt2",
+  manifest: {
+    dataset: "gpt2",
+    directions: [NAMES_DIRECTION],
+    channels: [
+      "proj.male-minus-female-names",
+      "proj.male-minus-female-names.orth",
+      "proj.male-minus-female-names.null",
+      "proj.male-minus-female-names.null.orth",
+    ],
+    space: "W_E.centered",
+    unavailable:
+      "Needs the direction and its four projection channels " +
+      "(`nebulai direction make gpt2 --a-cluster 200 --b-cluster 190`).",
+  },
+  steps: [
+    {
+      page: "map",
+      dataset: "gpt2",
+      channel: null,
+      axis: null,
+      title: "Two clusters, picked by the map itself",
+      caption:
+        "Cluster #200 is 307 tokens the namer titled “male given names”; cluster #190 " +
+        "is 242 titled “female English given names”. Neither was chosen by hand — " +
+        "HDBSCAN found them in the 10-D reduction and the namer labelled them before " +
+        "any of this existed. The direction about to be drawn is nothing more than the " +
+        "average of the first minus the average of the second, in W_E.centered, " +
+        "normalised to length 1.",
+    },
+    {
+      page: "map",
+      dataset: "gpt2",
+      axis: NAMES_DIRECTION,
+      axisT: 1,
+      title: "The map, laid out on that one number",
+      caption:
+        "Horizontal is now each token's projection onto the direction; vertical is what " +
+        "is left over, the distance in the 767 dimensions it does not name. The pale " +
+        "cloud behind is the same 49,857 tokens on a RANDOM unit direction, drawn from " +
+        "the same seed every time. It is not decoration: without it the picture below " +
+        "has no scale, and any direction at all would look like structure.",
+    },
+    {
+      page: "map",
+      dataset: "gpt2",
+      axis: NAMES_DIRECTION,
+      axisT: 1,
+      mapSelection: { kind: "cluster", id: 200 },
+      title: "On its own two sets, it is huge",
+      caption:
+        "Fit on those two clusters and scored on them, the separation is Cohen's " +
+        "d = +8.18 with histogram overlap 0.0000 — but a difference of means scored on " +
+        "the points it was fitted to cannot be small, so that number is not evidence. " +
+        "Refit on half of each cluster and scored on the other half (n = 154/121), it " +
+        "is d = +8.30, overlap 0.0000. THAT is a measurement, and it is the number the " +
+        "rail prints first. Thirty-two random unit directions on the same two sets " +
+        "average |d| 0.35, p95 0.89.",
+    },
+    {
+      page: "map",
+      dataset: "gpt2",
+      axis: NAMES_DIRECTION,
+      axisT: 1,
+      mapSelection: null,
+      title: "Across the whole vocabulary, it is nothing",
+      caption:
+        "Now the other question: is this a special axis of the MAP? Over all 49,857 " +
+        "points, real against null gives Cohen's d −0.0022 and histogram overlap 0.834. " +
+        "That is the ghost sitting almost exactly on top of the real distribution — an " +
+        "axis that separates two named clusters superbly and the rest of GPT-2's " +
+        "vocabulary not at all. Both readings are correct. A rail that showed only the " +
+        "first would be selling you the direction.",
+    },
+    {
+      page: "map",
+      dataset: "gpt2",
+      axis: NAMES_DIRECTION,
+      axisT: 0.35,
+      title: "What this did and did not show",
+      caption:
+        "The extremes are readable: most negative are “ Feminist”, “ Jeanne”, “ Nina”, " +
+        "“ Lena”, “ actresses”; most positive are “James”, “ Player”, “ Mike”, " +
+        "“ David”, “ John”. So the axis is doing roughly what its name says on the " +
+        "tokens it was built from. What has NOT been shown is that GPT-2 uses this " +
+        "direction for anything: no forward pass was run and nothing was intervened on. " +
+        "This is a statement about a weight matrix, not about behaviour.",
+    },
+  ],
+});
+
+/* ── 5. Refusal, and the direction that could not be imported ─────────────── */
+
+/** Episode #7 of the plan, told as what actually happened.
+ *
+ *  The intent was to import a published refusal direction. `nebulai direction
+ *  survey gpt2` fetches the real artefacts and prints the real widths, and the
+ *  answer is the same for every one of them: they do not fit. So the episode
+ *  narrates the refusal, then narrates the direction computed instead — and
+ *  then reports the held-out number that says that direction does not
+ *  generalise either.
+ *
+ *  Note the manifest asks only that the direction EXIST. It is not renderable
+ *  and never will be: it lives in `resid.L8` and this map's points live in
+ *  `W_E.centered`. Requiring renderability would hide the episode behind the
+ *  very rule it is about. */
+export const REFUSAL_STYLE: Tour = register({
+  id: "refusal-style",
+  label: "The direction that would not fit",
+  blurb:
+    "Every published refusal direction is 2,048–5,120 numbers wide. GPT-2 is 768. " +
+    "What happens when you compute one yourself instead.",
+  model: "gpt2",
+  manifest: {
+    dataset: "gpt2",
+    directions: ["refusal-style-v1-L8"],
+    space: "resid.L8",
+    unavailable:
+      "Needs the fitted direction (`nebulai direction prompts gpt2 --layer 8`).",
+  },
+  steps: [
+    {
+      page: "map",
+      dataset: "gpt2",
+      channel: null,
+      axis: null,
+      title: "Five published directions, none of them 768 wide",
+      caption:
+        "andyrdt/refusal_direction at commit 9d852fae ships five: gemma-2b-it (2,048 " +
+        "numbers, layer 10, token position −2, ‖v‖ 10.06), qwen-1_8b-chat (2,048, L15, " +
+        "26.29), llama-2-7b-chat-hf (4,096, L14, 16.21), meta-llama-3-8b-instruct " +
+        "(4,096, L12, 3.62) and yi-6b-chat (4,096, L20, 36.51). The Among Us probes are " +
+        "5,120 (phi-4, L20). GPT-2 is 768 wide. Not one of them fits, and the importer " +
+        "refuses each by name and by number rather than reshaping anything.",
+    },
+    {
+      page: "map",
+      dataset: "gpt2",
+      title: "Two repositories that publish no vector at all",
+      caption:
+        "safety-research/persona_vectors (commit b8e0f044) ships the SCRIPT that would " +
+        "extract seven trait vectors and the prompt sets to extract them with — but no " +
+        "extracted vector. safety-research/assistant-axis (commit a9896195) ships the " +
+        "pipeline and 275 role prompts, and no activations and no PCA basis. So the " +
+        "“assistant axis” episode this app was supposed to carry has no artefact to " +
+        "carry it: its card below says so rather than approximating one.",
+    },
+    {
+      page: "map",
+      dataset: "gpt2",
+      title: "So: 64 frozen prompts, and GPT-2's own residual stream",
+      caption:
+        "`nebulai direction prompts gpt2 --layer 8` runs 32 instructions a " +
+        "safety-trained assistant would decline and 32 matched ordinary ones through " +
+        "GPT-2, takes the residual row after block 8 at the last token, and subtracts " +
+        "the two means. The prompt set lives in the repository with a sha " +
+        "(0a8bde6b61fc) that travels inside the direction's protocol string, so the " +
+        "data cannot move under the number. GPT-2 is a base model: it has no refusal " +
+        "behaviour to find. This is method M on data D and is never called “the " +
+        "refusal direction”.",
+    },
+    {
+      page: "map",
+      dataset: "gpt2",
+      title: "In sample d = +2.01. Held out, d = −0.03.",
+      caption:
+        "On the 64 rows it was fitted to, the direction separates them at Cohen's " +
+        "d = +2.01, overlap 0.156 — against random unit directions averaging |d| 0.33 " +
+        "on the same rows. Refit on 16 of each and scored on the other 16: d = −0.03. " +
+        "Layer 11 tells the same story (+2.17 in sample, −0.09 held out). A " +
+        "768-dimensional difference of means over 32 points per side fits the noise " +
+        "almost perfectly, and the held-out column is the only reason anyone would " +
+        "know. Both are in directions.json; neither is hidden.",
+    },
+    {
+      page: "map",
+      dataset: "gpt2",
+      axis: null,
+      title: "And it cannot be an axis here anyway",
+      caption:
+        "The direction is in resid.L8 — a residual stream, mid-forward-pass. The points " +
+        "on this map are rows of W_E.centered — a static weight matrix. Projecting one " +
+        "onto the other would produce 49,857 perfectly ordinary-looking numbers that " +
+        "mean nothing, so the rail refuses it and prints the reason instead of the " +
+        "figure. The honest result of this episode is a refusal, a null result, and " +
+        "two numbers that were worth measuring to find that out.",
+    },
+  ],
+});
+
+/* ── 6. The assistant axis, which has no artefact ─────────────────────────── */
+
+/** Registered deliberately, and deliberately never ready.
+ *
+ *  The plan called for an assistant-axis episode: 275 role prompts in PC1×PC2
+ *  of a persona space. safety-research/assistant-axis publishes the pipeline
+ *  and the prompts and NOT the activations, so there is nothing to plot that
+ *  would not be a re-derivation dressed as the original. Registering the
+ *  episode with a manifest naming the artefact it needs makes the app say that
+ *  in its own UI, with the repo and commit, instead of the episode simply not
+ *  existing and nobody ever learning why. §2.2: absence is stated. */
+export const ASSISTANT_AXIS: Tour = register({
+  id: "assistant-axis",
+  label: "The assistant axis (no artefact published)",
+  blurb:
+    "275 role prompts in a persona PCA — an episode that cannot be told, because the " +
+    "upstream repository publishes the pipeline and not the numbers.",
+  model: "gpt2",
+  manifest: {
+    dataset: "gpt2",
+    directions: ["assistant-axis-pc1"],
+    // PCA over persona activations, never UMAP (D4) — recorded here so that if
+    // the artefact ever appears, the space it must be tagged with is already
+    // written down and cannot quietly become a UMAP layout.
+    space: "persona-pca.assistant-axis",
+    unavailable:
+      "safety-research/assistant-axis at commit a9896195 ships extraction code and " +
+      "275 role prompts, and no activations and no PCA basis; and the axis is defined " +
+      "for an instruction-tuned model, not for gpt2. Re-deriving it here and calling " +
+      "it the published axis would be a different measurement under the same name.",
+  },
+  steps: [
+    {
+      page: "map",
+      dataset: "gpt2",
+      title: "Nothing to show",
+      caption:
+        "This episode has no steps that can run. It is listed so that the reason is " +
+        "visible: the artefact it would quote does not exist in public.",
+    },
+  ],
+});

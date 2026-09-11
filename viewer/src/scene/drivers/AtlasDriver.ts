@@ -16,12 +16,20 @@ import {
   channelValue,
   ensureChannels,
 } from "../../data/channels";
+import {
+  $directions,
+  axisChannels,
+  directionsFor,
+  directionsLoaded,
+  ensureDirections,
+} from "../../data/directions";
 import { clusterDegrees, clusterNeighbors, formatCount, knnNeighbors } from "../../data/edges";
 import type { Dataset } from "../../data/loader";
 import { hullRadius, type ClusterHull } from "../../data/hulls";
 import { BeamBadges, type BadgeSpec } from "../../chrome/BeamBadges";
 import { Tooltip } from "../../chrome/Tooltip";
 import { Camera2D, easeInOutCubic } from "../camera2d";
+import { axisLayout, blendedPosition, mapBounds } from "../axisLayout";
 import { LabelOverlay } from "../labels/LabelOverlay";
 import { BeamsLayer, type Beam } from "../layers/BeamsLayer";
 import { FlareLayer } from "../layers/FlareLayer";
@@ -185,6 +193,11 @@ export class AtlasDriver implements SceneDriver {
   // pos2's PCA frame, so the camera flies to re-frame during the morph)
   private morph = 0;
   private morphTween: { from: number; to: number; start: number; duration: number } | null = null;
+  /** the packed (realXY, nullXY) buffer for the active direction, and which
+   *  direction built it — rebuilt only when the id changes, because it is an
+   *  O(n) pass over 50K points and the rail's slider runs at 60 Hz. */
+  private axisBuffer: { id: string; positions: Float32Array; nMissing: number } | null = null;
+  private ghost: THREE.Sprite | null = null;
   private bounds3: [number, number, number, number] | null = null;
   /** max xy dimension of the pos3 cloud — scale reference for 3D fly-to */
   private extent3 = 1;
@@ -259,6 +272,7 @@ export class AtlasDriver implements SceneDriver {
           this.cameraDirty = true;
         }
         if (s.channel !== prev.channel) this.applyChannel();
+        if (s.axis !== prev.axis) this.applyAxis();
       }),
     );
     // the sidecar arrives after the map; re-apply when it lands so a
@@ -266,6 +280,15 @@ export class AtlasDriver implements SceneDriver {
     this.unsubscribes.push(
       $channels.subscribe(() => {
         this.applyChannel();
+        // the axis gate reads channels too (D2: the projection channel must
+        // exist and carry the direction's space), so a late channels.json can
+        // turn a refused axis into a renderable one
+        this.applyAxis();
+      }),
+    );
+    this.unsubscribes.push(
+      $directions.subscribe(() => {
+        this.applyAxis();
       }),
     );
   }
@@ -304,6 +327,69 @@ export class AtlasDriver implements SceneDriver {
     }
     this.points.setChannel(ch.values, [lo, hi], s.channel.window ?? [lo, hi]);
     this.cameraDirty = true;
+  }
+
+  /** Push the store's direction choice at the points layer.
+   *
+   *  Everything that decides whether an axis may be drawn lives in
+   *  `data/directions.ts` — R5's "no null, no figure" and D2's space match —
+   *  so this method only ever asks. A direction that the gate refuses is
+   *  cleared from the STORE as well as from the shader, for the same reason
+   *  `applyChannel()` clears a stale channel id: a permalink that keeps
+   *  writing `axis=…` for an axis nobody can see is a link that promises a
+   *  picture it cannot open. Only once the sidecar has actually been read —
+   *  before that the id is not wrong, it is early.
+   */
+  private applyAxis(): void {
+    if (!this.points || !this.dataset) return;
+    const s = appStore.getState();
+    const id = s.axis.directionId;
+    const found = id ? axisChannels(s.datasetId, id) : null;
+    if (!found) {
+      this.axisBuffer = null;
+      this.points.setAxis(null, this.dataset.columns.pos2);
+      this.points.setAxisT(0);
+      this.cameraDirty = true;
+      if (id && directionsLoaded(s.datasetId) && channelsLoaded(s.datasetId)) {
+        // only drop an id this map genuinely cannot draw — not one whose
+        // sidecars are still in flight
+        const known = directionsFor(s.datasetId)?.byId.has(id) ?? false;
+        if (!known || axisChannels(s.datasetId, id) === null) s.setAxisDirection(null);
+      }
+      return;
+    }
+    const cols = this.dataset.columns;
+    if (!this.axisBuffer || this.axisBuffer.id !== found.direction.id) {
+      const built = axisLayout(
+        cols.pos2,
+        found.par.values,
+        found.orth.values,
+        found.nullPar.values,
+        found.nullOrth.values,
+        mapBounds(cols.pos2),
+      );
+      this.axisBuffer = {
+        id: found.direction.id,
+        positions: built.positions,
+        nMissing: built.nMissing,
+      };
+      this.points.setAxis(built.positions);
+    }
+    this.points.setAxisT(s.axis.t);
+    this.points.setGhost(s.axis.showNull);
+    this.cameraDirty = true;
+  }
+
+  /** The live axis blend, 0 when no direction is engaged (exposed for tests
+   *  and for the hover mix, which must use exactly this number). */
+  get axisT(): number {
+    return this.axisBuffer ? appStore.getState().axis.t : 0;
+  }
+
+  /** How many points had no measured projection and therefore did not move.
+   *  null when no axis is engaged — "not asked", not "none". */
+  get axisUnmeasured(): number | null {
+    return this.axisBuffer ? this.axisBuffer.nMissing : null;
   }
 
   /** Every measured scalar for one point, in reading order: the channel the
@@ -417,6 +503,12 @@ export class AtlasDriver implements SceneDriver {
     this.applyFit();
 
     // GPU id-buffer picking for the 3D flythrough (2D stays on kdbush)
+    // the null cloud, added BEFORE the real points so the ghost sits behind
+    // them; it is invisible until an axis is engaged (its opacity is gated on
+    // the same uAxis the blend uses, so it cannot outlive the claim)
+    this.ghost = this.points.createGhostMesh();
+    this.scene.add(this.ghost);
+
     this.idPicker = new IdPicker(this.renderer, this.points.createIdMesh());
     if (this.cam.viewportW >= 2) this.idPicker.setSize(this.cam.viewportW, this.cam.viewportH);
 
@@ -454,6 +546,9 @@ export class AtlasDriver implements SceneDriver {
     const dsId = appStore.getState().datasetId;
     if (dsId) ensureChannels(dsId, ds.columns.count);
     this.applyChannel();
+    if (dsId) ensureDirections(dsId);
+    this.axisBuffer = null;
+    this.applyAxis();
 
     // fresh layers start flat — re-apply the current dimension morph
     this.applyMorph();
@@ -1082,7 +1177,9 @@ export class AtlasDriver implements SceneDriver {
     if (w < 2 || h < 2) return [];
     const cols = this.dataset.columns;
     const n = cols.count;
-    const flat = this.morph <= 0.02;
+    // "flat" means the points really are at their pos2 coordinates — which an
+    // engaged axis blend is precisely not, so it takes the projected path too
+    const flat = this.morph <= 0.02 && this.axisT <= 0.02;
     const inside: number[] = [];
     for (let i = 0; i < n; i++) {
       let x: number | undefined;
@@ -1091,11 +1188,15 @@ export class AtlasDriver implements SceneDriver {
         x = cols.pos2[i * 2];
         y = cols.pos2[i * 2 + 1];
       } else {
-        const p = this.projectWorld(
-          cols.pos3[i * 3] ?? 0,
-          cols.pos3[i * 3 + 1] ?? 0,
-          cols.pos3[i * 3 + 2] ?? 0,
+        const wp = blendedPosition(
+          i,
+          cols.pos2,
+          cols.pos3,
+          this.morph,
+          this.axisBuffer?.positions ?? null,
+          this.axisT,
         );
+        const p = this.projectWorld(wp[0], wp[1], wp[2]);
         if (!p) continue;
         if (contains(p[0] / w, p[1] / h)) inside.push(i);
         continue;
@@ -1464,7 +1565,11 @@ export class AtlasDriver implements SceneDriver {
 
   private updateHover(): void {
     if (!this.mouse || !this.dataset || this.dragging) return;
-    if (this.morph > 0.02) {
+    // The 2-D picker is a kdbush over `pos2`. Once the axis blend is engaged
+    // the points are no longer at those coordinates, so hover goes to the
+    // id-buffer picker — which shares `positionExpression()` and therefore
+    // sees exactly the blended positions on screen.
+    if (this.morph > 0.02 || this.axisT > 0.02) {
       this.updateHover3D();
       return;
     }
@@ -1485,7 +1590,7 @@ export class AtlasDriver implements SceneDriver {
     void this.idPicker
       .pick(this.camera, mouse.x, mouse.y)
       .then((i) => {
-        if (this.dataset !== dataset || this.morph <= 0.02) return;
+        if (this.dataset !== dataset || (this.morph <= 0.02 && this.axisT <= 0.02)) return;
         this.setHovered(i >= 0 && i < dataset!.columns.count ? i : null);
       })
       .finally(() => {
@@ -1525,18 +1630,22 @@ export class AtlasDriver implements SceneDriver {
     }
   }
 
-  /** Screen position of point i at the current morph, via the render camera
-   *  (matches the GPU's mix(pos2, pos3, uMorph) exactly). */
+  /** Screen position of point i at the current morph AND axis blend, via the
+   *  render camera — the same three-way mix the vertex node does:
+   *  `mix(mix(pos2, pos3, uMorph), axis, uAxis)`. Shared with the shader
+   *  through `scene/axisLayout.ts` so a tooltip can never point at where a
+   *  point used to be. */
   private projectPoint(i: number): [number, number] {
     const cols = this.dataset!.columns;
-    const m = this.morph;
-    return (
-      this.projectWorld(
-        cols.pos2[i * 2]! * (1 - m) + cols.pos3[i * 3]! * m,
-        cols.pos2[i * 2 + 1]! * (1 - m) + cols.pos3[i * 3 + 1]! * m,
-        cols.pos3[i * 3 + 2]! * m,
-      ) ?? [-9999, -9999] // clipped — park the tooltip far offscreen
+    const [x, y, z] = blendedPosition(
+      i,
+      cols.pos2,
+      cols.pos3,
+      this.morph,
+      this.axisBuffer?.positions ?? null,
+      this.axisT,
     );
+    return this.projectWorld(x, y, z) ?? [-9999, -9999]; // clipped — park it offscreen
   }
 
   /** Project a morph-space world position through the render camera; null
