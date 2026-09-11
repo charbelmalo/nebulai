@@ -70,6 +70,7 @@ import {
   orderedCategoryRgb,
   type SessionsAppearance,
   type SessionsAxisMode,
+  type SessionsProjection,
 } from "./appearance";
 
 /** Cube side in world units; the cube is centred on the origin. */
@@ -155,6 +156,31 @@ interface Axes {
   z: AxisScale;
 }
 
+/** One run's placement, as much of `placement.json` as the geometry needs.
+ *
+ *  Deliberately structural rather than an import of the store's `PlacementDoc`:
+ *  the driver must not grow a dependency on the app store's shape, and the two
+ *  facts it needs — where each turn landed, and which instrument put it there —
+ *  are the same in every producer of this document. */
+export interface RunPlacement {
+  /** R7: `pinned_model` | `text_embedder` | anything else, which draws weakest. */
+  placement_source?: string;
+  points: { index: number; coords: [number, number] }[];
+}
+
+/** How far the persona projection is from the usage one, and why the fade is a
+ *  fade. Emitted to the chrome so a panel can say what is on screen. */
+export interface ProjectionState {
+  projection: SessionsProjection;
+  /** 0 = fully usage-space, 1 = fully persona-space. Mid-values only during
+   *  the cross-fade, never as a resting state — see `applyProjection`. */
+  mix: number;
+  /** turns with a coordinate in the persona space */
+  placed: number;
+  /** turns with none. They fade OUT rather than collapsing to the origin. */
+  unplaced: number;
+}
+
 export class SessionFieldDriver {
   onSelect: ((sel: TurnRef | null) => void) | null = null;
   onHover: ((sel: TurnRef | null) => void) | null = null;
@@ -220,6 +246,12 @@ export class SessionFieldDriver {
   private uPulse = uniform(0); // wavefront glow amount; 0 unless playing
   private uPulseWidth = uniform(PULSE_WIDTH);
   private uTrailPulse = uniform(0); // growing-tip trail boost; 0 unless playing
+  /** 1 while the trail's growth may be derived from its endpoints' X, 0 once
+   *  the persona projection has taken X over. In usage space X *is* the time
+   *  axis, so the shader can read the wavefront straight off the geometry; in
+   *  persona space X is PC1 and that arithmetic would be nonsense, so the
+   *  reveal moves to the CPU (see `applyProjection`). */
+  private uGrowth = uniform(1);
   /** per-instance legend dimming, CPU-written */
   private visArray = new Float32Array(0);
   private visAttr: THREE.InstancedBufferAttribute | null = null;
@@ -228,6 +260,36 @@ export class SessionFieldDriver {
   private focusAttr: THREE.InstancedBufferAttribute | null = null;
   /** which (session, destination turn) each trail segment belongs to */
   private trailKeys: TurnRef[] = [];
+
+  // ── projection (Attractors P2 / D4) ──────────────────────────────────────
+  // Two coordinate systems, held side by side rather than one recomputed on
+  // demand, because the switch between them is a CROSS-FADE and a cross-fade
+  // needs both endpoints at once. The fade is driven on the CPU: the field
+  // already binds 7 of WebGPU's 8 vertex buffers (see buildField), and a second
+  // position attribute would be the eighth with no headroom left for the
+  // trail's four, so the positions are lerped into the existing buffer instead.
+  private placements = new Map<string, RunPlacement>();
+  /** node i's usage-space position, flattened — the geometry buildField wrote. */
+  private posUsage = new Float32Array(0);
+  /** node i's persona-space position, or undefined for an unplaced turn. */
+  private posPersona = new Float32Array(0);
+  /** 1 where the node has a persona coordinate at all. */
+  private hasPersona = new Uint8Array(0);
+  private posAttr: THREE.InstancedBufferAttribute | null = null;
+  private trailStartAttr: THREE.InstancedBufferAttribute | null = null;
+  private trailEndAttr: THREE.InstancedBufferAttribute | null = null;
+  private trailUsage = { starts: new Float32Array(0), ends: new Float32Array(0) };
+  private trailPersona = { starts: new Float32Array(0), ends: new Float32Array(0) };
+  /** 1 where BOTH endpoints of the segment are placed. A segment with one end
+   *  placed is not half a path — it is a line to a coordinate we do not have. */
+  private trailHasPersona = new Uint8Array(0);
+  /** each segment's position in the run's order, 0..1 */
+  private trailSeq = new Float32Array(0);
+  /** 0 = usage, 1 = persona; strictly between only while fading. */
+  private projMix = 0;
+  private projTarget = 0;
+  private lastProjClock = 0;
+  onProjection: ((s: ProjectionState) => void) | null = null;
 
   // ── camera / interaction ───────────────────────────────────────────────
   private az = -0.62;
@@ -317,6 +379,32 @@ export class SessionFieldDriver {
     this.rebuild();
   }
 
+  /** Placements by session id, as written by `seer place`.
+   *
+   *  A turn absent from a run's `points` gets NO persona coordinate — not the
+   *  origin, not an interpolation between its neighbours. `place.py` already
+   *  refuses to invent one and records why it skipped; the geometry's job is
+   *  to honour that by fading the turn out as the persona projection comes in,
+   *  so a run that could only be half placed visibly loses half its path. */
+  setPlacements(placements: Record<string, RunPlacement> | Map<string, RunPlacement>): void {
+    this.placements =
+      placements instanceof Map ? new Map(placements) : new Map(Object.entries(placements));
+    this.rebuild();
+  }
+
+  /** What is on screen right now: which projection, how far through a fade, and
+   *  how many turns the persona space has no coordinate for. */
+  projectionState(): ProjectionState {
+    let placed = 0;
+    for (let i = 0; i < this.hasPersona.length; i++) if (this.hasPersona[i]) placed++;
+    return {
+      projection: this.cfg.projection,
+      mix: this.projMix,
+      placed,
+      unplaced: this.hasPersona.length - placed,
+    };
+  }
+
   /** Apply a full appearance config. Most knobs are uniforms or a cheap CPU
    *  pass and update in place; only an axis-mode change reshapes the field, so
    *  only that path rebuilds the geometry. */
@@ -334,6 +422,152 @@ export class SessionFieldDriver {
       prev.axisNewContext !== cfg.axisNewContext;
     if (axisChanged) this.rebuild();
     else this.cameraDirty = true;
+    if (prev.projection !== cfg.projection) this.startProjectionFade();
+  }
+
+  /** Begin (or reverse) the cross-fade toward `cfg.projection`.
+   *
+   *  A cross-fade, not a morph, and the distinction is the point: the usage
+   *  axes and the persona components share no unit, so every intermediate
+   *  position is a coordinate in no space at all. A morph invites the eye to
+   *  read the path it sweeps; a fast fade, with the field dimming through the
+   *  middle, reads as a cut between two pictures — which is what it is. */
+  private startProjectionFade(): void {
+    this.projTarget = this.cfg.projection === "persona" ? 1 : 0;
+    this.lastProjClock = performance.now();
+    if (this.cfg.projectionFade <= 0) {
+      this.projMix = this.projTarget;
+      this.applyProjection();
+    }
+    this.onProjection?.(this.projectionState());
+  }
+
+  /** Advance the fade and write the interpolated geometry.
+   *
+   *  Called every frame while `projMix !== projTarget`, and once more when they
+   *  meet so the resting state is exact. Both the motes and the trail ribbons
+   *  are rewritten: a trail left in usage space while its endpoints moved would
+   *  draw the path of neither projection. */
+  private advanceProjection(): void {
+    if (this.projMix === this.projTarget) return;
+    const now = performance.now();
+    const dt = Math.min((now - this.lastProjClock) / 1000, 0.1);
+    this.lastProjClock = now;
+    const step = dt / Math.max(this.cfg.projectionFade, 1e-3);
+    this.projMix =
+      this.projTarget > this.projMix
+        ? Math.min(this.projMix + step, this.projTarget)
+        : Math.max(this.projMix - step, this.projTarget);
+    this.applyProjection();
+    this.applyVisibility();
+    this.cameraDirty = true;
+    if (this.projMix === this.projTarget) this.onProjection?.(this.projectionState());
+  }
+
+  /** Write `posUsage → posPersona` at the current mix into the live buffers.
+   *
+   *  An unplaced turn keeps its usage position throughout and is faded out by
+   *  `applyVisibility` instead of being moved somewhere it does not belong. */
+  private applyProjection(): void {
+    const t = this.projMix;
+    const n = this.nodes.length;
+    if (this.posAttr && this.posUsage.length === n * 3) {
+      const arr = this.posAttr.array as Float32Array;
+      for (let i = 0; i < n; i++) {
+        const k = i * 3;
+        const w = this.hasPersona[i] ? t : 0;
+        arr[k] = this.posUsage[k]! + (this.posPersona[k]! - this.posUsage[k]!) * w;
+        arr[k + 1] = this.posUsage[k + 1]! + (this.posPersona[k + 1]! - this.posUsage[k + 1]!) * w;
+        arr[k + 2] = this.posUsage[k + 2]! + (this.posPersona[k + 2]! - this.posUsage[k + 2]!) * w;
+      }
+      this.posAttr.needsUpdate = true;
+    }
+    const m = this.trailHasPersona.length;
+    if (this.trailStartAttr && this.trailEndAttr && m > 0) {
+      const s = this.trailStartAttr.array as Float32Array;
+      const e = this.trailEndAttr.array as Float32Array;
+      // Once X stops being the time axis the shader cannot derive the reveal,
+      // so it is applied here: an unrevealed segment is collapsed to a point
+      // (zero area, invisible) and a segment older than `trailLength` turns
+      // behind the cursor is collapsed the same way. That is the time cursor
+      // "degrading to a trail parameter" — the transport still scrubs the run's
+      // ORDER, and nothing on screen claims a duration.
+      const head = this.playhead;
+      const tail = this.cfg.trailLength > 0 ? head - this.cfg.trailLength / Math.max(m, 1) : -1;
+      for (let i = 0; i < m; i++) {
+        const k = i * 3;
+        const w = this.trailHasPersona[i] ? t : 0;
+        for (let c = 0; c < 3; c++) {
+          s[k + c] =
+            this.trailUsage.starts[k + c]! +
+            (this.trailPersona.starts[k + c]! - this.trailUsage.starts[k + c]!) * w;
+          e[k + c] =
+            this.trailUsage.ends[k + c]! +
+            (this.trailPersona.ends[k + c]! - this.trailUsage.ends[k + c]!) * w;
+        }
+        if (t > 0) {
+          const seq = this.trailSeq[i] ?? 0;
+          if (seq > head || (tail >= 0 && seq < tail)) {
+            for (let c = 0; c < 3; c++) s[k + c] = e[k + c]!;
+          }
+        }
+      }
+      this.trailStartAttr.needsUpdate = true;
+      this.trailEndAttr.needsUpdate = true;
+    }
+    this.uGrowth.value = 1 - t;
+  }
+
+  /** Persona-space positions for every node, or a zero-filled buffer when no
+   *  placement is loaded.
+   *
+   *  PC1 and PC2 are the two axes the space actually has; the third is the
+   *  turn's ORDER in its run, normalised — which is why the frame labels it
+   *  "turn order" and never seconds. Both persona axes are scaled by ONE span
+   *  so the space keeps its aspect ratio: stretching PC2 to the box would make
+   *  a narrow second component look like a wide one. */
+  private computePersona(): void {
+    const n = this.nodes.length;
+    this.posPersona = new Float32Array(n * 3);
+    this.hasPersona = new Uint8Array(n);
+    if (n === 0 || this.placements.size === 0) return;
+
+    // index the placements once: run id → turn index → coords
+    const byRun = new Map<string, Map<number, [number, number]>>();
+    for (const [runId, doc] of this.placements) {
+      const m = new Map<number, [number, number]>();
+      for (const p of doc.points ?? []) m.set(p.index, p.coords);
+      byRun.set(runId, m);
+    }
+
+    let span = 0;
+    for (let i = 0; i < n; i++) {
+      const nd = this.nodes[i]!;
+      const c = byRun.get(nd.sessionId)?.get(nd.index);
+      if (!c) continue;
+      span = Math.max(span, Math.abs(c[0]), Math.abs(c[1]));
+    }
+    if (span <= 0) return;
+
+    // per-session turn order, for the third axis
+    const orderOf = new Map<string, Map<number, number>>();
+    for (const a of this.analyses) {
+      const m = new Map<number, number>();
+      const idx = a.turns.map((t) => t.index).sort((x, y) => x - y);
+      idx.forEach((v, i) => m.set(v, idx.length > 1 ? i / (idx.length - 1) : 0.5));
+      orderOf.set(a.id, m);
+    }
+
+    for (let i = 0; i < n; i++) {
+      const nd = this.nodes[i]!;
+      const c = byRun.get(nd.sessionId)?.get(nd.index);
+      if (!c) continue;
+      this.hasPersona[i] = 1;
+      const k = i * 3;
+      this.posPersona[k] = (c[0] / span) * HALF;
+      this.posPersona[k + 1] = (c[1] / span) * HALF;
+      this.posPersona[k + 2] = (orderOf.get(nd.sessionId)?.get(nd.index) ?? 0.5) * CUBE - HALF;
+    }
   }
 
   /** Honour the global Settings → bloom switch (webgpu rung only). */
@@ -576,6 +810,10 @@ export class SessionFieldDriver {
     const trailSegs: {
       a: THREE.Vector3;
       b: THREE.Vector3;
+      /** node array indices of the two endpoints, so the persona projection
+       *  can move the ribbon with the motes it joins */
+      ai: number;
+      bi: number;
       rgb: [number, number, number];
       sessionId: string;
       index: number;
@@ -585,6 +823,7 @@ export class SessionFieldDriver {
       const hue = sessionHue(ai);
       const graph = buildAgentGraph(a.turns);
       const posOf = new Map<number, THREE.Vector3>();
+      const nodeOf = new Map<number, number>();
       for (const raw of a.turns) {
         // a stored analysis can carry a category this build has no colour for
         // (written by another build; the raw transcript is never persisted, so
@@ -597,6 +836,7 @@ export class SessionFieldDriver {
           this.axes.y.toUnit(t.cacheRead) * CUBE - HALF,
           this.axes.z.toUnit(t.cacheWrite) * CUBE - HALF,
         );
+        nodeOf.set(t.index, this.nodes.length);
         this.nodes.push({
           sessionId: a.id,
           sessionName: a.name,
@@ -616,17 +856,37 @@ export class SessionFieldDriver {
       // the parent was inside that one tool call the whole time.
       for (const path of graph.paths) {
         let prev: THREE.Vector3 | null = null;
+        let prevNode = -1;
         for (const s of path.steps) {
           const pos = posOf.get(s.turn);
           if (!pos) continue;
-          if (prev) trailSegs.push({ a: prev, b: pos, rgb: hue, sessionId: a.id, index: s.turn });
+          if (prev)
+            trailSegs.push({
+              a: prev,
+              b: pos,
+              ai: prevNode,
+              bi: nodeOf.get(s.turn) ?? -1,
+              rgb: hue,
+              sessionId: a.id,
+              index: s.turn,
+            });
           prev = pos;
+          prevNode = nodeOf.get(s.turn) ?? -1;
         }
       }
     }
 
+    // the persona coordinates have to exist before the geometry is built: both
+    // builders capture the second endpoint of the cross-fade as they go
+    this.computePersona();
     this.buildField(maxTools);
     this.buildTrail(trailSegs);
+    // a rebuild while the persona projection is showing must come back in the
+    // persona projection — a silent snap to usage space would look like the
+    // data moved
+    this.projTarget = this.cfg.projection === "persona" ? 1 : 0;
+    this.projMix = this.projTarget;
+    this.applyProjection();
     this.applyVisibility();
     this.layoutLabels();
 
@@ -673,7 +933,14 @@ export class SessionFieldDriver {
       packB[i * 2 + 1] = (node.pos.x + HALF) / CUBE; // seq: unit time position
     }
 
-    const iPos = instancedBufferAttribute<"vec3">(new THREE.InstancedBufferAttribute(pos, 3), "vec3");
+    // kept and marked dynamic: the persona cross-fade lerps into this exact
+    // buffer rather than binding a second position attribute (the 8-buffer
+    // ceiling; see the note above)
+    this.posUsage = pos.slice();
+    const posBuf = new THREE.InstancedBufferAttribute(pos, 3);
+    posBuf.setUsage(THREE.DynamicDrawUsage);
+    this.posAttr = posBuf;
+    const iPos = instancedBufferAttribute<"vec3">(posBuf, "vec3");
     const iA = instancedBufferAttribute<"vec4">(new THREE.InstancedBufferAttribute(packA, 4), "vec4");
     const iB = instancedBufferAttribute<"vec2">(new THREE.InstancedBufferAttribute(packB, 2), "vec2");
     this.visAttr = new THREE.InstancedBufferAttribute(this.visArray, 1);
@@ -828,6 +1095,10 @@ export class SessionFieldDriver {
     segs: {
       a: THREE.Vector3;
       b: THREE.Vector3;
+      /** node array indices of the two endpoints; -1 when the endpoint is not a
+       *  node this build drew, which makes the segment unplaceable. */
+      ai: number;
+      bi: number;
       rgb: [number, number, number];
       sessionId: string;
       index: number;
@@ -851,8 +1122,39 @@ export class SessionFieldDriver {
       colors[i * 3 + 1] = s.rgb[1];
       colors[i * 3 + 2] = s.rgb[2];
     }
-    const aStart = instancedBufferAttribute<"vec3">(new THREE.InstancedBufferAttribute(starts, 3), "vec3");
-    const aEnd = instancedBufferAttribute<"vec3">(new THREE.InstancedBufferAttribute(ends, 3), "vec3");
+    // the persona endpoints of every segment, captured alongside the usage
+    // ones. A segment is only placed when BOTH its ends are: half a placed
+    // segment is a line drawn to a coordinate we do not have.
+    this.trailUsage = { starts: starts.slice(), ends: ends.slice() };
+    const pStarts = starts.slice();
+    const pEnds = ends.slice();
+    this.trailHasPersona = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      const s = segs[i]!;
+      const ok = s.ai >= 0 && s.bi >= 0 && this.hasPersona[s.ai] === 1 && this.hasPersona[s.bi] === 1;
+      this.trailHasPersona[i] = ok ? 1 : 0;
+      if (!ok) continue;
+      for (let c = 0; c < 3; c++) {
+        pStarts[i * 3 + c] = this.posPersona[s.ai * 3 + c]!;
+        pEnds[i * 3 + c] = this.posPersona[s.bi * 3 + c]!;
+      }
+    }
+    this.trailPersona = { starts: pStarts, ends: pEnds };
+    // each segment's place in the run's order, taken from its END node's unit
+    // position on the usage time axis — the same number the shader derives from
+    // X in usage space, kept here so the CPU can apply the reveal once X stops
+    // meaning time.
+    this.trailSeq = new Float32Array(n);
+    for (let i = 0; i < n; i++) this.trailSeq[i] = (ends[i * 3]! + HALF) / CUBE;
+
+    const startBuf = new THREE.InstancedBufferAttribute(starts, 3);
+    const endBuf = new THREE.InstancedBufferAttribute(ends, 3);
+    startBuf.setUsage(THREE.DynamicDrawUsage);
+    endBuf.setUsage(THREE.DynamicDrawUsage);
+    this.trailStartAttr = startBuf;
+    this.trailEndAttr = endBuf;
+    const aStart = instancedBufferAttribute<"vec3">(startBuf, "vec3");
+    const aEnd = instancedBufferAttribute<"vec3">(endBuf, "vec3");
     const aColor = instancedBufferAttribute<"vec3">(new THREE.InstancedBufferAttribute(colors, 3), "vec3");
     this.focusArray = new Float32Array(n);
     this.focusAttr = new THREE.InstancedBufferAttribute(this.focusArray, 1);
@@ -891,12 +1193,18 @@ export class SessionFieldDriver {
     const seqStart = aStart.x.add(HALF).div(CUBE);
     const seqEnd = aEnd.x.add(HALF).div(CUBE);
     const frac = this.uPlayhead.sub(seqStart).div(seqEnd.sub(seqStart).max(1e-4)).clamp(0, 1);
-    const grown = t.min(frac);
+    // uGrowth fades this term out as the persona projection takes X over; the
+    // reveal is then applied on the CPU by collapsing unrevealed segments.
+    const fracEff = mix(float(1), frac, this.uGrowth);
+    const grown = t.min(fracEff);
     material.positionNode = aStart.add(dir.mul(grown)).add(perp.mul(across.mul(this.uTrailWidth)));
     material.colorNode = aColor;
     const edgeFade = across.abs().mul(2).smoothstep(0.2, 1).oneMinus();
     // a brief brightening while a segment is actively growing (0 < frac < 1)
-    const activeTip = frac.smoothstep(0, 0.12).mul(frac.smoothstep(0.88, 1).oneMinus()).mul(this.uTrailPulse);
+    const activeTip = fracEff
+      .smoothstep(0, 0.12)
+      .mul(fracEff.smoothstep(0.88, 1).oneMinus())
+      .mul(this.uTrailPulse);
     material.opacityNode = edgeFade.mul(
       mix(this.uTrailAlpha, this.uTrailFocusAlpha, aFocus).add(activeTip),
     );
@@ -1054,7 +1362,13 @@ export class SessionFieldDriver {
     if (!this.visAttr) return;
     const dim = this.cfg.dimmedOpacity;
     for (let i = 0; i < this.nodes.length; i++) {
-      this.visArray[i] = this.hiddenCats.has(this.nodes[i]!.turn.category) ? dim : 1;
+      const v = this.hiddenCats.has(this.nodes[i]!.turn.category) ? dim : 1;
+      // A turn the persona space has no coordinate for FADES OUT as that
+      // projection comes in. It is not moved to the origin and it is not left
+      // where the usage axes put it: both would draw a placement that does not
+      // exist. `place.py` recorded why each one was skipped; the panel says so
+      // in words, and the geometry says so by being visibly shorter.
+      this.visArray[i] = this.hasPersona[i] ? v : v * (1 - this.projMix);
     }
     this.visAttr.needsUpdate = true;
     this.cameraDirty = true;
@@ -1082,6 +1396,7 @@ export class SessionFieldDriver {
       this.cameraDirty = false;
     }
 
+    this.advanceProjection();
     this.advancePlayback();
     this.maybePick();
 
@@ -1113,6 +1428,9 @@ export class SessionFieldDriver {
       return;
     }
     this.uPlayhead.value = this.playhead;
+    // in the persona projection the shader cannot derive the trail's reveal
+    // from X, so the CPU pass has to run with the moving cursor
+    if (this.projMix > 0) this.applyProjection();
     this.updateSweep();
     this.emitPlayback(false);
   }
@@ -1423,6 +1741,22 @@ export class SessionFieldDriver {
     this.visAttr = null;
     this.focusAttr = null;
     this.trailKeys = [];
+    // The projection arrays are parallel to nodes/segments, and buildTrail
+    // early-returns when a rebuild produces no segments — so anything left here
+    // would be LAST run's coordinates indexed by this run's turns. Drop them
+    // with the geometry they described. `placements` survives on purpose: it is
+    // the fetched document, not derived geometry, and the next rebuild re-reads
+    // it.
+    this.posUsage = new Float32Array(0);
+    this.posPersona = new Float32Array(0);
+    this.hasPersona = new Uint8Array(0);
+    this.posAttr = null;
+    this.trailStartAttr = null;
+    this.trailEndAttr = null;
+    this.trailUsage = { starts: new Float32Array(0), ends: new Float32Array(0) };
+    this.trailPersona = { starts: new Float32Array(0), ends: new Float32Array(0) };
+    this.trailHasPersona = new Uint8Array(0);
+    this.trailSeq = new Float32Array(0);
     if (this.probe) this.probe.visible = false;
     this.tooltipEl && (this.tooltipEl.style.display = "none");
   }

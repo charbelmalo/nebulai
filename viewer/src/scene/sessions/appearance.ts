@@ -21,6 +21,14 @@ import { CATEGORY_ORDER, type ToolCategory } from "../../chrome/sessionlog";
  *  when the spread is mild. All three are honest — invertible, monotone. */
 export type SessionsAxisMode = "auto" | "linear" | "eased";
 
+/** Which coordinate system a turn is drawn in.
+ *
+ *  These are two different instruments, not two views of one measurement:
+ *  `usage` is derived from what the run *cost* (time, context read, context
+ *  written), `persona` from what the model's residual stream *was*. A point
+ *  cannot be halfway between them, which is why the switch cross-fades. */
+export type SessionsProjection = "usage" | "persona";
+
 export interface SessionsAppearance {
   // ── Field: how a single mote looks ──────────────────────────────────────
   /** Base sprite size multiplier (× the driver's world-unit base). */
@@ -75,6 +83,21 @@ export interface SessionsAppearance {
   axisContext: SessionsAxisMode;
   axisNewContext: SessionsAxisMode;
 
+  // ── Projection: which coordinate system the turns are drawn in (D4) ─────
+  /** `usage` is the field's own derived space (time × context × new context);
+   *  `persona` places each turn by projecting the pinned model's residual
+   *  stream through a frozen persona basis. Switching CROSS-FADES rather than
+   *  morphing: the two spaces share no axis, so a tween between them would draw
+   *  a continuous path through coordinates that mean nothing. See
+   *  SESSIONSEER-LIVE.md §1. */
+  projection: SessionsProjection;
+  /** Seconds the cross-fade takes. 0 cuts. */
+  projectionFade: number;
+  /** In the persona projection the time axis is gone, so the playback cursor
+   *  degrades to a trail parameter: how many turns of history stay lit behind
+   *  the cursor. 0 means the whole path stays lit. */
+  trailLength: number;
+
   // ── Colours ─────────────────────────────────────────────────────────────
   /** Category hue at full strength, as hex — the single source the legend, the
    *  inspector and the field all read, so a chip and a node can never differ. */
@@ -128,6 +151,10 @@ export const DEFAULT_SESSIONS_APPEARANCE: SessionsAppearance = {
   axisTime: "auto",
   axisContext: "auto",
   axisNewContext: "auto",
+
+  projection: "usage",
+  projectionFade: 0.7,
+  trailLength: 0,
 
   categoryColors: { ...DEFAULT_CATEGORY_COLORS },
   neutralColor: DEFAULT_NEUTRAL,

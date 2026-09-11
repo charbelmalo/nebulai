@@ -42,7 +42,19 @@ import {
 } from "./sessionStore";
 import { ColorRow, RadioRow, SelectRow, SliderRow, Tabs, TextRow, ToggleRow } from "@psychix/viz/controls";
 import { CATEGORY_ORDER } from "./sessionlog";
-import type { SessionsAppearance, SessionsAxisMode } from "../scene/sessions/appearance";
+import type {
+  SessionsAppearance,
+  SessionsAxisMode,
+  SessionsProjection,
+} from "../scene/sessions/appearance";
+import {
+  isSelectableAsDefault,
+  loadSpace,
+  loadSpaceIndex,
+  verdictLabel,
+  verdictNote,
+  type PersonaSpace,
+} from "../data/persona";
 
 const TABS = ["General", "Appearance", "Model Probing", "Snapshot", "Sessions", "Data", "About"];
 
@@ -437,6 +449,156 @@ const AXIS_MODES = [
   { value: "eased", label: "Eased (asinh)" },
 ];
 
+/** The persona coordinate system (Attractors P2 / D4), as a Settings block.
+ *
+ *  Three knobs and one picker, and the picker is the one with a rule attached.
+ *  A persona space whose PC1 does not clear its label-permutation null may be
+ *  LOADED and looked at — that is how you find out it failed — but it can never
+ *  become the default coordinate system, and choosing it here is an explicit
+ *  act with the verdict printed next to it (§3.3). `isSelectableAsDefault` in
+ *  `data/persona.ts` is the single place that rule lives; this component asks
+ *  it rather than comparing the verdict string itself. */
+function SessionsProjectionControls(props: {
+  a: SessionsAppearance;
+  set: <K extends keyof SessionsAppearance>(key: K, value: SessionsAppearance[K]) => void;
+}) {
+  const { a, set } = props;
+  const sess = $sessions.value;
+  const spaces = useSignal<PersonaSpace[] | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    loadSpaceIndex()
+      .then(async (ids) => {
+        const loaded: PersonaSpace[] = [];
+        for (const { spaceId } of ids) {
+          try {
+            loaded.push(await loadSpace(spaceId));
+          } catch {
+            // a space that will not parse is not a space; it is skipped rather
+            // than listed as an option that cannot be selected
+          }
+        }
+        if (live) spaces.value = loaded;
+      })
+      .catch(() => {
+        if (live) spaces.value = [];
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const list = spaces.value;
+  const chosen = list?.find((s) => s.spaceId === sess.personaSpaceId) ?? null;
+  const havePersona = !!list && list.length > 0;
+
+  return (
+    <SettingsSection
+      title="Projection — which coordinate system a turn is drawn in"
+      hint="Usage space is derived from what the run cost (time × context read × context written). Persona space projects the pinned model's residual stream through a frozen basis. They share no axis, so switching cross-fades rather than morphing — a tween between them would draw a continuous path through coordinates that mean nothing."
+    >
+      <SelectRow
+        label="Coordinate system"
+        value={a.projection}
+        options={[
+          { value: "usage", label: "Usage (time × context × new context)" },
+          {
+            value: "persona",
+            label: "Persona (frozen basis)",
+            disabled: !havePersona || !sess.personaSpaceId,
+            hint: !havePersona
+              ? "no persona space in this deploy — run `nebulai persona build`"
+              : !sess.personaSpaceId
+                ? "pick a space below first"
+                : undefined,
+          },
+        ]}
+        onChange={(v) => set("projection", v as SessionsProjection)}
+      />
+
+      {list === null ? (
+        <p class="settings-hint">reading persona spaces…</p>
+      ) : list.length === 0 ? (
+        <p class="settings-hint">
+          This deploy ships no persona space. Build one with <code>nebulai persona build</code> —
+          until then the field draws in usage space only, which is not a fallback persona axis, it
+          is a different measurement.
+        </p>
+      ) : (
+        <>
+          <SelectRow
+            label="Persona space"
+            value={sess.personaSpaceId ?? ""}
+            options={[
+              { value: "", label: "none" },
+              ...list.map((s) => ({
+                value: s.spaceId,
+                label: `${s.spaceId} — ${verdictLabel(s.control.verdict)}`,
+              })),
+            ]}
+            onChange={(v) => {
+              const space = list.find((s) => s.spaceId === v) ?? null;
+              appStore.getState().setPersonaSpace(space ? space.spaceId : null, space?.control.verdict);
+              // a space that did not clear its null is viewable but is never
+              // the coordinate system the field comes back in by default
+              if (!space || !isSelectableAsDefault(space)) set("projection", "usage");
+            }}
+          />
+          {chosen && (
+            <>
+              <p class="settings-hint">
+                <b>{chosen.model}</b> @ <code>{chosen.revision.slice(0, 12)}</code> · layer{" "}
+                {chosen.layer} · prompt set <code>{chosen.promptSet.id}</code> (
+                {chosen.promptSet.n} prompts, sha <code>{chosen.promptSet.sha256.slice(0, 12)}</code>
+                )
+              </p>
+              <p class="settings-hint">{verdictNote(chosen)}</p>
+              {!isSelectableAsDefault(chosen) && (
+                <p class="settings-hint">
+                  Because this space did not clear its null it cannot be the default coordinate
+                  system. You can still switch to it above — the verdict travels with it and the
+                  field says so — but nothing drawn in it is a claim about personas.
+                </p>
+              )}
+              {chosen.control.crossCheck && (
+                <p class="settings-hint">
+                  A second control was run and kept: {chosen.control.crossCheck.method} returned{" "}
+                  {chosen.control.crossCheck.verdict}. {chosen.control.crossCheck.note}
+                </p>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      <SliderRow
+        label="Cross-fade"
+        value={a.projectionFade}
+        min={0}
+        max={3}
+        step={0.05}
+        format={(v) => (v === 0 ? "cut" : `${v.toFixed(2)} s`)}
+        onChange={(v) => set("projectionFade", v)}
+      />
+      <SliderRow
+        label="Trail length (persona)"
+        value={a.trailLength}
+        min={0}
+        max={400}
+        step={1}
+        format={(v) => (v === 0 ? "whole path" : `${Math.round(v)} turns`)}
+        onChange={(v) => set("trailLength", Math.round(v))}
+      />
+      <p class="settings-hint">
+        Persona space has no time axis, so the playback cursor degrades to a trail parameter: how
+        many turns of history stay lit behind it. The transport still scrubs turn order — it just
+        stops being a position.
+      </p>
+    </SettingsSection>
+  );
+}
+
 function SessionsAppearanceControls(props: { a: SessionsAppearance }) {
   const a = props.a;
   const set = <K extends keyof SessionsAppearance>(key: K, value: SessionsAppearance[K]) =>
@@ -648,6 +810,12 @@ function SessionsAppearanceControls(props: { a: SessionsAppearance }) {
           onChange={(v) => set("axisNewContext", v as SessionsAxisMode)}
         />
       </SettingsSection>
+
+      {/* ── Attractors P2 / D4: the persona coordinate system ──────────────
+          A clearly delimited block. Everything it touches is either an
+          `appearance.sessions` knob or the sessions slice's persona fields;
+          nothing above or below is reflowed. */}
+      <SessionsProjectionControls a={a} set={set} />
 
       <SettingsSection
         title="Colours — category hues"

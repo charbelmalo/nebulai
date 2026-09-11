@@ -13,6 +13,7 @@
 import { signal, useSignal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
 import { appStore } from "../app/store";
+import { AbsorbingPanel } from "./AbsorbingPanel";
 import {
   buildAgentGraph,
   CATEGORY_ORDER,
@@ -128,6 +129,11 @@ export function SessionsPage() {
             </div>
           )}
           {active.length > 0 && <SessionsStats sessions={active} />}
+          {/* The absorbing-state readout is about the MODEL, not about any
+              loaded transcript, so it renders whether or not a session is on
+              the plot — and renders nothing at all when this deploy ships no
+              study. See chrome/AbsorbingPanel.tsx. */}
+          <AbsorbingPanel />
         </div>
       </div>
     </div>
@@ -229,6 +235,16 @@ function SessionPlot(props: { analyses: SessionAnalysis[] }) {
       .filter((ax) => desc.curved[ax])
       .map((ax) => ({ x: "time", y: "context", z: "new-context" })[ax]);
   }, [appearance, ready.value]);
+
+  // Attractors P2 / D5 — placements from `seer place`, keyed by session id.
+  // Pushed separately from the analyses because a placement arrives over HTTP
+  // long after the transcript was parsed, and a run that has none must still
+  // draw: the field keeps its usage geometry and simply has no persona space
+  // to fade into.
+  const placements = $sessions.value.placements;
+  useEffect(() => {
+    if (ready.value) driverRef.current?.setPlacements(placements);
+  }, [placements, ready.value]);
 
   // global Settings › bloom toggle (webgpu rung only)
   const bloom = $settings.value.bloom;
