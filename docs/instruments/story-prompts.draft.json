@@ -1,0 +1,194 @@
+{
+  "format_version": 1,
+  "name": "story-prompts.draft",
+  "status": "draft",
+  "notes": "DRAFT STRAW MAN — GENERATIVE-VARIANCE-PLAN.md §10 item 2. Thirty prompts, all ids in the reserved `draft_` namespace. Unlike the question set this file has no freeze mechanism to defend it, because the prompt set is NOT a one-way door: §6.5 is explicit that everything other than the instrument — model, trial count, prompt set — is reversible and may be extended later without invalidating earlier data. The `draft_` ids are here so that a prompt id can never be mistaken for a question id in an artifact that carries both.\n\nWHAT THE PROMPT SET IS FOR. W1's primary statistic is within-prompt dispersion against between-prompt dispersion (§7). That design puts one requirement on this file above all others: the prompts must differ from each other in ways a story's ARCHITECTURE can register. Thirty prompts that all say 'write a short story about X' vary only in subject matter, and a between-prompt variance computed over them would measure topic, then be read as structure. So the set below varies along four preregistered axes and records which axis each prompt loads on, in `strata`, so that the analysis can report between-prompt dispersion per axis rather than pooling axes it never separated.\n\nTHE AXES. (a) CONSTRAINT — how much of the story's shape the prompt fixes, from an open invitation to a specified form. (b) FRAME — whether the prompt names a narrating situation (a letter, a deposition, a recollection). (c) SUBJECT — ordinary domestic material against remote or speculative material, held as the axis we EXPECT to matter least architecturally and therefore the useful control. (d) LENGTH CUE — whether a length is named, since a named length is the cheapest known lever on scene/summary balance.\n\nWHAT IS NOT SETTLED. The wording below has not been piloted. §10 item 3 (a pilot gold set) needs a paid generator and no key exists in this environment, so no story has been generated from any of these prompts and no prompt here has been checked for the failure that matters most: a prompt that collapses the model into one template, which would make within-prompt dispersion an artifact of the prompt rather than a property of the generator. Expect revision.\n\nSCORING NOTE. Prompts are sent verbatim. A prompt edited between trials is a different prompt and must be given a new id, or the two sets of trials become unpoolable for the same reason §6.5 gives about questions.",
+  "axes": {
+    "constraint": "how much of the story's shape the prompt fixes: open | moderate | specified",
+    "frame": "whether a narrating situation is named: none | named",
+    "subject": "domestic | remote",
+    "length_cue": "absent | present"
+  },
+  "prompts": [
+    {
+      "id": "draft_p01_open_domestic",
+      "text": "Write a short story.",
+      "strata": {"constraint": "open", "frame": "none", "subject": "domestic", "length_cue": "absent"},
+      "note": "The floor of the constraint axis. Whatever architecture appears here is the generator's default, and every other prompt's between-prompt distance is most usefully read against this one."
+    },
+    {
+      "id": "draft_p02_open_length",
+      "text": "Write a short story of about 500 words.",
+      "strata": {"constraint": "open", "frame": "none", "subject": "domestic", "length_cue": "present"},
+      "note": "Differs from p01 in exactly one token group. Pairs with p01 to isolate the length-cue axis."
+    },
+    {
+      "id": "draft_p03_open_remote",
+      "text": "Write a short story set somewhere no one lives.",
+      "strata": {"constraint": "open", "frame": "none", "subject": "remote", "length_cue": "absent"},
+      "note": "Subject axis against p01 with constraint held open."
+    },
+    {
+      "id": "draft_p04_object_domestic",
+      "text": "Write a short story in which a household object changes hands.",
+      "strata": {"constraint": "moderate", "frame": "none", "subject": "domestic", "length_cue": "absent"},
+      "note": "A single event constraint. Should raise draft_causal_chain without fixing form."
+    },
+    {
+      "id": "draft_p05_object_remote",
+      "text": "Write a short story in which an object outlives the people who made it.",
+      "strata": {"constraint": "moderate", "frame": "none", "subject": "remote", "length_cue": "absent"},
+      "note": "Matched to p04 on constraint; expected to move draft_time_span sharply, which is the point."
+    },
+    {
+      "id": "draft_p06_arrival",
+      "text": "Write a short story that begins with an arrival.",
+      "strata": {"constraint": "moderate", "frame": "none", "subject": "domestic", "length_cue": "absent"},
+      "note": "Constrains the opening only. Tests whether a fixed opening propagates into the rest of the architecture or stays local."
+    },
+    {
+      "id": "draft_p07_departure",
+      "text": "Write a short story that ends with a departure.",
+      "strata": {"constraint": "moderate", "frame": "none", "subject": "domestic", "length_cue": "absent"},
+      "note": "The mirror of p06. The pair is the cleanest available test of whether constraining the end constrains more than constraining the beginning."
+    },
+    {
+      "id": "draft_p08_two_characters",
+      "text": "Write a short story with exactly two characters who want different things.",
+      "strata": {"constraint": "moderate", "frame": "none", "subject": "domestic", "length_cue": "absent"},
+      "note": "Directly loads draft_central_conflict_type_internal toward 0 and draft_dialogue_differentiation upward."
+    },
+    {
+      "id": "draft_p09_one_character",
+      "text": "Write a short story with one character and no dialogue.",
+      "strata": {"constraint": "specified", "frame": "none", "subject": "domestic", "length_cue": "absent"},
+      "note": "Forces draft_dialogue_proportion to 0 and makes draft_dialogue_differentiation missing by construction — a useful check that the scorer OMITS rather than answering 1."
+    },
+    {
+      "id": "draft_p10_letter",
+      "text": "Write a short story in the form of a letter that is never sent.",
+      "strata": {"constraint": "specified", "frame": "named", "subject": "domestic", "length_cue": "absent"},
+      "note": "Frame axis. Should drive draft_frame_narrative to 1 and is one of the few prompts expected to."
+    },
+    {
+      "id": "draft_p11_deposition",
+      "text": "Write a short story in the form of a statement given to an official who is not named.",
+      "strata": {"constraint": "specified", "frame": "named", "subject": "domestic", "length_cue": "absent"},
+      "note": "A second frame, deliberately unlike p10 in register, so the frame axis is not one prompt's idiosyncrasy."
+    },
+    {
+      "id": "draft_p12_recollection",
+      "text": "Write a short story told by someone remembering it many years later.",
+      "strata": {"constraint": "moderate", "frame": "named", "subject": "domestic", "length_cue": "absent"},
+      "note": "Frame plus an implicit time span. Expected to interact with draft_chronology_linear."
+    },
+    {
+      "id": "draft_p13_overheard",
+      "text": "Write a short story that consists mostly of a conversation overheard by someone who does not take part in it.",
+      "strata": {"constraint": "specified", "frame": "named", "subject": "domestic", "length_cue": "absent"},
+      "note": "Pushes draft_dialogue_proportion high and draft_narrative_distance_stable into an unusual regime."
+    },
+    {
+      "id": "draft_p14_single_room",
+      "text": "Write a short story that takes place entirely in one room.",
+      "strata": {"constraint": "specified", "frame": "none", "subject": "domestic", "length_cue": "absent"},
+      "note": "A unity-of-place constraint; the natural partner of p15."
+    },
+    {
+      "id": "draft_p15_single_hour",
+      "text": "Write a short story that takes place in under an hour.",
+      "strata": {"constraint": "specified", "frame": "none", "subject": "domestic", "length_cue": "absent"},
+      "note": "A unity-of-time constraint. Should pin draft_time_span to 1-2; if it does not, that is a finding about instruction-following, not about architecture, and must be reported as such."
+    },
+    {
+      "id": "draft_p16_lifetime",
+      "text": "Write a short story that covers a whole life.",
+      "strata": {"constraint": "specified", "frame": "none", "subject": "domestic", "length_cue": "absent"},
+      "note": "The opposite pole of p15 on the same instrument question. The p15/p16 pair is the sanity check that draft_time_span discriminates at all."
+    },
+    {
+      "id": "draft_p17_no_conflict",
+      "text": "Write a short story in which nothing goes wrong.",
+      "strata": {"constraint": "specified", "frame": "none", "subject": "domestic", "length_cue": "absent"},
+      "note": "Designed to produce legitimate 0s on draft_stakes_specified and draft_climax_present. A prompt whose honest answer is 'absent' is necessary, or the instrument's binary questions never see their other value."
+    },
+    {
+      "id": "draft_p18_reversal",
+      "text": "Write a short story in which someone changes their mind about something that matters to them.",
+      "strata": {"constraint": "moderate", "frame": "none", "subject": "domestic", "length_cue": "absent"},
+      "note": "Targets draft_character_change and, through it, draft_change_shown_not_asserted."
+    },
+    {
+      "id": "draft_p19_secret",
+      "text": "Write a short story in which a character knows something the reader learns only at the end.",
+      "strata": {"constraint": "specified", "frame": "none", "subject": "domestic", "length_cue": "absent"},
+      "note": "Targets draft_foreshadowing_present, which is otherwise likely to be rare across the corpus."
+    },
+    {
+      "id": "draft_p20_repetition",
+      "text": "Write a short story in which the same action happens three times with different results.",
+      "strata": {"constraint": "specified", "frame": "none", "subject": "domestic", "length_cue": "absent"},
+      "note": "Targets draft_motif_repetition and draft_obstacle_escalation together."
+    },
+    {
+      "id": "draft_p21_work",
+      "text": "Write a short story about someone doing their job.",
+      "strata": {"constraint": "open", "frame": "none", "subject": "domestic", "length_cue": "absent"},
+      "note": "Subject-axis material chosen for being architecturally uninformative on purpose: it is the control against which the constraint axis is read."
+    },
+    {
+      "id": "draft_p22_weather",
+      "text": "Write a short story in which the weather will not cooperate.",
+      "strata": {"constraint": "moderate", "frame": "none", "subject": "domestic", "length_cue": "absent"},
+      "note": "An external-force conflict, matched against p18's internal one."
+    },
+    {
+      "id": "draft_p23_machine",
+      "text": "Write a short story from the point of view of something that is not a person.",
+      "strata": {"constraint": "specified", "frame": "none", "subject": "remote", "length_cue": "absent"},
+      "note": "Stresses draft_pov_consistent and draft_protagonist_identifiable at once."
+    },
+    {
+      "id": "draft_p24_crowd",
+      "text": "Write a short story about a group of people, with no one of them at the centre.",
+      "strata": {"constraint": "specified", "frame": "none", "subject": "domestic", "length_cue": "absent"},
+      "note": "Should drive draft_protagonist_identifiable to 0, which makes draft_goal_clarity missing — the second planned test of OMIT behaviour."
+    },
+    {
+      "id": "draft_p25_translation",
+      "text": "Write a short story that reads as though it were translated from another language.",
+      "strata": {"constraint": "specified", "frame": "none", "subject": "remote", "length_cue": "absent"},
+      "note": "A voice constraint with no structural content. Included precisely to test whether a purely stylistic prompt moves the architecture questions; if it does, the instrument is measuring style."
+    },
+    {
+      "id": "draft_p26_dream",
+      "text": "Write a short story in which a character wakes up twice.",
+      "strata": {"constraint": "specified", "frame": "none", "subject": "remote", "length_cue": "absent"},
+      "note": "The only prompt expected to move draft_dream_or_unreal_sequence off its floor. Worded to invite the structure without naming it, so the question still requires a judgement."
+    },
+    {
+      "id": "draft_p27_list",
+      "text": "Write a short story of about 200 words.",
+      "strata": {"constraint": "open", "frame": "none", "subject": "domestic", "length_cue": "present"},
+      "note": "Length-cue axis at a short setting; pairs with p02 and p28 to give the axis three levels rather than two."
+    },
+    {
+      "id": "draft_p28_long",
+      "text": "Write a short story of about 1200 words.",
+      "strata": {"constraint": "open", "frame": "none", "subject": "domestic", "length_cue": "present"},
+      "note": "The long end of the length axis. Expected to move draft_scene_summary_balance more than any other single prompt feature."
+    },
+    {
+      "id": "draft_p29_remote_length",
+      "text": "Write a short story of about 500 words set a thousand years from now.",
+      "strata": {"constraint": "moderate", "frame": "none", "subject": "remote", "length_cue": "present"},
+      "note": "The one deliberate two-axis crossing, so the analysis has at least one cell in which subject and length co-vary."
+    },
+    {
+      "id": "draft_p30_ending_first",
+      "text": "Write a short story whose first sentence gives away its ending.",
+      "strata": {"constraint": "specified", "frame": "none", "subject": "domestic", "length_cue": "absent"},
+      "note": "Targets draft_ending_earned and draft_resolution_closure from an unusual direction, and is the most likely prompt in this set to be misread by a generator — which makes it a useful instruction-following check."
+    }
+  ]
+}

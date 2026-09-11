@@ -1,0 +1,258 @@
+{
+  "format_version": 1,
+  "name": "story-architecture.draft",
+  "status": "draft",
+  "frozen_at": null,
+  "hash": null,
+  "notes": "DRAFT STRAW MAN — NOT AN INSTRUMENT, AND NOT FREEZABLE. Every id is in the reserved `draft_` namespace, which `backend/instrument.py`'s `freeze()` refuses outright (see RESERVED_ID_PREFIXES), so running one command in the wrong directory cannot turn this file into the study's instrument. Its purpose is narrower and entirely practical: GENERATIVE-VARIANCE-PLAN.md §10 items 1-2 are human work, and a human starting from a blank file spends their first day on format and coverage rather than on questions. This file supplies coverage (ten architectural facets, thirty questions, three scale kinds) and a rubric shape for each, so the human's job is to argue with concrete wording rather than to invent it. The questions here have NOT been validated on any gold set: no κ_H, no κ_M, no α. §6.2 is explicit that a question whose annotators cannot agree with each other is a defect in the question — expect some of these to fail that test and be rewritten or dropped. TO PRODUCE A REAL INSTRUMENT: copy this file, rename it, re-id every question out of the `draft_` namespace, revise the wording and rubrics against §6.2-6.4's agreement work, and freeze it only once items 1-6 of §10 are complete. Freezing is a one-way door (§6.5): changing a question after collection begins invalidates every trial already scored, with no migration. Fields `notes` and per-question `note` are NOT hashed and stay editable after a freeze; `id`, `text`, `kind`, `lo`, `hi` and their ORDER are the instrument's identity. Scoring convention for every question below: a scorer who cannot answer OMITS the question rather than guessing — §7 requires a declined answer to land as `missing`, never as 0 or as a scale midpoint.",
+  "questions": [
+    {
+      "id": "draft_opening_orientation",
+      "text": "How fully does the opening establish who the story is about, where it takes place, and when?",
+      "kind": "likert",
+      "lo": 1.0,
+      "hi": 5.0,
+      "note": "RUBRIC — judge the first ~15% of the text only. 1 = none of the three are recoverable; the reader cannot say who is present. 2 = one of the three. 3 = two of the three, or all three but only vaguely. 4 = all three, at least one of them implicitly. 5 = all three explicitly and without ambiguity. Deliberate disorientation scores LOW: this question measures what the opening supplies, not whether withholding it was a good choice."
+    },
+    {
+      "id": "draft_inciting_incident_present",
+      "text": "Is there a discrete event that disturbs the story's initial situation?",
+      "kind": "binary",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — 1 = a nameable event (an arrival, a death, a letter, a decision) changes the situation the story opened in. 0 = the situation the story opens in is the situation it stays in; change is gradual, ambient, or absent. A slice-of-life piece legitimately scores 0. 0 means 'the scorer judged no'; a scorer who cannot tell omits the question instead."
+    },
+    {
+      "id": "draft_inciting_incident_position",
+      "text": "At what proportion through the text does that disturbing event occur?",
+      "kind": "unit",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — estimate by position in the text, not by narrated chronology: a disturbance recounted in a flashback is placed where the READER meets it. Judge to the nearest 0.05. OMIT this question whenever draft_inciting_incident_present is 0 — a position for an event that does not exist is not 0.0, it is missing, and §7 forbids collapsing the two."
+    },
+    {
+      "id": "draft_causal_chain",
+      "text": "To what extent does each major event follow causally from an earlier one, rather than merely after it?",
+      "kind": "likert",
+      "lo": 1.0,
+      "hi": 5.0,
+      "note": "RUBRIC — the 'therefore/but' versus 'and then' test. 1 = events are a list; reordering most of them would cost nothing. 2 = one causal link. 3 = roughly half the transitions are causal. 4 = most are; one or two are coincidence. 5 = every major event is forced by an earlier one. Coincidence that the story itself treats AS coincidence does not lower the score; unacknowledged coincidence does."
+    },
+    {
+      "id": "draft_protagonist_identifiable",
+      "text": "Is there a single character whose situation the story principally follows?",
+      "kind": "binary",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — 1 = one character clearly carries the story. 0 = an ensemble, a collective, a place, or an idea carries it, with no one figure predominant. Score the text's weighting, not the amount of dialogue any character is given."
+    },
+    {
+      "id": "draft_goal_clarity",
+      "text": "How clearly can the reader state what the protagonist wants?",
+      "kind": "likert",
+      "lo": 1.0,
+      "hi": 5.0,
+      "note": "RUBRIC — 1 = no want is legible. 2 = a want is implied but could be stated three incompatible ways. 3 = a general want (safety, escape, approval) with no specific object. 4 = a specific want, stated once or shown clearly. 5 = a specific want, sustained and repeatedly evident. OMIT if draft_protagonist_identifiable is 0 and no one figure's wants can be isolated."
+    },
+    {
+      "id": "draft_obstacle_escalation",
+      "text": "Do the obstacles facing the protagonist intensify over the course of the story?",
+      "kind": "likert",
+      "lo": 1.0,
+      "hi": 5.0,
+      "note": "RUBRIC — 1 = no obstacles. 2 = obstacles exist but are flat in difficulty. 3 = one clear step up. 4 = a rising pattern with a lapse. 5 = each obstacle plainly costlier than the last. Judge cost to the protagonist, not spectacle."
+    },
+    {
+      "id": "draft_stakes_specified",
+      "text": "Does the text state or show what is lost if the protagonist fails?",
+      "kind": "binary",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — 1 = a concrete consequence of failure is identifiable (a person harmed, a thing lost, a life changed). 0 = failure is undefined or purely abstract. Generic peril ('everything would be ruined') scores 0."
+    },
+    {
+      "id": "draft_climax_present",
+      "text": "Is there an identifiable moment of maximum tension or decisive action?",
+      "kind": "binary",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — 1 = two scorers reading independently would point at the same passage. 0 = tension is level throughout, or the story ends before any peak. A quiet realization can be a climax; volume is not the criterion."
+    },
+    {
+      "id": "draft_climax_position",
+      "text": "At what proportion through the text does that peak occur?",
+      "kind": "unit",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — position in the text, nearest 0.05. OMIT when draft_climax_present is 0. A peak in the final sentence is 1.0 and is a legitimate answer, not a rounding artifact."
+    },
+    {
+      "id": "draft_resolution_closure",
+      "text": "How completely does the ending settle the question the story raised?",
+      "kind": "likert",
+      "lo": 1.0,
+      "hi": 5.0,
+      "note": "RUBRIC — 1 = the text stops mid-situation with nothing settled. 2 = a gesture at settlement. 3 = the central question is answered, several others left open. 4 = the central question and most others are settled. 5 = fully closed. An intentionally open ending scores 1-2: this measures closure, and a separate judgement about whether openness suited the story is not this question's business."
+    },
+    {
+      "id": "draft_ending_earned",
+      "text": "Is the ending prepared by material already present in the text?",
+      "kind": "likert",
+      "lo": 1.0,
+      "hi": 5.0,
+      "note": "RUBRIC — 1 = the ending introduces its decisive element for the first time. 2 = thin preparation, one mention. 3 = prepared but unemphasised. 4 = clearly prepared. 5 = the ending is the only outcome the preceding text supports. Independent of whether the ending is happy or satisfying."
+    },
+    {
+      "id": "draft_character_change",
+      "text": "Does any character end the story holding a different belief, intention, or understanding than they began with?",
+      "kind": "binary",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — 1 = a change of mind, not merely of circumstance, is evidenced in the text. 0 = characters are moved by events but not altered by them. A character changed off-page and reported as changed still scores 1 if the text says so."
+    },
+    {
+      "id": "draft_change_shown_not_asserted",
+      "text": "If a character changes, is the change demonstrated in action rather than asserted by the narration?",
+      "kind": "likert",
+      "lo": 1.0,
+      "hi": 5.0,
+      "note": "RUBRIC — 1 = narration states the change and nothing enacts it. 3 = stated and weakly enacted. 5 = enacted so that the narration need not state it. OMIT when draft_character_change is 0 — a story with no change has no 'how' to score, and answering 1 here would put 'no change' and 'badly handled change' in the same bin."
+    },
+    {
+      "id": "draft_pov_consistent",
+      "text": "Does the narration hold a single point of view without unsignalled shifts?",
+      "kind": "binary",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — 1 = one POV throughout, or shifts that are marked by a section break or an explicit move. 0 = the narration enters a second character's interiority without signal. Deliberate omniscience that is omniscient from the first line scores 1: it never shifted."
+    },
+    {
+      "id": "draft_narrative_distance_stable",
+      "text": "How stable is the distance between the narrator and the character's interiority?",
+      "kind": "likert",
+      "lo": 1.0,
+      "hi": 5.0,
+      "note": "RUBRIC — 1 = distance lurches between paragraphs with no motivation. 3 = mostly stable, with unmotivated moves. 5 = stable, or moved only at deliberate junctures. This is a different question from POV: a story can keep one POV and still slide between close third and reportage."
+    },
+    {
+      "id": "draft_tense_consistent",
+      "text": "Is grammatical tense consistent except where a shift is doing deliberate work?",
+      "kind": "binary",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — 1 = consistent, or shifted only at a flashback or frame boundary. 0 = at least one unmotivated shift. This is a low-prevalence question by design — most texts score 1 — and §6.3 expects PABAK and AC1, not κ alone, to carry its reliability."
+    },
+    {
+      "id": "draft_chronology_linear",
+      "text": "Is the story told in the order its events occurred?",
+      "kind": "binary",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — 1 = linear. 0 = any analepsis, prolepsis, or reordering of more than a sentence. A single clause of backstory ('she had grown up here') does not make a text non-linear."
+    },
+    {
+      "id": "draft_flashback_present",
+      "text": "Does the text contain a scene set earlier than the main narrative line?",
+      "kind": "binary",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — 1 = a dramatised earlier SCENE, with its own moment-to-moment action. 0 = summary backstory only, or none. The scene/summary distinction is the whole content of this question and must be applied strictly, or it collapses into draft_chronology_linear."
+    },
+    {
+      "id": "draft_frame_narrative",
+      "text": "Is the main story enclosed in another act of telling (a letter, a recollection, a story told to a listener)?",
+      "kind": "binary",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — 1 = an outer layer exists and the text returns to it or marks it. 0 = no outer layer. Expected to be rare; §6.3 names exactly this shape as the one κ alone would discard."
+    },
+    {
+      "id": "draft_dream_or_unreal_sequence",
+      "text": "Does the text contain a dream, hallucination, or explicitly unreal passage?",
+      "kind": "binary",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — 1 = a passage the text itself marks as not literally occurring. 0 = none. A wholly fantastical setting is NOT a dream sequence: the criterion is unreality relative to the story's own world. The plan's own worked example of a skewed-marginal question."
+    },
+    {
+      "id": "draft_time_span",
+      "text": "How much narrated time does the story cover?",
+      "kind": "likert",
+      "lo": 1.0,
+      "hi": 5.0,
+      "note": "RUBRIC — an ordered magnitude, not a quality. 1 = minutes. 2 = hours to a day. 3 = days to weeks. 4 = months to a few years. 5 = a lifetime or longer. Judge the span between the earliest and latest narrated moment, frame layers included."
+    },
+    {
+      "id": "draft_scene_summary_balance",
+      "text": "What proportion of the text is dramatised scene rather than summary?",
+      "kind": "unit",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — estimate by length, nearest 0.1. Scene = moment-to-moment, a specific occasion. Summary = compressed or habitual time ('every morning she would'). Dialogue is scene. Interior monologue anchored to one moment is scene."
+    },
+    {
+      "id": "draft_dialogue_proportion",
+      "text": "What proportion of the text is direct speech?",
+      "kind": "unit",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — quoted speech and its tags, by length, nearest 0.05. Indirect speech is not counted. Mechanical enough that disagreement here is a signal the two annotators are reading different things."
+    },
+    {
+      "id": "draft_dialogue_differentiation",
+      "text": "Could a reader tell the speakers apart with the dialogue tags removed?",
+      "kind": "likert",
+      "lo": 1.0,
+      "hi": 5.0,
+      "note": "RUBRIC — 1 = all speakers share one voice. 3 = one speaker is distinguishable. 5 = each speaker's diction, rhythm, or concerns identify them. OMIT when fewer than two characters speak — there is nothing to differentiate, which is not the same as failing to differentiate."
+    },
+    {
+      "id": "draft_setting_specificity",
+      "text": "How specifically is the physical setting realised?",
+      "kind": "likert",
+      "lo": 1.0,
+      "hi": 5.0,
+      "note": "RUBRIC — 1 = no physical detail; the story could occur anywhere. 2 = a category of place ('a kitchen'). 3 = a place with one or two particulars. 4 = a place with particulars that recur. 5 = a place the reader could sketch. Count concrete particulars, not adjectives."
+    },
+    {
+      "id": "draft_setting_load_bearing",
+      "text": "Would the story's events be materially different in another setting?",
+      "kind": "binary",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — 1 = the setting constrains or causes at least one event. 0 = the setting is backdrop. Distinct from draft_setting_specificity: a vividly drawn room that nothing depends on scores 5 there and 0 here."
+    },
+    {
+      "id": "draft_central_conflict_type_internal",
+      "text": "Is the story's principal conflict internal to a character rather than between a character and an external force?",
+      "kind": "binary",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — 1 = the decisive opposition is within one character. 0 = the decisive opposition is another character, a society, a circumstance, or nature. When both are present, score the one the CLIMAX turns on. OMIT if no conflict is identifiable at all."
+    },
+    {
+      "id": "draft_foreshadowing_present",
+      "text": "Is there a detail early in the text whose significance is only established later?",
+      "kind": "binary",
+      "lo": 0.0,
+      "hi": 1.0,
+      "note": "RUBRIC — 1 = a specific earlier detail is retrospectively loaded by a later one; the scorer should be able to cite both. 0 = none. A general mood of foreboding is not foreshadowing under this rubric."
+    },
+    {
+      "id": "draft_motif_repetition",
+      "text": "How strongly does a repeated image, object, or phrase organise the text?",
+      "kind": "likert",
+      "lo": 1.0,
+      "hi": 5.0,
+      "note": "RUBRIC — 1 = no repetition beyond ordinary reference. 2 = an element recurs twice with no development. 3 = recurs and accumulates meaning. 4 = recurs at structurally marked positions. 5 = the recurrence is the text's organising spine. Cite the element; an uncitable motif is a 1."
+    },
+    {
+      "id": "draft_structural_completeness",
+      "text": "Does the text read as a complete story rather than an excerpt or a fragment?",
+      "kind": "likert",
+      "lo": 1.0,
+      "hi": 5.0,
+      "note": "RUBRIC — 1 = plainly an opening or a middle, cut off. 2 = a sketch with one gesture toward shape. 3 = complete but thin. 4 = complete. 5 = complete and shaped, with a discernible relationship between its opening and its close. This is the nearest thing here to a global judgement and should be scored LAST, after the structural questions above have been answered, so it summarises them rather than anchoring them."
+    }
+  ]
+}
