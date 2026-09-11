@@ -8,6 +8,14 @@
 import * as THREE from "three/webgpu";
 import type { GpuTier } from "@psychix/viz/capabilities";
 import { appStore, type Selection } from "../../app/store";
+import {
+  $channels,
+  channelFor,
+  channelsFor,
+  channelsLoaded,
+  channelValue,
+  ensureChannels,
+} from "../../data/channels";
 import { clusterDegrees, clusterNeighbors, formatCount, knnNeighbors } from "../../data/edges";
 import type { Dataset } from "../../data/loader";
 import { hullRadius, type ClusterHull } from "../../data/hulls";
@@ -250,8 +258,71 @@ export class AtlasDriver implements SceneDriver {
           this.points?.setMatches(s.mapQuery.results?.matchIds ?? null);
           this.cameraDirty = true;
         }
+        if (s.channel !== prev.channel) this.applyChannel();
       }),
     );
+    // the sidecar arrives after the map; re-apply when it lands so a
+    // deep link with `channel=` lights up as soon as the numbers exist
+    this.unsubscribes.push(
+      $channels.subscribe(() => {
+        this.applyChannel();
+      }),
+    );
+  }
+
+  /** Push the store's channel choice at the points layer.
+   *
+   *  The colour ramp always spans the channel's whole MEASURED range, even when
+   *  the filter window is a sliver — a ramp rescaled to the window would repaint
+   *  eleven near-identical tokens as a full spectrum and invent a gradient that
+   *  is not in the data. The window only decides what stays lit. */
+  private applyChannel(): void {
+    if (!this.points) return;
+    const s = appStore.getState();
+    const ch = channelFor(s.datasetId, s.channel.id);
+    if (!ch) {
+      this.points.setChannel(null);
+      this.cameraDirty = true;
+      // A channel id that this map does not have — from a permalink written
+      // against another model, or a typo — is dropped from the STORE too, not
+      // just from the shader. Leaving it set would keep writing `channel=…`
+      // into the hash for a lens that is not lit, which is a link that
+      // promises a picture nobody can open. Only once the sidecar has actually
+      // been read: before that the id is not wrong, it is early. Re-entrancy
+      // is bounded — the write leaves `channel.id` null, and this branch then
+      // has nothing left to clear.
+      if (s.channel.id && channelsLoaded(s.datasetId)) s.setChannel(null);
+      return;
+    }
+    const lo = ch.stats.min;
+    const hi = ch.stats.max;
+    // a channel with nothing measured has no scale to draw; treat it as absent
+    if (lo === null || hi === null) {
+      this.points.setChannel(null);
+      this.cameraDirty = true;
+      return;
+    }
+    this.points.setChannel(ch.values, [lo, hi], s.channel.window ?? [lo, hi]);
+    this.cameraDirty = true;
+  }
+
+  /** Every measured scalar for one point, in reading order: the channel the
+   *  lens is on first, then the rest. `null` values stay null all the way to
+   *  the tooltip, which prints "not measured". */
+  private channelReadout(index: number): { label: string; value: number | null; units: string }[] {
+    const s = appStore.getState();
+    const set = channelsFor(s.datasetId);
+    if (!set) return [];
+    const ordered = [...set.channels].sort((a, b) => {
+      const ra = a.id === s.channel.id ? 0 : 1;
+      const rb = b.id === s.channel.id ? 0 : 1;
+      return ra - rb;
+    });
+    return ordered.map((c) => ({
+      label: c.label,
+      value: channelValue(c, index),
+      units: c.units,
+    }));
   }
 
   /** Eased morph value, 0 = flat map … 1 = flythrough (exposed for tests). */
@@ -378,6 +449,11 @@ export class AtlasDriver implements SceneDriver {
     this.applyBeamsVisibility(t.beams);
     this.points.uNoiseVis.value = t.noise ? 1 : 0;
     this.applyPointSettings();
+    // fetch the per-point scalars for this map (once, lazily; most maps have
+    // none and the loader treats absence as "no channel UI", never as zeros)
+    const dsId = appStore.getState().datasetId;
+    if (dsId) ensureChannels(dsId, ds.columns.count);
+    this.applyChannel();
 
     // fresh layers start flat — re-apply the current dimension morph
     this.applyMorph();
@@ -1440,6 +1516,7 @@ export class AtlasDriver implements SceneDriver {
         label: cols.labels[index]!,
         clusterTitle: title,
         confidence: cols.confidence[index]! / 255,
+        channels: this.channelReadout(index),
       });
       this.canvas.style.cursor = "pointer";
     } else {

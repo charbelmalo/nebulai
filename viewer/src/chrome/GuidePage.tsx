@@ -5,10 +5,14 @@
  *  required on InterpFeature) to compile. Each card links straight into the live
  *  view so the reader can check the numbers themselves. */
 
+import { requestEpisodeStep } from "../app/actions";
 import { appStore } from "../app/store";
+import { $channels, channelsFor, channelsLoaded, ensureChannels } from "../data/channels";
 import type { GuideFormula, InterpGroup } from "../scene/interp/InterpDriver";
 import { GROUP_LABEL, INTERP_FEATURES } from "../scene/interp/registry";
 import { guideResearchFor } from "./guideResearch";
+import { $datasets } from "./state";
+import { episodeAvailability, TOURS, type EpisodeContext } from "./tours";
 
 const GROUP_ORDER: InterpGroup[] = ["weights", "forward", "sae", "trained", "live"];
 
@@ -52,6 +56,103 @@ function GuideFormulaView({ formula }: { formula: GuideFormula }) {
   );
 }
 
+/* ── episodes (P5) ────────────────────────────────────────────────────────── */
+
+/** The episode list, gated on what this deploy can actually show.
+ *
+ *  The gate is the whole reason this section exists rather than a row of
+ *  buttons. Every episode quotes exact numbers out of one named artifact. If
+ *  that artifact is not here, there are three honest answers and this renders
+ *  all three differently:
+ *
+ *  · **ready** — the map, the channels and the views the captions point at are
+ *    all present. The button plays it.
+ *  · **pending** — the sidecar is being fetched right now. Not an error, and
+ *    not a promise either; it says what it is waiting on.
+ *  · **unavailable** — something is genuinely absent. The card stays, the
+ *    button is disabled, and the card prints WHICH file and WHICH command
+ *    would produce it. It never falls back to another model, and it never
+ *    plays with the numbers missing (§2.2).
+ */
+function EpisodeSection() {
+  const entries = $datasets.value;
+  // touching the signal here is what subscribes this component to the fetch
+  // resolving, so a "pending" card becomes a "ready" one without a click
+  void $channels.value;
+
+  // kick off the sidecar fetch for every dataset an episode names, with the
+  // point count the index already knows — the same expected length the map
+  // itself checks with, so a channels.json aligned to a different build is
+  // rejected here exactly as it would be there
+  for (const t of TOURS) {
+    const dsId = t.manifest?.dataset ?? (t.manifest?.channels?.length ? t.model : null);
+    if (!dsId) continue;
+    const entry = entries.find((e) => e.id === dsId);
+    if (entry) ensureChannels(dsId, entry.n_points);
+  }
+
+  const ctx: EpisodeContext = {
+    datasets: entries.map((e) => e.id),
+    channelsFor: (id) => channelsFor(id)?.channels.map((c) => c.id) ?? null,
+    channelsLoaded: (id) => channelsLoaded(id),
+    features: INTERP_FEATURES.map((f) => f.id),
+  };
+
+  return (
+    <section class="guide-group guide-episodes">
+      <div class="guide-group-head">
+        <h2 class="guide-group-title">Episodes</h2>
+        <p class="guide-group-src">
+          Guided walks through one finding at a time. Each one quotes exact numbers from
+          one named artifact and says which; if that artifact is not in this deploy, the
+          episode says so rather than running with the numbers missing.
+        </p>
+      </div>
+      <div class="guide-cards">
+        {TOURS.map((t) => {
+          const av = episodeAvailability(t, ctx);
+          const m = t.manifest;
+          return (
+            <article key={t.id} class={`guide-card episode-card is-${av.state}`}>
+              <div class="guide-card-head">
+                <span class="guide-card-n">{t.steps.length} steps</span>
+                <h3 class="guide-card-label">{t.label}</h3>
+                <button
+                  type="button"
+                  class="guide-card-open"
+                  disabled={av.state !== "ready"}
+                  onClick={() => requestEpisodeStep(t.id, 0)}
+                >
+                  Play this episode →
+                </button>
+              </div>
+              <p class="guide-card-blurb">{t.blurb}</p>
+              <div class="guide-card-row">
+                <span class="guide-card-tag">Model</span>
+                <span class="guide-card-source">
+                  {t.model}
+                  {m?.space ? ` · ${m.space}` : ""}
+                </span>
+              </div>
+              {m?.channels?.length ? (
+                <div class="guide-card-row">
+                  <span class="guide-card-tag">Channels</span>
+                  <span class="guide-card-source">{m.channels.join(", ")}</span>
+                </div>
+              ) : null}
+              {av.state !== "ready" && (
+                <p class={`episode-gate is-${av.state}`}>
+                  {av.state === "pending" ? av.reason : `Not available here — ${av.reason}`}
+                </p>
+              )}
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 export function GuidePage() {
   const live = INTERP_FEATURES.length;
   const byGroup = new Map<InterpGroup, typeof INTERP_FEATURES>();
@@ -79,6 +180,8 @@ export function GuidePage() {
             still need data or computation stay hidden until they are ready.
           </p>
         </header>
+
+        <EpisodeSection />
 
         {GROUP_ORDER.filter((g) => byGroup.has(g)).map((group) => (
           <section key={group} class="guide-group">

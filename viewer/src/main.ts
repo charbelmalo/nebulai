@@ -26,11 +26,13 @@ import "@psychix/viz/tokens.css";
 import "@psychix/viz/craft-tokens.css";
 import "./styles/nebulai.css";
 
-import { registerActions } from "./app/actions";
+import { registerActions, requestEpisodeStep } from "./app/actions";
+import "./chrome/episodes";
 import { bootShell, finishShellBoot, type BootedShell } from "./app/boot-shell";
 import { appStore, type ViewMode } from "./app/store";
 import { NEBULAI_APP } from "./chrome/apps/nebulai";
 import { $compareTour } from "./chrome/state";
+import { applyTourStep, findTour } from "./chrome/tours";
 import { registerInterpUrlHooks } from "./chrome/urlState";
 import { loadCompare } from "./data/compare";
 import { evictDataset, loadDataset, loadIndex } from "./data/loader";
@@ -60,6 +62,8 @@ declare global {
 registerInterpUrlHooks({
   knownFeature: (id) => !!findFeature(id),
   shareableTrace: (slug) => !isLiveTrace(slug),
+  knownEpisode: (id) => !!findTour(id),
+  runEpisode: (id, step) => requestEpisodeStep(id, step),
 });
 
 
@@ -281,7 +285,11 @@ async function bootAtlas(shell: BootedShell, t0: number) {
   /** Load a dataset entry and hand it to every live driver. `noCache` skips
    *  both the in-memory column cache and the browser HTTP cache — used after
    *  a rebuild overwrites the artifact on disk. */
-  async function loadAndShow(entry: { id: string; path: string }, noCache = false) {
+  async function loadAndShow(
+    entry: { id: string; path: string },
+    noCache = false,
+    keepTour = false,
+  ) {
     const st = appStore.getState();
     st.setLoading(true);
     progress.classList.remove("is-done");
@@ -298,7 +306,7 @@ async function bootAtlas(shell: BootedShell, t0: number) {
         DATA_BASE,
         noCache,
       );
-      appStore.getState().setDataset(entry.id, next);
+      appStore.getState().setDataset(entry.id, next, { keepTour });
       driver.setDataset(next);
       chordDriver?.setDataset(next);
       hierDriver?.setDataset(next);
@@ -336,6 +344,32 @@ async function bootAtlas(shell: BootedShell, t0: number) {
       await loadAndShow(entry, true);
       appStore.getState().pushProgressEvent("done", `map ready — ${datasetId}`);
       appStore.getState().setProgress({ stage: "done", pct: 1 });
+    },
+    /** One episode step. The only place a dataset is installed WITHOUT
+     *  clearing the tour — because here the tour is what asked for it. */
+    async runEpisodeStep(episodeId, step) {
+      const tour = findTour(episodeId);
+      const spec = tour?.steps[step];
+      if (!tour || !spec) return;
+      const st = appStore.getState();
+
+      if (spec.dataset && spec.dataset !== st.datasetId) {
+        const entry = st.datasets.find((d) => d.id === spec.dataset);
+        // A missing dataset is NOT a reason to narrate over whatever map
+        // happens to be loaded: the captions quote that model's numbers. The
+        // episode's manifest already refuses to offer it, and this is the
+        // second line of defence for a deep link that skipped the offer.
+        if (!entry) {
+          console.warn(`[nebulai] episode ${episodeId} needs dataset ${spec.dataset}`);
+          return;
+        }
+        if (st.loading.active) return;
+        await loadAndShow(entry, false, true);
+      }
+
+      appStore.getState().setTour({ id: episodeId, step });
+      if (spec.page) appStore.getState().setPage(spec.page);
+      applyTourStep(tour, step);
     },
     flyToCluster(id) {
       if (appStore.getState().viewMode === "atlas") driver.flyToCluster(id);

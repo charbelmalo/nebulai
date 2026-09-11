@@ -5,14 +5,38 @@
 
 import { requestFlyToCluster, requestFlyToPoint } from "../app/actions";
 import { appStore } from "../app/store";
+import { channelFor, channelsFor, lowestBy, type Channel } from "../data/channels";
 import { knnDistance, knnDistanceFloor, knnNeighbors } from "../data/edges";
 import { rampRgb } from "@psychix/viz/chart-theme";
-import { $dataset, $mapQuery, $searchCollapsed, $selection, openPanel } from "./state";
+import {
+  $channel,
+  $dataset,
+  $datasetId,
+  $mapQuery,
+  $searchCollapsed,
+  $selection,
+  openPanel,
+} from "./state";
 
 /** hard cap on rendered rows across all groups — 50K-token vocabularies can
  *  match thousands of rows and the panel must stay a panel, not a dump */
 const MAX_ROWS = 100;
 const ROWS_PER_GROUP = 8;
+
+/** How many points the lens readout ranks. Ten because the readout exists to
+ *  be READ — every row's exact value is printed, and a list long enough to
+ *  scroll stops being a readout and becomes a second result table. */
+const LENS_ROWS = 10;
+
+/** Chips read better than a select when there are two or three channels, and
+ *  a chip can say what the quantity MEANS rather than what it is called. The
+ *  wording is per-channel and deliberately plain; anything not listed falls
+ *  back to the channel's own label from `channels.json`, which the backend
+ *  wrote. */
+const CHIP_LABEL: Record<string, string> = {
+  we_centroid_dist: "near the centroid",
+  we_norm: "shortest rows",
+};
 
 export function SearchPanel() {
   const ds = $dataset.value;
@@ -72,6 +96,8 @@ export function SearchPanel() {
         }}
       />
 
+      <ChannelLens />
+
       {results && results.total === 0 && (
         <p class="search-empty">
           no token contains “{text.trim()}” in this vocabulary
@@ -112,6 +138,123 @@ export function SearchPanel() {
         </div>
       )}
     </section>
+  );
+}
+
+/* ── the channel lens ─────────────────────────────────────────────────────── */
+
+/** Chips that light the per-point scalar lens, plus ONE ranked readout of the
+ *  low end of whichever is lit.
+ *
+ *  Three things this is careful about.
+ *
+ *  · **It renders nothing when the map has no `channels.json`.** Not a
+ *    disabled row, not a zeroed strip — nothing. A dataset with no channels
+ *    has not been measured and is not presented as measured-and-flat (§2.2).
+ *  · **The readout is the only mono block in the panel besides the kNN table,
+ *    and it prints raw values at the channel's own precision** (R8). No
+ *    normalised 0–1 restatement: the whole finding in phase 0 is that 1.534
+ *    and 2.551 sit either side of a gap in a distribution whose full span is
+ *    1.5–5.6, and a rescaled column would hide exactly that.
+ *  · **Narrowing the filter never re-fits the colour ramp.** The window is a
+ *    filter; the ramp always spans the full measured range (`AtlasDriver`
+ *    owns that). So narrowing onto eleven near-identical values dims the rest
+ *    of the map rather than repainting eleven points across a full spectrum.
+ */
+function ChannelLens() {
+  const ds = $dataset.value;
+  const dsId = $datasetId.value;
+  const set = channelsFor(dsId);
+  if (!ds || !set) return null;
+
+  const ui = $channel.value;
+  const active = channelFor(dsId, ui.id);
+  const st = appStore.getState();
+
+  return (
+    <div class="lens-block">
+      <div class="lens-chips">
+        {set.channels.map((ch) => {
+          const on = ui.id === ch.id;
+          return (
+            <button
+              type="button"
+              key={ch.id}
+              class={on ? "lens-chip is-on" : "lens-chip"}
+              aria-pressed={on}
+              title={`${ch.id} · ${ch.formula || ch.method} · space ${ch.space} · ${ch.fidelity}`}
+              onClick={() => st.setChannel(on ? null : ch.id)}
+            >
+              {CHIP_LABEL[ch.id] ?? ch.label}
+            </button>
+          );
+        })}
+      </div>
+      {active && <LensReadout ch={active} />}
+    </div>
+  );
+}
+
+/** The ranked readout for the lit channel: its measured range, how many points
+ *  it could not measure, and the ten smallest values with their labels. */
+function LensReadout({ ch }: { ch: Channel }) {
+  const ds = $dataset.value!;
+  const ui = $channel.value;
+  const st = appStore.getState();
+  const rows = lowestBy(ch, LENS_ROWS);
+  const lo = ch.stats.min;
+  const hi = ch.stats.max;
+  const nth = rows.length > 0 ? rows[rows.length - 1]!.value : null;
+  const narrowed = ui.window !== null;
+
+  return (
+    <div class="lens-readout">
+      <div class="lens-stat">
+        <span class="lens-stat-k">{ch.space}</span>
+        <span class="lens-stat-v">
+          {lo === null || hi === null
+            ? "no measured values"
+            : `${lo.toFixed(3)} – ${hi.toFixed(3)}${ch.units ? ` ${ch.units}` : ""}`}
+        </span>
+      </div>
+      <div class="lens-stat">
+        <span class="lens-stat-k">not measured</span>
+        <span class="lens-stat-v">
+          {ch.stats.n_missing.toLocaleString()} of {ch.values.length.toLocaleString()}
+        </span>
+      </div>
+
+      {rows.length > 0 && (
+        <ol class="lens-rows">
+          {rows.map((r, i) => (
+            <li class="lens-row" key={r.index}>
+              <span class="lens-rank">{i + 1}</span>
+              <button
+                type="button"
+                class="lens-label"
+                onClick={() => {
+                  appStore.getState().setSelection({ kind: "point", id: r.index });
+                  requestFlyToPoint(r.index);
+                }}
+              >
+                {ds.columns.labels[r.index]}
+              </button>
+              <span class="lens-value">{r.value.toFixed(3)}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+
+      {lo !== null && nth !== null && (
+        <button
+          type="button"
+          class="lens-narrow"
+          onClick={() => (narrowed ? st.setChannelWindow(null) : st.setChannelWindow([lo, nth]))}
+        >
+          {narrowed ? "show the whole range" : `filter to ${lo.toFixed(3)}–${nth.toFixed(3)}`}
+        </button>
+      )}
+    </div>
   );
 }
 

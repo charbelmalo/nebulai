@@ -50,6 +50,26 @@ export interface CompareUI {
   sharedOnly: boolean;
 }
 
+/** The channel lens: colour the map by a per-point scalar from `channels.json`.
+ *
+ *  Deliberately NOT a `ViewMode`. The map keeps its layout, its clusters and its
+ *  picking; only the paint changes, and turning the lens off returns the exact
+ *  frame you had (R1 — a layout state is not a new coordinate system, and this
+ *  is less than a layout state). A `ViewMode` would have forced every driver to
+ *  learn about channels and would have made "look at the norms" feel like
+ *  leaving the map.
+ *
+ *  `window` is in the channel's own raw units, so it survives being read out
+ *  loud ("everything below 2.0") and put in a URL. `null` means the full
+ *  measured range: no point is dimmed, which is the only honest default — any
+ *  preset window would be the app asserting where the interesting values are. */
+export interface ChannelUI {
+  /** channel id from the dataset's `channels.json`, or null = lens off */
+  id: string | null;
+  /** filter window [lo, hi] in raw units; null = the whole measured range */
+  window: [number, number] | null;
+}
+
 export interface AtlasSlice {
   datasets: DatasetEntry[];
   datasetId: string | null;
@@ -64,9 +84,10 @@ export interface AtlasSlice {
   selection: Selection | null;
   mapQuery: MapQuery;
   toggles: Toggles;
+  channel: ChannelUI;
 
   setDatasets(d: DatasetEntry[]): void;
-  setDataset(id: string, d: Dataset): void;
+  setDataset(id: string, d: Dataset, opts?: { keepTour?: boolean }): void;
   setCompareData(d: CompareData | null): void;
   setCompareState(i: number): void;
   toggleCompareModel(sourceIdx: number): void;
@@ -79,6 +100,8 @@ export interface AtlasSlice {
   setSelection(s: Selection | null): void;
   setMapQuery(text: string): void;
   setToggle(key: keyof Toggles, value: boolean): void;
+  setChannel(id: string | null, window?: [number, number] | null): void;
+  setChannelWindow(window: [number, number] | null): void;
 }
 
 export const createAtlasSlice: StateCreator<AppState, [], [], AtlasSlice> = (set, get) => ({
@@ -95,10 +118,11 @@ export const createAtlasSlice: StateCreator<AppState, [], [], AtlasSlice> = (set
   selection: null,
   mapQuery: { text: "", results: null },
   toggles: { territories: true, labels: true, beams: true, halos: true, noise: true, legend: true },
+  channel: { id: null, window: null },
 
   setDatasets: (datasets) => set({ datasets }),
   // unit ids are per-model, so a dataset switch clears the cross-view pick too
-  setDataset: (datasetId, dataset) =>
+  setDataset: (datasetId, dataset, opts) =>
     set({
       datasetId,
       dataset,
@@ -108,7 +132,14 @@ export const createAtlasSlice: StateCreator<AppState, [], [], AtlasSlice> = (set
       // vocabulary would highlight arbitrary points
       mapQuery: { text: "", results: null },
       interpSelection: null,
-      tour: null,
+      // An episode step that changes model must not clear the episode running
+      // it. Every other caller still clears the tour, because a tour's copy
+      // names units of the model it was written for.
+      ...(opts?.keepTour ? {} : { tour: null }),
+      // channel ids AND their ranges are per-model: `we_norm` on gpt2 and on
+      // pythia-70m are different numbers in different units, so a window
+      // carried across would filter on a scale that no longer exists
+      channel: { id: null, window: null },
     }),
   setCompareData: (compareData) => set({ compareData }),
   setCompareState: (state) => set((s) => ({ compare: { ...s.compare, state } })),
@@ -139,4 +170,9 @@ export const createAtlasSlice: StateCreator<AppState, [], [], AtlasSlice> = (set
   },
   setToggle: (key, value) =>
     set((s) => ({ toggles: { ...s.toggles, [key]: value } })),
+  // switching channel drops the old window: it was expressed in the previous
+  // channel's units, and silently reusing the numbers would filter centroid
+  // distances by a norm's bounds
+  setChannel: (id, window = null) => set({ channel: { id, window: id ? window : null } }),
+  setChannelWindow: (window) => set((s) => ({ channel: { ...s.channel, window } })),
 });

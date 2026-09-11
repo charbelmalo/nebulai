@@ -21,5 +21,11 @@
  *       BASE_URL="/psychiX/nebulai-maps/"
  *       -> "https://<host>/psychiX/nebulai-maps/out"
  */
-const APP_BASE = new URL(import.meta.env.BASE_URL || "/", location.href);
+/*  Unit tests import the data modules in a plain Node environment, where there
+ *  is no `location` at all. The fallback is deliberately a throwaway origin
+ *  rather than anything a fetch could succeed against: nothing under test may
+ *  reach the network by accident, and every loader in `data/` takes its base as
+ *  an argument, so a test that means to fetch passes its own. */
+const DOC_HREF = typeof location === "undefined" ? "http://localhost/" : location.href;
+const APP_BASE = new URL(import.meta.env.BASE_URL || "/", DOC_HREF);
 export const DATA_BASE = new URL("out/", APP_BASE).href.replace(/\/+$/, "");

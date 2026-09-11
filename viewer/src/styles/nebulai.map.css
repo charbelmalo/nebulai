@@ -855,3 +855,170 @@
   font: 400 10px/1.5 var(--font-ui);
 }
 
+/* ── the channel lens (phase 0) ───────────────────────────────────────────
+   Chips light a per-point scalar; the readout under them prints raw values in
+   the mono face with tabular digits, because the whole point of the phase-0
+   finding is that 1.534 and 2.551 sit either side of a gap. Nothing here
+   renders at all for a map with no `channels.json` — the component returns
+   null rather than drawing an empty scale. */
+
+.lens-block {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.lens-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lens-chip {
+  padding: 4px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-dim);
+  font: 500 10.5px/1.4 var(--font-ui);
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out);
+}
+
+.lens-chip:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+
+/* inverted pill: the lit lens is the loudest thing in the panel because it is
+   repainting the entire map behind it */
+.lens-chip.is-on {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--bg);
+}
+
+.lens-readout {
+  margin-top: 8px;
+}
+
+.lens-stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.lens-stat-k {
+  color: var(--text-faint);
+  font: 400 9.5px/1.6 var(--font-mono);
+}
+
+.lens-stat-v {
+  color: var(--text-dim);
+  font: 400 9.5px/1.6 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lens-rows {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lens-row {
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.lens-rank {
+  color: var(--text-faint);
+  font: 400 9px/1.6 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.lens-label {
+  overflow: hidden;
+  padding: 1px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: 400 10.5px/1.5 var(--font-mono);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: pre;
+  cursor: pointer;
+}
+
+.lens-label:hover {
+  color: var(--accent);
+}
+
+.lens-value {
+  color: var(--text-dim);
+  font: 400 10px/1.5 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.lens-narrow {
+  margin-top: 8px;
+  padding: 4px 8px;
+  width: 100%;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--text-dim);
+  font: 500 10px/1.4 var(--font-ui);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.lens-narrow:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+
+/* ── channel lines in the point tooltip ───────────────────────────────────
+   The hover readout for the lens: the raw value at full precision, or the
+   words "not measured". Never a zero, and never a blank cell that could be
+   read as one. */
+
+.point-tooltip-channels {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--hairline);
+}
+
+.point-tooltip-channel {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.point-tooltip-channel-k {
+  color: var(--text-faint);
+  font: 400 10px/1.6 var(--font-mono);
+}
+
+.point-tooltip-channel-v {
+  color: var(--text);
+  font: 500 10px/1.6 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.point-tooltip-channel-v.is-missing {
+  color: var(--text-faint);
+  font-weight: 400;
+  font-style: italic;
+}
+

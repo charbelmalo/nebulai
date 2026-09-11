@@ -147,6 +147,43 @@
   background: var(--text);
   border-color: transparent;
 }
+
+/* ── episodes (P5) ────────────────────────────────────────────────────────
+   An episode whose artifact is absent keeps its card and loses its button.
+   The card is dimmed, never hidden: hiding it would make an unshippable
+   episode indistinguishable from one that was never written, and the gate
+   line under it is the only place that names the missing file. */
+
+.guide-card-open:disabled,
+.guide-card-open:disabled:hover {
+  color: var(--text-faint);
+  background: transparent;
+  border-color: var(--hairline);
+  cursor: not-allowed;
+}
+
+.episode-card.is-unavailable,
+.episode-card.is-pending {
+  opacity: 0.72;
+}
+
+.episode-card.is-unavailable:hover,
+.episode-card.is-pending:hover {
+  transform: none;
+}
+
+.episode-gate {
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+  font: 400 11.5px/1.6 var(--font-ui);
+  color: var(--text-dim);
+}
+
+.episode-gate.is-pending {
+  color: var(--text-faint);
+  font-style: italic;
+}
 .guide-card-blurb {
   margin: 0 0 14px;
   font-size: 12.5px;

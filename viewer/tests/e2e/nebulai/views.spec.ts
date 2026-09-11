@@ -159,6 +159,95 @@ test("hand control is reachable from the sidebar, and only where it steers", asy
   await expect(sidebar.getByRole("switch", { name: "Hand control" })).toHaveCount(0);
 });
 
+test("channel lens: the permalink lights it, and the filter narrows the map", async ({
+  page,
+}, testInfo) => {
+  // the lens is a colour/opacity change in the same shader on both rungs;
+  // measured once on the deterministic webgl rung, like the confidence floor
+  test.skip(rungOf(testInfo) === "webgpu", "lens is rung-independent; measured on webgl");
+
+  // the exit criterion, addressed the way a reader would reach it: a URL
+  const { errors } = await bootApp(page, "webgl", {
+    view: "atlas",
+    hash: "page=map&model=gpt2&channel=we_centroid_dist",
+  });
+  const hasChannels = await page.evaluate(async () => {
+    const res = await fetch("out/gpt2/channels.json");
+    return res.ok;
+  });
+  test.skip(!hasChannels, "this deploy ships no out/gpt2/channels.json");
+
+  await page.waitForFunction(
+    () => window.__store.getState().channel.id === "we_centroid_dist",
+    undefined,
+    { timeout: 10_000 },
+  );
+  await waitForSettle(page);
+
+  // the chip in the search panel reflects the lens the URL lit — the two
+  // routes into the same state must not disagree
+  const chip = page.locator(".lens-chip.is-on");
+  await expect(chip).toHaveText("near the centroid");
+
+  // the readout prints RAW values, so the extreme one is the number the
+  // episode quotes rather than a normalised restatement
+  const first = page.locator(".lens-row").first().locator(".lens-value");
+  await expect(first).toHaveText("1.534");
+
+  // mean luminance stands in for "how many points are lit" (same argument as
+  // the confidence-floor test): filtering to the knot can only dim the map
+  const meanLuma = () =>
+    page.evaluate(async () => {
+      const cv = document.querySelector("canvas") as HTMLCanvasElement;
+      // the GL canvas has no preserved drawing buffer: it must be sampled
+      // inside a frame, which is why this waits two rAFs before drawImage
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const off = document.createElement("canvas");
+      off.width = cv.width;
+      off.height = cv.height;
+      const ctx = off.getContext("2d")!;
+      ctx.drawImage(cv, 0, 0);
+      const { data } = ctx.getImageData(0, 0, off.width, off.height);
+      let sum = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        sum += data[i]! * 0.299 + data[i + 1]! * 0.587 + data[i + 2]! * 0.114;
+      }
+      return sum / (data.length / 4);
+    });
+
+  const wide = await meanLuma();
+  await page.locator(".lens-narrow").click();
+  await page.waitForFunction(() => window.__store.getState().channel.window !== null, undefined, {
+    timeout: 10_000,
+  });
+  await waitForSettle(page);
+  const narrow = await meanLuma();
+  expect(narrow).toBeLessThan(wide);
+
+  // and the window travels in the channel's raw units, not as an index pair
+  const hash = await page.evaluate(() => location.hash);
+  expect(hash).toContain("channel=we_centroid_dist");
+  expect(hash).toMatch(/crange=1\.5\d+%2C1\.\d+/);
+
+  expect(errors).toEqual([]);
+});
+
+test("channel lens: an unknown channel in the URL is dropped, not half-applied", async ({
+  page,
+}, testInfo) => {
+  test.skip(rungOf(testInfo) === "webgpu", "chrome is identical on both rungs");
+  // an unknown channel id in the URL is dropped, not half-applied: the driver
+  // is the one place that knows which channels exist, and it puts the lens
+  // away rather than painting the map by a column nobody measured
+  await bootApp(page, "webgl", {
+    view: "atlas",
+    hash: "page=map&model=gpt2&channel=not_a_channel",
+  });
+  await waitForSettle(page);
+  await expect(page.locator(".lens-chip.is-on")).toHaveCount(0);
+  expect(await page.evaluate(() => window.__store.getState().channel.id)).toBeNull();
+});
+
 test("v1-style hierarchy gating: radio disabled only without edges", async ({ page }, testInfo) => {
   test.skip(rungOf(testInfo) === "webgpu", "chrome is identical on both rungs");
   await bootApp(page, "webgl");

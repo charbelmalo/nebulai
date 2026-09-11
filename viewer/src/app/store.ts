@@ -81,6 +81,7 @@ export { APP_PAGES } from "./slices/shell";
 export type { AppId, Page, Settings, ShellSlice } from "./slices/shell";
 export type {
   AtlasSlice,
+  ChannelUI,
   CompareUI,
   MapQuery,
   Selection,

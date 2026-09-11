@@ -18,9 +18,11 @@ import {
   probeEndpoint,
   startBuild,
 } from "./probe";
+import { channelFor, channelsFor } from "../data/channels";
 import {
   $appearance,
   $capabilities,
+  $channel,
   $compareData,
   $dataset,
   $datasetId,
@@ -1346,7 +1348,83 @@ function DataTab() {
           onChange={(v) => appStore.getState().setDims(v === "3" ? 3 : 2)}
         />
       )}
+      <ChannelLensRow />
     </SettingsSection>
+  );
+}
+
+/** The channel lens, in its Settings home.
+ *
+ *  It is reachable from the Search panel's chips as well; this is the canonical
+ *  place, per the SETTINGS_HOME rule, and it is also the only surface that
+ *  prints the lens's PROVENANCE — which space the numbers live in, the formula,
+ *  how they were obtained, and how many points have no value. A map with no
+ *  `channels.json` gets a disabled row that says what to run, rather than an
+ *  empty select that looks like a broken control. */
+function ChannelLensRow() {
+  const dsId = $datasetId.value;
+  const set = channelsFor(dsId);
+  const ui = $channel.value;
+  const active = channelFor(dsId, ui.id);
+
+  if (!set) {
+    return (
+      <SelectRow
+        label="Channel lens"
+        value=""
+        disabled
+        options={[
+          {
+            value: "",
+            label: dsId
+              ? `no channels for this map — run \`nebulai channels ${dsId}\``
+              : "no map loaded",
+          },
+        ]}
+        onChange={() => {}}
+      />
+    );
+  }
+
+  return (
+    <>
+      <SelectRow
+        label="Channel lens"
+        value={ui.id ?? ""}
+        options={[
+          { value: "", label: "off — colour by cluster" },
+          ...set.channels.map((c) => ({ value: c.id, label: c.label })),
+        ]}
+        onChange={(v) => appStore.getState().setChannel(v ? v : null)}
+      />
+      {active && (
+        <dl class="settings-dl">
+          <dt>Space</dt>
+          <dd>{active.space}</dd>
+          <dt>Formula</dt>
+          <dd>{active.formula || active.method || "—"}</dd>
+          <dt>Fidelity</dt>
+          <dd>{active.fidelity}</dd>
+          <dt>Range</dt>
+          <dd>
+            {active.stats.min === null || active.stats.max === null
+              ? "no measured values"
+              : `${active.stats.min.toFixed(3)} – ${active.stats.max.toFixed(3)}${
+                  active.units ? ` ${active.units}` : ""
+                }`}
+          </dd>
+          <dt>Not measured</dt>
+          <dd>
+            {active.stats.n_missing.toLocaleString()} of{" "}
+            {active.values.length.toLocaleString()} points
+          </dd>
+          <dt>Filter window</dt>
+          <dd>
+            {ui.window ? `${ui.window[0].toFixed(3)} – ${ui.window[1].toFixed(3)}` : "whole range"}
+          </dd>
+        </dl>
+      )}
+    </>
   );
 }
 
