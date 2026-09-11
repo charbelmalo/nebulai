@@ -282,6 +282,26 @@ def reload_units(meta: dict):
         # whether or not the original build capped the vocab.
         return load_token_units(meta["model"], center=centered, max_tokens=kept)
 
+    if unit == "token_unembedding":
+        from ..frontends.tokens import load_token_units
+
+        # Same front-end, the other matrix: `which="output"` reads lm_head rows
+        # instead of embedding rows. This branch is separate from the W_E one
+        # above rather than folded into it because it MUST pass the pinned
+        # revision and the remote flag. W_U maps are built from large untied
+        # checkpoints over HTTP range reads, and `curated_vocab` is keyed on the
+        # tokenizer at a specific commit: replaying against "main" would silently
+        # score a different vocabulary the day the repo moves. The W_E branch is
+        # left byte-identical so no existing map's numbers shift.
+        return load_token_units(
+            meta["model"],
+            center=centered,
+            max_tokens=kept,
+            revision=str(meta.get("revision") or "main"),
+            remote=True if meta.get("source") == "remote-range" else None,
+            which=str(meta.get("which") or "output"),
+        )
+
     if unit.startswith("mlp_neuron"):
         from ..frontends.neurons import load_neuron_units
 
