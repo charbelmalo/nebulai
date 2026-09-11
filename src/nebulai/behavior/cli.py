@@ -459,6 +459,53 @@ def run_conformance(a: argparse.Namespace) -> None:
         )
 
 
+def run_publish(a: argparse.Namespace) -> None:
+    """Copy ONE study's artifact to the path the Behavior page reads.
+
+    `analyze` writes `<out>/<study_id>/behavior.json`, and the page fetches
+    `<data base>/behavior/behavior.json` — one file, no study id. That is not
+    an oversight in either place: a page that auto-picked a study would silently
+    change which experiment it displays the moment a second one is analyzed, and
+    "which study is this" is the first thing a reader has to be able to answer.
+    So the choice is made once, by a human, here, and recorded in the copy.
+
+    Refuses to publish an artifact whose every cue is downgraded for a
+    non-strict source (a `fake` arm, the hash embedder): those exist to
+    exercise the pipeline, and shipping one to the page as though it were
+    evidence is exactly the substitution the claim contract forbids. `--force`
+    exists for the case where the intent IS to show the page an example, and it
+    stamps that intent into the published copy.
+    """
+    src = Path(a.out) / a.study_id / "behavior.json"
+    if not src.exists():
+        raise SystemExit(f"no artifact at {src}; run `behavior analyze` first")
+    d = json.loads(src.read_text(encoding="utf-8"))
+
+    strict = bool(d.get("diagnostics", {}).get("strict_source"))
+    if not strict and not a.force:
+        raise SystemExit(
+            f"{a.study_id} is not a strict-source study: its arms or its encoder "
+            "cannot support a claim about any model, so every cue in it is "
+            "downgraded. Publishing it to the Behavior page would put "
+            "pipeline-exercise output where evidence belongs.\n"
+            "  --force publishes it anyway and records `published_as: example` "
+            "in the copy, which the page shows as such."
+        )
+
+    d["published"] = {
+        "study_id": d["study_id"],
+        "source": str(src),
+        "at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "published_as": "study" if strict else "example",
+    }
+    dest = Path(a.out) / "behavior.json"
+    out = X.write_export(dest, d)
+    print(f"published {a.study_id} -> {out}")
+    print(f"  {d['claim']}")
+    if not strict:
+        print("  published_as: example (not strict-source; the page labels it)")
+
+
 def run_inspect(a: argparse.Namespace) -> None:
     path = Path(a.out) / a.study_id / "behavior.json"
     if not path.exists():
@@ -548,6 +595,19 @@ def add_behavior_parser(sub: argparse._SubParsersAction) -> None:
     cf.add_argument("--model", default="gpt2")
     cf.add_argument("--out", default="")
     cf.set_defaults(fn=run_conformance)
+
+    pub = bs.add_parser(
+        "publish",
+        help="copy one study's behavior.json to the path the Behavior page reads",
+    )
+    pub.add_argument("study_id")
+    pub.add_argument(
+        "--force",
+        action="store_true",
+        help="publish a non-strict-source study anyway, stamped as an example",
+    )
+    pub.add_argument("--out", default=DEFAULT_OUT)
+    pub.set_defaults(fn=run_publish)
 
     i = bs.add_parser("inspect", help="summarize a study, or one cue in it")
     i.add_argument("study_id")

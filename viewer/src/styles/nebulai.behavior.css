@@ -142,6 +142,15 @@
   background: color-mix(in srgb, var(--text-dim) 8%, transparent);
 }
 
+/* The strongest banner on the page, deliberately. "This is not evidence" has
+   to out-shout every careful-looking status underneath it, or a reader skims
+   the statuses and takes the study for a cautious negative result. */
+.behavior-banner.is-example {
+  border-left-color: var(--bad, #d0553a);
+  border-left-width: 4px;
+  background: color-mix(in srgb, var(--bad, #d0553a) 12%, transparent);
+}
+
 /* ── toolbar ──────────────────────────────────────────────────────────── */
 
 .behavior-toolbar {

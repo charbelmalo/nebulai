@@ -161,6 +161,20 @@ export interface BehaviorRun {
   not_run: Record<string, string>;
 }
 
+/** Stamped by `nebulai behavior publish`. `published_as: "example"` means the
+ *  study was collected from a source that cannot support a claim about any
+ *  model — a synthetic arm, or the hash stand-in for the encoder — and was
+ *  published with `--force` to exercise the page. Every cue in such a study is
+ *  already downgraded upstream; this field is what lets the page SAY so
+ *  instead of merely showing statuses that look cautious for no visible
+ *  reason. */
+export interface BehaviorPublished {
+  study_id: string;
+  source: string;
+  at: string;
+  published_as: "study" | "example";
+}
+
 export interface BehaviorData {
   schema: string;
   generated: string;
@@ -173,6 +187,18 @@ export interface BehaviorData {
   diagnostics: Record<string, unknown>;
   runs: BehaviorRun[];
   samples: Record<string, { cue: string; model_key: string; text: string }[]>;
+  /** absent for an artifact read straight out of a study directory */
+  published?: BehaviorPublished;
+}
+
+/** True when the page must say, in words, that what it is showing is not
+ *  evidence about any model. Absent metadata means an older artifact, and an
+ *  older artifact is not assumed innocent: `strict_source: false` alone is
+ *  enough. */
+export function isExampleOnly(d: BehaviorData | null): boolean {
+  if (!d) return false;
+  if (d.published?.published_as === "example") return true;
+  return d.diagnostics?.strict_source === false;
 }
 
 let cached: BehaviorData | null | undefined;

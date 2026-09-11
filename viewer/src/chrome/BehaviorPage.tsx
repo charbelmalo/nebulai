@@ -39,6 +39,7 @@ import {
   loadBehavior,
   maxMeasuredEffect,
   notRunArms,
+  isExampleOnly,
   searchCues,
   type BehaviorCue,
   type BehaviorData,
@@ -176,6 +177,8 @@ function Study({ data, ui }: { data: BehaviorData; ui: ReturnType<typeof uiType>
         <h1 class="behavior-title">What these deployments associated</h1>
         <p class="behavior-lede">{data.claim}</p>
 
+        {isExampleOnly(data) && <ExampleBanner data={data} />}
+
         {notRun.length > 0 && <NotRunBanner arms={notRun} />}
 
         <dl class="behavior-facts">
@@ -295,6 +298,30 @@ function Fact({ k, v, title }: { k: string; v: string; title?: string }) {
     <div class="behavior-fact" title={title}>
       <dt>{k}</dt>
       <dd>{v}</dd>
+    </div>
+  );
+}
+
+/** A study whose source cannot support a claim says so at the top, in words.
+ *
+ *  Without this the page is at its most misleading exactly when it is least
+ *  informative: every status reads "no detected deviation" or "insufficient
+ *  evidence", which looks like a careful negative result about two real
+ *  models, when in fact no model was involved — the arms were synthetic, or
+ *  the encoder was the hash stand-in that is not a semantic space at all. The
+ *  downgrade already happened upstream; this is the sentence that explains it.
+ */
+function ExampleBanner({ data }: { data: BehaviorData }) {
+  const why =
+    data.published?.published_as === "example"
+      ? "It was published with --force so the page has something to render."
+      : "Its arms or its encoder cannot support a claim about any model.";
+  return (
+    <div class="behavior-banner is-example" role="note">
+      <strong>This is an example, not evidence.</strong> {why} No cue here says
+      anything about any model, including the ones named below: nothing in this
+      artifact is a measurement of a deployment, and no status in it can reach{" "}
+      <em>confirmed</em>.
     </div>
   );
 }

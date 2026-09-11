@@ -26,6 +26,7 @@ import {
   cueMarkRadius,
   cueSignificant,
   fmtMetric,
+  isExampleOnly,
   maxMeasuredEffect,
   notRunArms,
   projectIntoLandscape,
@@ -268,6 +269,57 @@ describe("an arm that never ran is surfaced, not hidden", () => {
     // must not conflate them.
     expect(data.runs[0]!.cost_usd).toBeNull();
     expect(fmtMetric(data.runs[0]!.cost_usd)).toBe("not measured");
+  });
+});
+
+describe("an artifact that is not evidence says so", () => {
+  const mk = (over: Record<string, unknown>) => over as unknown as BehaviorData;
+
+  it("does not label a strict-source study", () => {
+    expect(
+      isExampleOnly(
+        mk({
+          diagnostics: { strict_source: true },
+          published: { study_id: "s", source: "", at: "", published_as: "study" },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("labels anything published as an example", () => {
+    expect(
+      isExampleOnly(
+        mk({
+          diagnostics: { strict_source: true },
+          published: { study_id: "s", source: "", at: "", published_as: "example" },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("labels a non-strict source even with no publish stamp", () => {
+    // The older-artifact case. Absent metadata is not assumed innocent: a
+    // `fake` arm or the hash encoder is enough on its own.
+    expect(isExampleOnly(mk({ diagnostics: { strict_source: false } }))).toBe(true);
+  });
+
+  it("says nothing when there is no artifact at all", () => {
+    // "not loaded yet" must not flash an accusation about a study nobody has
+    // seen; the loading state owns that moment.
+    expect(isExampleOnly(null)).toBe(false);
+  });
+
+  it("the page renders the banner, and its words are unambiguous", () => {
+    const root = join(import.meta.dirname, "..", "..", "src");
+    const src = readFileSync(join(root, "chrome", "BehaviorPage.tsx"), "utf8");
+    expect(src).toContain("isExampleOnly(data)");
+    expect(src).toContain("This is an example, not evidence.");
+    // and the CSS actually distinguishes it from the ordinary warning banner
+    const css = readFileSync(
+      join(root, "styles", "nebulai.behavior.css"),
+      "utf8",
+    );
+    expect(css).toContain(".behavior-banner.is-example");
   });
 });
 
