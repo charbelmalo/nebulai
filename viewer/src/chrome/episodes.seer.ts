@@ -465,12 +465,19 @@ export const EVAL_AWARENESS = registerSeerEpisode({
     "anything.",
   register: "bench",
   manifest: {
-    dataset: "gpt2",
-    directions: ["eval-awareness"],
-    space: "resid.centered",
+    // The dataset, the direction id and the layer are all the real ones now:
+    // the sweep was run on the pinned instruct model and every layer it tried
+    // is in that file. L12 is named here because it is the layer whose effect
+    // cleared its own null AND transferred to frame pairs the fit never saw —
+    // not because it was the largest number in the sweep, which is a different
+    // and much weaker reason to pick a layer.
+    dataset: "HuggingFaceTB__SmolLM2-135M-Instruct",
+    directions: ["eval-awareness-v1-L12"],
+    space: "resid.L12",
     unavailable:
-      "Needs an `eval-awareness` entry in directions.json — a diff-of-means over the " +
-      "eval/deploy prompt pair, written by the §3.2 direction writer.",
+      "Needs an `eval-awareness-v1-L12` entry in directions.json — a diff-of-means over " +
+      "the frozen eval/deploy matched pairs, written by the §3.2 direction writer " +
+      "(`python -m nebulai.backend.eval_awareness`).",
   },
   steps: [
     {
@@ -482,6 +489,19 @@ export const EVAL_AWARENESS = registerSeerEpisode({
         "residual of the first minus the mean residual of the second, at a pinned layer, " +
         "normalised to length 1. There is no classifier, no judge and no label anybody " +
         "assigned after the fact.",
+    },
+    {
+      title: "What the null actually said",
+      axis: "eval-awareness",
+      caption:
+        "Measured, not assumed. Over 8 framing pairs × 8 tasks on SmolLM2-135M-Instruct " +
+        "@12fd25f7, the in-sample effect at layer 12 is d = 1.00 against a " +
+        "label-permutation null whose p95 is 0.68, and it survives on two framing pairs " +
+        "the fit never saw at d = 0.60. That is the whole of the good news. Of the 30 " +
+        "layers swept, 6 cleared their own null (10–13, 15, 16) and 24 did not — layer " +
+        "19, the one the persona space uses, came in at d = 0.38 INSIDE its null of 0.66. " +
+        "Six of thirty at a per-layer 5% threshold is more than the 1.5 chance would " +
+        "give, and it is not a lot more. Every layer tried is in the file.",
     },
     {
       title: "The null cloud, in the same picture",

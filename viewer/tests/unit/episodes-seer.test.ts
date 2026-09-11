@@ -36,7 +36,7 @@ const FULL: SeerEpisodeContext = {
   corpora: ["transcript", "ai_village", "ctfish", "amongus"],
   spaces: ["smollm2-135m-instruct@12fd25f77366.personas-v1"],
   studies: ["smollm2-135m-instruct@12fd25f77366.no_exclamation"],
-  directionsFor: () => ["eval-awareness"],
+  directionsFor: () => ["eval-awareness-v1-L12"],
   networkAllowed: true,
 };
 
@@ -49,7 +49,7 @@ describe("the registry", () => {
       "project-vend",
       "ai-village",
       "chess-hacking",
-      "eval-awareness",
+      "eval-awareness",  // the EPISODE id; its direction id carries the layer
     ]);
   });
 
@@ -128,13 +128,14 @@ describe("the manifest gate", () => {
   it("refuses the eval-awareness episode when the direction is not in the sidecar", () => {
     const a = seerEpisodeAvailability(EVAL_AWARENESS, ctx({ directionsFor: () => ["sentiment"] }));
     expect(a.state).toBe("unavailable");
-    if (a.state !== "ready") expect(a.reason).toContain("eval-awareness");
+    if (a.state !== "ready") expect(a.reason).toContain("eval-awareness-v1-L12");
   });
 
   it("waits rather than refusing when the directions sidecar has not loaded", () => {
     const a = seerEpisodeAvailability(EVAL_AWARENESS, ctx({ directionsFor: () => null }));
     expect(a.state).toBe("pending");
-    if (a.state !== "ready") expect(a.reason).toContain("gpt2/directions.json");
+    if (a.state !== "ready")
+      expect(a.reason).toContain("HuggingFaceTB__SmolLM2-135M-Instruct/directions.json");
   });
 
   it("does not consult the network flag for an episode that never fetches", () => {
@@ -251,6 +252,14 @@ describe("what the analytical episodes refuse to claim", () => {
   });
 
   it("records the space every eval-awareness quantity lives in", () => {
-    expect(EVAL_AWARENESS.manifest.space).toBe("resid.centered");
+    expect(EVAL_AWARENESS.manifest.space).toBe("resid.L12");
+    // the layer in the space, the direction id and the caption must agree: a
+    // figure that names one layer and reads another is the quietest possible lie
+    expect(EVAL_AWARENESS.manifest.directions).toEqual(["eval-awareness-v1-L12"]);
+    const captions = EVAL_AWARENESS.steps.map((s) => s.caption).join("\n");
+    expect(captions).toContain("layer 12");
+    // the sweep is stated, not hidden: 6 of 30 cleared, 24 did not
+    expect(captions).toContain("30 ");
+    expect(captions).toContain("24 did not");
   });
 });
