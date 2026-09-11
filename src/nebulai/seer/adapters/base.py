@@ -22,7 +22,9 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Protocol
 
 from ..contract import (
+    Action,
     CaptureMode,
+    Effect,
     Event,
     EventType,
     Fidelity,
@@ -30,6 +32,7 @@ from ..contract import (
     TokenCategory,
     fold_key,
 )
+from .novelty import NoveltyLedger
 
 ADAPTER_VERSION = "0.1.0"
 
@@ -135,6 +138,10 @@ class BaseAdapter:
         #: the agent does not report one.
         self.span_started: dict[str, float] = {}
         self._unknown_native: set[str] = set()
+        #: Decides `Effect.NO_NEW_INFORMATION` where the payload settles it, and
+        #: returns nothing where it does not. One per adapter instance, which is
+        #: one per captured session — see `novelty.py` for the three rules.
+        self.novelty = NoveltyLedger()
 
     # ── event construction ───────────────────────────────────────────────
 
@@ -233,6 +240,44 @@ class BaseAdapter:
             {"chars": len(text), "text_retained": False},
             Fidelity.DROPPED_BY_POLICY,
         )
+
+    # ── novelty ──────────────────────────────────────────────────────────
+
+    def decide_effect(
+        self,
+        *,
+        action: Action | None,
+        fallback: Effect | None,
+        target: str | None = None,
+        path: str | None = None,
+        command: str | None = None,
+        output: str | None = None,
+        allow: bool = True,
+    ) -> tuple[Effect | None, dict[str, Any]]:
+        """Feed the novelty ledger; return the effect to use and its extra keys.
+
+        The ledger is fed on *every* call, including the ones whose verdict may
+        not be applied (`allow=False`). A failed command still teaches it what
+        that command printed, so the next identical failure is recognisable —
+        and a ledger fed only on the happy path would decide differently
+        depending on which events happened to fail, which is not a property a
+        deterministic label can have.
+
+        `fallback` is what the caller would have used, and it survives whenever
+        no rule fires: `None` from the ledger means *not decidable*, never
+        "there was new information".
+
+        `allow=False` is for tool calls the agent reported as failed. `FAILED`
+        is the agent's own word about what happened and a rule of ours never
+        overwrites one; a failure also repeats for reasons that have nothing to
+        do with novelty, which is `analysis.loop_rules`'s R3, not this.
+        """
+        verdict = self.novelty.decide(
+            action=action, target=target, path=path, command=command, output=output
+        )
+        if verdict is None or not allow:
+            return fallback, {}
+        return verdict.effect, verdict.payload()
 
     # ── usage ────────────────────────────────────────────────────────────
 

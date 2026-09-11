@@ -52,6 +52,7 @@ from ..contract import (
 )
 from ..taxonomy import classify_command, classify_tool
 from .base import BaseAdapter
+from .patches import BEGIN, FileEdit, parse_apply_patch
 
 #: What even the app-server does not report. Much shorter than the `exec --json`
 #: list, and it is a real list rather than an empty one: per-*request* model
@@ -121,7 +122,20 @@ def diff_extent(diff: str | None) -> dict[str, int] | None:
 
     Returns `None` for a diff with no line markers at all, so a shape we do not
     understand reads as absent rather than as a file that changed by zero lines.
+
+    `*** Begin Patch` envelopes are handed to `patches.parse_apply_patch`
+    instead: they are Codex's own format, not a unified diff, and counting
+    their `*** Delete File:` directives as ordinary context lines would report
+    a whole-file deletion as zero lines removed.
     """
+    if isinstance(diff, str) and BEGIN in diff:
+        edits = parse_apply_patch(diff)
+        if not edits or not all(e.counted for e in edits):
+            return None
+        return {
+            "lines_added": sum(e.lines_added or 0 for e in edits),
+            "lines_removed": sum(e.lines_removed or 0 for e in edits),
+        }
     if not isinstance(diff, str) or not diff:
         return None
     added = removed = 0
@@ -184,6 +198,9 @@ class CodexAppServerAdapter(BaseAdapter):
         self._pending_approval: dict[str, dict[str, Any]] = {}
         #: item id → span id for deltas that arrive between started and completed
         self._delta_spans: dict[str, str] = {}
+        #: path → per-file extents already emitted from a shell `apply_patch`,
+        #: waiting to be claimed by a `fileChange` item for the same patch.
+        self._patch_extents: dict[str, list[FileEdit]] = {}
 
     # ── entry point ──────────────────────────────────────────────────────
 
@@ -556,12 +573,47 @@ class CodexAppServerAdapter(BaseAdapter):
         exit_code = item.get("exitCode")
         status = item.get("status")
         ok = exit_code == 0 if exit_code is not None else status == "completed"
-        return [
+        out = item.get("aggregatedOutput") or ""
+        events: list[Event] = []
+
+        # `apply_patch` run through the shell states the edit's size; the
+        # `fileChange` item that may follow does not always carry a diff.
+        edits = parse_apply_patch(cmd) if ok else []
+        for edit in edits:
+            self._patch_extents.setdefault(edit.path, []).append(edit)
+            events.append(
+                self.event(
+                    EventType.FILE_CHANGED,
+                    span_id=span_id,
+                    action=Action.EDIT,
+                    effect=Effect.STATE_CHANGED,
+                    fidelity=Fidelity.DETERMINISTIC,
+                    native_type="item:commandExecution.applyPatch",
+                    source_event_id=item_id,
+                    payload={"via": "apply_patch", **edit.payload()},
+                )
+            )
+            self.novelty.note_edit(edit.path)
+
+        if edits:
+            effect: Effect | None = Effect.STATE_CHANGED
+            extra: dict[str, Any] = {}
+        else:
+            # STATE_CHANGED here is our inference from the exit code, not the
+            # server's claim, so a novelty rule is allowed to replace it.
+            effect, extra = self.decide_effect(
+                action=action,
+                fallback=Effect.STATE_CHANGED,
+                command=cmd,
+                output=out,
+                allow=ok,
+            )
+        events.append(
             self.event(
                 EventType.TOOL_COMPLETED if ok else EventType.TOOL_FAILED,
                 span_id=span_id,
                 action=action,
-                effect=Effect.STATE_CHANGED if ok else Effect.FAILED,
+                effect=effect if ok else Effect.FAILED,
                 native_type="item:commandExecution",
                 source_event_id=item_id,
                 payload={
@@ -572,10 +624,13 @@ class CodexAppServerAdapter(BaseAdapter):
                     # than our arrival-time subtraction, and the reason this
                     # mode's durations are native rather than deterministic
                     "duration_ms": item.get("durationMs"),
-                    "output_chars": len(item.get("aggregatedOutput") or ""),
+                    "output_chars": len(out),
+                    **({"n_patch_files": len(edits)} if edits else {}),
+                    **extra,
                 },
             )
-        ]
+        )
+        return events
 
     def _file_change(self, item, span_id, done, item_id) -> list[Event]:
         if not done:
@@ -595,8 +650,21 @@ class CodexAppServerAdapter(BaseAdapter):
         applied = status in (None, "completed")
         changes = [c for c in (item.get("changes") or []) if isinstance(c, dict)]
         events: list[Event] = []
+        deduped = 0
         if applied:
             for c in changes:
+                path = c.get("path")
+                # A shell `apply_patch` already counted this exact file. This
+                # item is the same edit described a second time, so claim the
+                # pending extent and emit nothing — one edit, counted once.
+                # Consume-once, so a genuinely later edit to the same file is
+                # unaffected.
+                pending = self._patch_extents.get(str(path))
+                if pending:
+                    pending.pop(0)
+                    deduped += 1
+                    continue
+                extent = diff_extent(c.get("diff"))
                 events.append(
                     self.event(
                         EventType.FILE_CHANGED,
@@ -606,12 +674,16 @@ class CodexAppServerAdapter(BaseAdapter):
                         native_type="item:fileChange",
                         source_event_id=item_id,
                         payload={
-                            "path": c.get("path"),
+                            "path": path,
                             "kind": c.get("kind"),
-                            **(diff_extent(c.get("diff")) or {}),
+                            # A change with no diff, or one whose diff we could
+                            # not count, says so. `0` would claim the file
+                            # changed by nothing.
+                            **(extent or {"lines_fidelity": Fidelity.MISSING.value}),
                         },
                     )
                 )
+                self.novelty.note_edit(path)
         events.append(
             self.event(
                 EventType.TOOL_COMPLETED if applied else EventType.TOOL_FAILED,
@@ -625,6 +697,7 @@ class CodexAppServerAdapter(BaseAdapter):
                     "paths": [c.get("path") for c in changes],
                     "n_changes": len(changes),
                     "status": status,
+                    **({"n_deduped": deduped} if deduped else {}),
                 },
             )
         )
@@ -672,14 +745,26 @@ class CodexAppServerAdapter(BaseAdapter):
         ]
 
     def _web_search(self, item, span_id, done, item_id) -> list[Event]:
+        query = item.get("query")
+        effect: Effect | None = None
+        extra: dict[str, Any] = {}
+        if done:
+            # The item carries the query and no results, so R-A (same query
+            # twice) is the only rule with anything to go on here.
+            effect, extra = self.decide_effect(
+                action=Action.SEARCH,
+                fallback=None,
+                target=f"web_search:{query}" if query else None,
+            )
         return [
             self.event(
                 EventType.TOOL_COMPLETED if done else EventType.TOOL_STARTED,
                 span_id=span_id,
                 action=Action.SEARCH,
+                effect=effect,
                 native_type="item:webSearch",
                 source_event_id=item_id,
-                payload={"query": item.get("query")},
+                payload={"query": query, **extra},
             )
         ]
 

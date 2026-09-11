@@ -135,6 +135,120 @@ interactive HTML labels all, with per-point `hover_text=repr(label)` (so a
 leading-space token like `' cat'` is visibly distinct from `'cat'`) and search.
 Noise → `noise_label="Unlabelled"`.
 
+## persona space (`out/persona/<space_id>/`) — the placement contract
+
+A persona space is a fixed 2-D basis that arbitrary text can be projected into,
+so a captured agent run can be drawn on the same axes twice. It is **not** a
+`nebulai.json` map: it has no points of its own, and the viewer never treats it
+as one. Two files carry the whole contract.
+
+### `out/persona/<space_id>/space.json` — the basis and its control
+
+```jsonc
+{
+  "meta": {
+    "space_id": "smollm2-135m-instruct@12fd25f77366.v1.L19",
+    "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+    "revision": "12fd25f77366fa6b3b4b768ec3050bf629380bac",  // full sha, pinned
+    "layer": 19,
+    "pooling": "last_token_mean_over_prompt_set",
+    "prompt_set": { "id": "personas.v1", "sha256": "...",
+                    "n": 296, "n_probes": 8, "n_prompts": 2368 },
+    "created": "2026-09-11T20:45:19Z",
+    "space": "persona-pca.smollm2-135m-instruct@12fd25f77366.v1.L19"
+  },
+  "basis": {
+    "components": [ /* n_components × d_model */ ],
+    "mean": [ /* d_model */ ],
+    "explained_variance_ratio": [ /* n_components */ ]
+  },
+  "archetypes": [ { "name": "therapist", "scores": [ /* n_components */ ] } ],
+  "control": {
+    "method": "label_permutation_within_probe",
+    "n": 500, "seed": 0,
+    "pc1_evr": 0.204613,
+    "pc1_evr_null_mean": 0.172918,
+    "pc1_evr_null_p95": 0.191639,
+    "verdict": "above_null",          // above_null | at_null | below_null
+    "p_value": 0.001996,
+    "cross_check": { "method": "label_permutation_unstratified", "n": 500,
+                     "pc1_evr_null_mean": ..., "pc1_evr_null_p95": ...,
+                     "verdict": ..., "note": "Not the verdict. ..." }
+  }
+}
+```
+
+- **`control` is mandatory.** A `space.json` without it is not a space; a
+  consumer refuses it rather than drawing an unvalidated basis. `verdict` is the
+  gate: only `above_null` is **selectable by default**. `at_null` and
+  `below_null` load only on an explicit opt-in and must be captioned with the
+  verdict wherever they are drawn — a space whose PC1 does not beat its own
+  permutation null is a picture of nothing, and silently offering it is the
+  failure this field exists to prevent.
+- `pc1_evr` and `pc1_evr_null_p95` **travel with every drawing of the space**,
+  not just with the build log, so no view can show the geometry without the
+  number that says whether it is real.
+- `cross_check` is a second null under a weaker assumption, kept for context and
+  explicitly **not the verdict** — its own `note` says so. Never read
+  `cross_check.verdict` as the space's verdict; a reader that does will find
+  `below_null` sitting next to a legitimately `above_null` space.
+- `revision` is the full commit sha of the weights, and `prompt_set.sha256`
+  pins the prompts. Two spaces are comparable only when both match: the basis is
+  meaningless across a different checkout of the same model name.
+- `archetypes[i].scores` is one row per prompt-set persona in the basis'
+  component order — the reference cloud a placement is read against.
+
+### `<store>/runs/<run_id>/placement.json` — as written by `seer place`
+
+```jsonc
+{
+  "run_id": "...", "space_id": "...", "model": "...", "revision": "...",
+  "layer": 19,
+  "placement_source": "pinned_model",   // pinned_model | text_embedder
+  "transport": "in_process",            // in_process | live_http
+  "fidelity": "deterministic",
+  "verdict": "above_null", "pc1_evr": 0.204613, "pc1_evr_null_p95": 0.191639,
+  "created": "2026-09-11T20:45:19Z",
+  "n_points": 41,
+  "n_skipped": 6, "n_dropped_by_policy": 4, "n_missing": 2,
+  "points": [
+    { "index": 0, "seq": 0, "ts": 1757..., "event_id": "...", "turn_id": "...",
+      "role": "assistant", "chars": 812, "coords": [1.2, -3.4] }
+  ],
+  "skipped": [
+    { "index": 3, "event_id": "...", "role": "assistant",
+      "fidelity": "dropped_by_policy",
+      "reason": "812 chars recorded, text not retained (content_level='metadata')" }
+  ]
+}
+```
+
+- **`placement_source` is the only field the glyph is picked off.** Points
+  placed by the pinned model (`pinned_model`) and points placed by a generic
+  text embedder (`text_embedder`) are the same picture at different fidelities
+  and must be visually distinguishable; deriving the glyph from anything else —
+  `transport`, `fidelity`, the presence of coordinates — reintroduces exactly
+  the confusion this field removes.
+- **The four counts never fold into each other.** `n_points` counts what was
+  placed. `n_skipped` counts what was not, and `n_dropped_by_policy` +
+  `n_missing` partition it by *why*: `dropped_by_policy` means the text existed
+  and was refused at ingress (the adapter counted `chars` and kept none of
+  them), `missing` means there was nothing to capture. They are different facts
+  about the run and a reader acts differently on each, so a view that shows a
+  single "skipped" total must still expose the split.
+- Every skipped turn keeps its `index`, so a placement is always reconcilable
+  against the run's turn order; the `points[].index` and `skipped[].index`
+  together enumerate the turns without gaps, while `seq` is the dense index into
+  `points` only.
+- `verdict` / `pc1_evr` / `pc1_evr_null_p95` are copied down from the space's
+  `control` so a placement can be judged without loading a 150 KB `space.json`.
+  A run placed into a space that failed its control still carries that verdict
+  and must still be captioned with it.
+- A run in which nothing was placeable is written out as an honest empty
+  placement — `points: []`, `fidelity: "missing"`, `verdict: "unknown"`, and the
+  full `skipped` list — rather than raising. The run exists and the reason every
+  turn was unplaceable is worth writing where the viewer can show it.
+
 ## The rule for new pipelines
 
 To add a front-end: write `frontends/<name>.py` exposing `load_*_units(...) ->

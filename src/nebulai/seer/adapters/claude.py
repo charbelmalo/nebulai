@@ -41,6 +41,7 @@ from ..contract import (
 )
 from ..taxonomy import classify_command, classify_tool, edit_extent
 from .base import BaseAdapter
+from .novelty import lookup_path, lookup_target
 
 _USAGE_MAP = {
     "input_tokens": TokenCategory.INPUT,
@@ -84,6 +85,13 @@ class ClaudeStreamAdapter(BaseAdapter):
         #: result comes back. See `_EDIT_TOOLS`.
         self._tool_paths: dict[str, str] = {}
         self._tool_extents: dict[str, dict[str, int]] = {}
+        #: tool_use id -> the novelty ledger's key for this call, held until the
+        #: result comes back. See `novelty.lookup_target`.
+        self._tool_targets: dict[str, str | None] = {}
+        #: tool_use id → the one file a lookup read, when it named one. What an
+        #: edit invalidates; see `novelty.lookup_path`.
+        self._tool_read_paths: dict[str, str | None] = {}
+        self._tool_commands: dict[str, str | None] = {}
         self._thinking_estimate: int | None = None
 
     # ── entry point ──────────────────────────────────────────────────────
@@ -325,6 +333,11 @@ class ClaudeStreamAdapter(BaseAdapter):
                 else classify_tool(name)
             )
             self._tool_actions[use_id] = action
+            self._tool_targets[use_id] = lookup_target(name, inp)
+            self._tool_read_paths[use_id] = lookup_path(name, inp)
+            self._tool_commands[use_id] = (
+                str(inp["command"]) if isinstance(inp.get("command"), str) else None
+            )
             if name in _EDIT_TOOLS:
                 path = inp.get(_EDIT_TOOLS[name])
                 if path:
@@ -376,10 +389,22 @@ class ClaudeStreamAdapter(BaseAdapter):
             action = self._tool_actions.pop(use_id, None)
             path = self._tool_paths.pop(use_id, None)
             extent = self._tool_extents.pop(use_id, None)
+            target = self._tool_targets.pop(use_id, None)
+            read_path = self._tool_read_paths.pop(use_id, None)
+            command = self._tool_commands.pop(use_id, None)
             failed = bool(block.get("is_error"))
             body = block.get("content")
             chars = len(body) if isinstance(body, str) else _blocks_chars(body)
+            # `or None` on the block-list branch only: a string body of `""`
+            # is a tool that returned nothing, which is a fact. An empty
+            # *extraction* from a block list means we found no text to read,
+            # which is not — and comparing two of those as "identical output"
+            # would call every pair of image results a repeat.
+            text = body if isinstance(body, str) else (_blocks_text(body) or None)
             if path and not failed:
+                # The write lands before the ledger judges anything later, so a
+                # read of this file further on is new information again.
+                self.novelty.note_edit(path)
                 events.append(
                     self.event(
                         EventType.FILE_CHANGED,
@@ -392,15 +417,24 @@ class ClaudeStreamAdapter(BaseAdapter):
                         payload={"path": path, "kind": "update", **(extent or {})},
                     )
                 )
+            effect, extra = self.decide_effect(
+                action=action,
+                fallback=Effect.FAILED if failed else _effect_for(action),
+                target=target,
+                path=read_path,
+                command=command,
+                output=text,
+                allow=not failed,
+            )
             events.append(
                 self.event(
                     EventType.TOOL_FAILED if failed else EventType.TOOL_COMPLETED,
                     span_id=span_id,
                     action=action,
-                    effect=Effect.FAILED if failed else _effect_for(action),
+                    effect=effect,
                     native_type="user.tool_result",
                     source_event_id=use_id,
-                    payload={"output_chars": chars, "is_error": failed},
+                    payload={"output_chars": chars, "is_error": failed, **extra},
                 )
             )
         return events
@@ -508,13 +542,29 @@ def _blocks_chars(blocks: Any) -> int:
     )
 
 
+def _blocks_text(blocks: Any) -> str:
+    """Concatenated text of a block-list `tool_result` body.
+
+    Used only to compare one result against an earlier one and to test it
+    against the zero-result sentences. The text itself is never stored.
+    """
+    if isinstance(blocks, str):
+        return blocks
+    if not isinstance(blocks, list):
+        return ""
+    return "".join(b.get("text") or "" for b in blocks if isinstance(b, dict))
+
+
 def _effect_for(action: Action | None) -> Effect:
-    """Effect we can assert from a successful tool result alone.
+    """Effect we can assert from a successful tool result alone, before the
+    novelty ledger gets a look at it.
 
     Deliberately conservative: a successful Read tells us the call worked, not
-    whether it surfaced anything the run had not already seen. Deciding
-    `new_information` vs `no_new_information` needs cross-event comparison, and
-    that belongs in the reducer, which can see the whole trajectory.
+    whether it surfaced anything the run had not already seen. `UNKNOWN` is
+    what the caller hands `decide_effect` as its fallback, and it stays
+    `UNKNOWN` unless one of that ledger's three rules actually fires (see
+    `novelty.py`). It is never upgraded to `NEW_INFORMATION`: nothing in a
+    payload can establish that the model learned something.
     """
     if action in (Action.EDIT, Action.VCS):
         return Effect.STATE_CHANGED

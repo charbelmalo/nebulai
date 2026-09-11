@@ -20,6 +20,7 @@ Cancellation sends SIGTERM then SIGKILL after a grace period, and records
 
 from __future__ import annotations
 
+import hashlib
 import os
 import queue
 import shlex
@@ -210,7 +211,12 @@ class Runner:
                         "label": self.label,
                         "model_requested": self.model,
                     },
-                )
+                ),
+                self.adapter.event(
+                    EventType.GIT_SNAPSHOT,
+                    fidelity=Fidelity.DETERMINISTIC,
+                    payload=git_snapshot(self.cwd, "start"),
+                ),
             ]
         )
 
@@ -374,6 +380,14 @@ class Runner:
 
         self._emit(
             [
+                # Before RUN_COMPLETED, so the pair of snapshots brackets the
+                # agent's work and nothing the runner does afterwards lands
+                # between them.
+                self.adapter.event(
+                    EventType.GIT_SNAPSHOT,
+                    fidelity=Fidelity.DETERMINISTIC,
+                    payload=git_snapshot(self.cwd, "end"),
+                ),
                 self.adapter.event(
                     EventType.RUN_COMPLETED,
                     fidelity=Fidelity.DETERMINISTIC,
@@ -382,7 +396,7 @@ class Runner:
                         "outcome": view.outcome.value,
                         "n_events": view.n_events,
                     },
-                )
+                ),
             ]
         )
         view = self.reducer.finalize()
@@ -405,27 +419,133 @@ def _pump(stream, name: str, out: queue.Queue) -> None:
         out.put(None)
 
 
+#: An absolute path, never the bare name. A run's provenance must not depend on
+#: which `git` happened to be first on the agent's `PATH` — and the agent's
+#: environment is passed through unchanged by design, so that `PATH` is not
+#: ours to trust.
+GIT_BIN = "/usr/bin/git"
+
+#: `git status --porcelain` on a large dirty tree is the slow call here. Three
+#: seconds was not enough on a cold index; five is, and a timeout is reported
+#: as `missing` rather than silently read as a clean tree.
+_GIT_TIMEOUT_S = 5.0
+
+
+def _git(root: str | Path, *args: str) -> tuple[str | None, str | None]:
+    """Run one git command. Returns `(stdout, None)` or `(None, why_not)`.
+
+    The two halves never overlap, and that is the whole point of the signature:
+    a command that failed returns `None`, never `""`. `git status --porcelain`
+    prints nothing for a clean tree and prints nothing when it errors, so a
+    function that returned a bare string would make "the tree is clean" and "we
+    could not ask" the same value — which is the exact shape of a `missing`
+    rendered as an absence of change.
+    """
+    try:
+        r = subprocess.run(
+            [GIT_BIN, "-C", str(root), *args],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT_S,
+        )
+    except FileNotFoundError:
+        return None, f"{GIT_BIN} is not installed"
+    except subprocess.TimeoutExpired:
+        return None, f"git {args[0]} timed out after {_GIT_TIMEOUT_S:g}s"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"git {args[0]} could not run ({type(exc).__name__})"
+    if r.returncode != 0:
+        detail = (r.stderr or "").strip().splitlines()
+        tail = detail[-1][:120] if detail else ""
+        return None, f"git {args[0]} exited {r.returncode}" + (f": {tail}" if tail else "")
+    return r.stdout, None
+
+
+def git_snapshot(cwd: Path, phase: str) -> dict[str, Any]:
+    """The repository's state at one instant, or a stated reason there is none.
+
+    Two facts, taken together because either alone is misleading: the HEAD sha,
+    and a SHA-256 of `git status --porcelain`. HEAD says which commit the run
+    was measured against; the status hash says whether the working tree moved
+    while the run happened. A run whose start and end snapshots share a HEAD
+    but differ in `status_hash` edited files without committing — which is what
+    most agent runs do, and what a HEAD-only record cannot show.
+
+    The hash is of the porcelain output rather than the output itself: the
+    paths of every dirty file in a researcher's tree are not something a
+    captured run needs to carry, and equality is all the comparison needs.
+    `status_lines` is kept beside it so a reader can see *how much* moved
+    without being told *what*.
+
+    Outside a repository, or when git cannot answer, the value is `missing`
+    with `note` saying why. It is never an empty string, and an empty string is
+    never read as a clean tree — see `_git`.
+    """
+    snap: dict[str, Any] = {
+        "phase": phase,
+        "head": None,
+        "head_fidelity": Fidelity.MISSING.value,
+        "status_hash": None,
+        "status_lines": None,
+        "dirty": None,
+        "status_fidelity": Fidelity.MISSING.value,
+    }
+    out, why = _git(cwd, "rev-parse", "--show-toplevel")
+    root = (out or "").strip()
+    if not root:
+        snap["note"] = why or f"{cwd} is not inside a git repository"
+        return snap
+    snap["root_id"] = root
+
+    head, why = _git(root, "rev-parse", "HEAD")
+    if head and head.strip():
+        snap["head"] = head.strip()
+        snap["head_fidelity"] = Fidelity.DETERMINISTIC.value
+    else:
+        # A repository with no commits yet reaches here: `rev-parse HEAD` fails
+        # because there is nothing to resolve. There is no sha, so there is no
+        # sha — not a zero, not the empty string.
+        snap["note"] = why or "HEAD does not resolve (no commits yet?)"
+
+    status, why = _git(root, "status", "--porcelain")
+    if status is None:
+        notes = [n for n in (snap.get("note"), why) if n]
+        snap["note"] = "; ".join(notes)
+        return snap
+    snap["status_hash"] = hashlib.sha256(status.encode("utf-8", "replace")).hexdigest()
+    snap["status_lines"] = len(status.splitlines())
+    snap["dirty"] = bool(status.strip())
+    snap["status_fidelity"] = Fidelity.DETERMINISTIC.value
+    return snap
+
+
 def _repo_context(cwd: Path) -> dict[str, Any] | None:
-    """Branch and HEAD, if this is a git worktree.
+    """Branch, HEAD and working-tree hash, if this is a git worktree.
 
     Recorded per run because "which commit was this measured against" is the
     first question anyone asks of a result, and reconstructing it later from
-    timestamps is guesswork.
-    """
-    try:
-        def git(*args: str) -> str:
-            return subprocess.run(
-                ["git", *args], cwd=str(cwd), capture_output=True, text=True, timeout=3
-            ).stdout.strip()
+    timestamps is guesswork. `None` outside a repository, which is what
+    `store._index` and `attach.py` already expect.
 
-        root = git("rev-parse", "--show-toplevel")
-        if not root:
-            return None
-        return {
-            "root_id": root,
-            "branch": git("rev-parse", "--abbrev-ref", "HEAD") or None,
-            "head": git("rev-parse", "HEAD") or None,
-            "dirty": bool(git("status", "--porcelain")),
-        }
-    except (OSError, subprocess.SubprocessError):
+    This is the *start* snapshot, carried on every event the run emits so a
+    single event is self-describing. The pair of `GIT_SNAPSHOT` events the
+    runner emits is what shows movement across the run; see `git_snapshot`.
+    """
+    snap = git_snapshot(cwd, "start")
+    root = snap.get("root_id")
+    if not root:
         return None
+    branch, _ = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
+    return {
+        "root_id": root,
+        "branch": (branch or "").strip() or None,
+        "head": snap["head"],
+        "head_fidelity": snap["head_fidelity"],
+        "status_hash": snap["status_hash"],
+        "status_fidelity": snap["status_fidelity"],
+        # `None`, not `False`, when git could not be asked. A dirty flag that
+        # reads `False` for "we do not know" is the same lie as a `0` for a
+        # missing count.
+        "dirty": snap["dirty"],
+    }
