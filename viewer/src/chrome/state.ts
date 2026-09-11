@@ -24,6 +24,7 @@
 
 export * from "./state/shell";
 export * from "./state/atlas";
+export * from "./state/behavior";
 export * from "./state/interp";
 export * from "./state/probing";
 export * from "./state/appearance";

@@ -1,0 +1,535 @@
+/* nebulai.behavior.css — Nebulai: the Behavior page (association study).
+   Owner: Nebulai (behavior). Imported by nebulai.css only; not in Seer's sheet.
+
+   The colour decisions here are the claim contract in CSS. Three states of a
+   cue must be distinguishable at a glance and must NOT form a ramp, because a
+   ramp implies an ordering and "not measured" is not a smaller version of
+   "measured". So: measured cues take the accent, gated cues a muted warm tone,
+   and not-measured cues are drawn hollow with no fill at all. A hollow ring
+   cannot be mistaken for a small filled dot, which is exactly the confusion a
+   zero-radius mark would create.
+
+   Nothing here encodes a model. There is no per-arm colour anywhere on this
+   page: colouring the two arms differently invites reading one as the good one,
+   and this study ranks neither. */
+
+.behavior-page {
+  position: fixed;
+  inset: 60px 0 0 0;
+  z-index: 15;
+  overflow: hidden;
+  background: var(--bg);
+}
+.behavior-scroll {
+  height: 100%;
+  overflow-y: auto;
+  padding: 56px 48px 120px;
+}
+.behavior-head,
+.behavior-toolbar,
+.behavior-count,
+.behavior-body,
+.behavior-evidence,
+.behavior-runs,
+.behavior-crosslinks,
+.behavior-state {
+  max-width: 1180px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ── head ─────────────────────────────────────────────────────────────── */
+
+.behavior-kicker {
+  margin: 0 0 12px;
+  font: 650 11px/1 var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.behavior-title {
+  margin: 0 0 16px;
+  font-size: 38px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--text);
+}
+.behavior-lede {
+  margin: 0 0 22px;
+  max-width: 74ch;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--text-dim);
+}
+.behavior-note {
+  margin: 10px 0;
+  max-width: 74ch;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+.behavior-state {
+  padding-top: 40px;
+}
+.behavior-error-detail {
+  margin-top: 18px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: var(--panel);
+  font: 12px/1.5 var(--font-mono);
+  color: var(--text-dim);
+}
+
+/* ── facts grid ───────────────────────────────────────────────────────── */
+
+.behavior-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 10px 20px;
+  margin: 0 0 24px;
+}
+.behavior-fact dt {
+  font: 650 10px/1.4 var(--font-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint, var(--text-dim));
+}
+.behavior-fact dd {
+  margin: 3px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+  word-break: break-word;
+}
+
+/* ── banners ──────────────────────────────────────────────────────────── */
+
+.behavior-banner {
+  margin: 0 0 22px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  border-left: 3px solid var(--warn, #d08a3a);
+  background: color-mix(in srgb, var(--warn, #d08a3a) 9%, transparent);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.behavior-banner ul {
+  margin: 10px 0 0;
+  padding-left: 0;
+  list-style: none;
+}
+.behavior-banner li {
+  margin-top: 8px;
+}
+.behavior-banner code {
+  display: inline-block;
+  margin-right: 8px;
+  font: 12px var(--font-mono);
+  color: var(--accent);
+}
+.behavior-banner-why {
+  display: block;
+  margin-top: 4px;
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+.behavior-banner.is-missing {
+  border-left-color: var(--text-dim);
+  background: color-mix(in srgb, var(--text-dim) 8%, transparent);
+}
+
+/* ── toolbar ──────────────────────────────────────────────────────────── */
+
+.behavior-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.behavior-search input {
+  width: 280px;
+  padding: 7px 11px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+}
+.behavior-seg {
+  display: inline-flex;
+  border-radius: 7px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+.behavior-seg button {
+  padding: 7px 13px;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+.behavior-seg button.is-on {
+  background: var(--accent);
+  color: var(--bg);
+}
+.behavior-link-btn {
+  padding: 7px 13px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+.behavior-link-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.behavior-count {
+  margin: 0 0 20px;
+  font: 12px var(--font-mono);
+  color: var(--text-dim);
+}
+.behavior-tally .is-measured {
+  color: var(--accent);
+}
+.behavior-tally .is-gated {
+  color: var(--warn, #d08a3a);
+}
+.behavior-tally .is-missing {
+  color: var(--text-dim);
+}
+
+/* ── body split ───────────────────────────────────────────────────────── */
+
+.behavior-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 28px;
+  align-items: start;
+  margin-bottom: 48px;
+}
+.behavior-inspector {
+  position: sticky;
+  top: 8px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  padding: 18px 20px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+/* ── landscape ────────────────────────────────────────────────────────── */
+
+.behavior-landscape {
+  margin: 0;
+}
+.behavior-landscape svg {
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+.behavior-plot-bg {
+  fill: var(--panel);
+}
+.behavior-mark {
+  cursor: pointer;
+}
+.behavior-mark circle {
+  fill: var(--accent);
+  fill-opacity: 0.7;
+  stroke: none;
+}
+.behavior-mark.is-gated circle {
+  fill: var(--warn, #d08a3a);
+  fill-opacity: 0.5;
+}
+/* Not measured: hollow, so it can never read as a small effect. */
+.behavior-mark .behavior-mark-indet,
+.behavior-mark.is-missing circle {
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 1.2;
+  stroke-dasharray: 2 2;
+}
+.behavior-mark.is-sig circle {
+  fill-opacity: 0.9;
+}
+.behavior-mark.is-nonsig circle {
+  fill-opacity: 0.35;
+}
+.behavior-mark.is-open circle {
+  stroke: var(--text);
+  stroke-width: 1.6;
+  stroke-dasharray: none;
+}
+.behavior-mark text {
+  font: 10px var(--font-mono);
+  fill: var(--text-dim);
+  pointer-events: none;
+}
+.behavior-mark.is-open text {
+  fill: var(--text);
+}
+.behavior-caption {
+  margin: 12px 0 0;
+  max-width: 90ch;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+.behavior-caption p {
+  margin: 0 0 6px;
+}
+.behavior-caption-sub code {
+  font: 11px var(--font-mono);
+  color: var(--accent);
+}
+
+/* ── ranked ───────────────────────────────────────────────────────────── */
+
+.behavior-ranked {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.behavior-row {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr) 78px 120px;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text);
+}
+.behavior-row:hover,
+.behavior-row.is-open {
+  background: var(--panel);
+}
+.behavior-row-cue {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.behavior-row-bar {
+  display: block;
+  height: 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text-dim) 18%, transparent);
+}
+.behavior-row-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--accent);
+}
+.behavior-row-nobar {
+  padding-left: 6px;
+  font: 10px var(--font-mono);
+  font-style: normal;
+  color: var(--text-dim);
+}
+.behavior-row-num {
+  font: 11px var(--font-mono);
+  text-align: right;
+  color: var(--text-dim);
+}
+.behavior-row-sig {
+  font: 11px var(--font-mono);
+  color: var(--text-dim);
+}
+.behavior-row-sig.is-sig {
+  color: var(--accent);
+}
+.behavior-row-sig.is-indet {
+  font-style: italic;
+}
+
+/* ── table ────────────────────────────────────────────────────────────── */
+
+.behavior-table-wrap {
+  overflow-x: auto;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+.behavior-table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 12px var(--font-mono);
+}
+.behavior-table th,
+.behavior-table td {
+  padding: 7px 10px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-dim);
+}
+.behavior-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 650;
+}
+.behavior-table tbody th {
+  color: var(--text);
+}
+.behavior-table tbody tr {
+  cursor: pointer;
+}
+.behavior-table tbody tr:hover,
+.behavior-table tbody tr.is-open {
+  background: var(--panel);
+}
+.behavior-table .is-sig {
+  color: var(--accent);
+}
+.behavior-table .is-gated {
+  color: var(--warn, #d08a3a);
+}
+.behavior-table .is-missing {
+  font-style: italic;
+}
+
+/* ── inspector internals ──────────────────────────────────────────────── */
+
+.behavior-cue h2 {
+  margin: 0 0 4px;
+  font-size: 19px;
+  color: var(--text);
+}
+.behavior-cue h3 {
+  margin: 20px 0 8px;
+  font: 650 10px/1 var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.behavior-cue h4 {
+  margin: 0 0 4px;
+  font: 650 12px var(--font-mono);
+  color: var(--accent);
+}
+.behavior-cue-meta {
+  margin: 0 0 14px;
+  font: 11px var(--font-mono);
+  color: var(--text-dim);
+}
+.behavior-metrics {
+  margin: 0;
+}
+.behavior-metric {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+.behavior-metric dt {
+  font: 11px var(--font-mono);
+  color: var(--text-dim);
+  cursor: help;
+  border-bottom: 1px dotted var(--line);
+}
+.behavior-metric dd {
+  margin: 0;
+  font: 11px var(--font-mono);
+  text-align: right;
+  color: var(--text);
+}
+/* A missing metric is styled as absent text, never as a value of zero. */
+.behavior-metric.is-missing dd {
+  font-style: italic;
+  color: var(--text-dim);
+}
+.behavior-arm {
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.behavior-arm-line,
+.behavior-arm-det {
+  margin: 2px 0;
+  font: 10.5px/1.5 var(--font-mono);
+  color: var(--text-dim);
+}
+.behavior-arm-assoc {
+  margin: 6px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.behavior-samples {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.behavior-samples li {
+  margin-bottom: 8px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text-dim) 7%, transparent);
+}
+.behavior-sample-model {
+  display: block;
+  font: 10px var(--font-mono);
+  color: var(--accent);
+}
+.behavior-sample-text {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+/* ── evidence / runs / cross-links ────────────────────────────────────── */
+
+.behavior-evidence h2,
+.behavior-runs h2,
+.behavior-crosslinks h2 {
+  margin: 36px 0 10px;
+  font-size: 19px;
+  color: var(--text);
+}
+.behavior-diagnostics {
+  margin-top: 14px;
+  padding: 12px 14px;
+  max-height: 320px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--panel);
+  font: 11px/1.5 var(--font-mono);
+  color: var(--text-dim);
+}
+.behavior-crosslink-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+@media (max-width: 980px) {
+  .behavior-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .behavior-inspector {
+    position: static;
+    max-height: none;
+  }
+  .behavior-scroll {
+    padding: 40px 20px 100px;
+  }
+}

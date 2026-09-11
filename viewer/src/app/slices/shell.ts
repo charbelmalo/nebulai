@@ -30,12 +30,28 @@ export type AppId = "nebulai" | "seer";
  *  "Transcripts"); `seer` is SessionSeer's live view — capture and comparison
  *  of Codex / Claude / Hermes agent runs, served by `seer serve`.
  *
- *  The union stays all six on purpose: ONE shell type serves both instruments,
- *  so the chrome, the permalink layer and the signal bridge stay single. Which
- *  three of the six a given document may actually reach is `APP_PAGES`. */
-export type Page = "map" | "snapshot" | "interp" | "guide" | "sessions" | "seer";
+ *  `behavior` is the association study of docs/BEHAVIORAL-DIVERGENCE-PLAN.md.
+ *  It is a page rather than a view mode because it reads a different artifact
+ *  (`out/behavior/behavior.json`), makes a different kind of claim, and must
+ *  never be mistaken for the weight-geometry maps: everything else in this
+ *  instrument answers "what can this layer write", and this one answers "what
+ *  did these deployments actually say". Keeping them on separate pages is what
+ *  stops a reader carrying a causal reading from one to the other.
+ *
+ *  The union stays all seven on purpose: ONE shell type serves both
+ *  instruments, so the chrome, the permalink layer and the signal bridge stay
+ *  single. Which of the seven a given document may actually reach is
+ *  `APP_PAGES`. */
+export type Page =
+  | "map"
+  | "behavior"
+  | "snapshot"
+  | "interp"
+  | "guide"
+  | "sessions"
+  | "seer";
 
-/** The three pages each instrument owns, in nav order — the authority for both
+/** The pages each instrument owns, in nav order — the authority for both
  *  "what may `setPage` accept" and "where does this app boot". Labels are NOT
  *  here: they are chrome, and live in `chrome/apps/nav.ts`, which is pinned
  *  against this table by tests/unit/app-pages.test.ts so the two cannot drift.
@@ -44,7 +60,7 @@ export type Page = "map" | "snapshot" | "interp" | "guide" | "sessions" | "seer"
  *  throwing: the callers are a permalink and a nav click, and neither has a
  *  sensible failure mode beyond "stay where you are". */
 export const APP_PAGES: Record<AppId, readonly Page[]> = {
-  nebulai: ["map", "interp", "guide"],
+  nebulai: ["map", "behavior", "interp", "guide"],
   seer: ["seer", "sessions", "snapshot"],
 };
 

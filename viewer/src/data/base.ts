@@ -21,5 +21,12 @@
  *       BASE_URL="/psychiX/nebulai-maps/"
  *       -> "https://<host>/psychiX/nebulai-maps/out"
  */
-const APP_BASE = new URL(import.meta.env.BASE_URL || "/", location.href);
+/*  `location` exists on the main thread and inside a Worker (as `self.location`),
+ *  which covers every context the app actually runs in. It does NOT exist in a
+ *  bare Node process, which is where the unit suite imports data modules for
+ *  their pure helpers. Falling back to an opaque origin there keeps DATA_BASE a
+ *  valid absolute URL for those imports and changes nothing a browser computes:
+ *  in the browser the ternary always takes the first branch. */
+const DOC_HREF = typeof location === "undefined" ? "http://localhost/" : location.href;
+const APP_BASE = new URL(import.meta.env.BASE_URL || "/", DOC_HREF);
 export const DATA_BASE = new URL("out/", APP_BASE).href.replace(/\/+$/, "");

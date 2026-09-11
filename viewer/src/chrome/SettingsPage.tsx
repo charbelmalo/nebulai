@@ -19,6 +19,7 @@ import {
 } from "./probe";
 import {
   $appearance,
+  $behavior,
   $capabilities,
   $compareData,
   $dataset,
@@ -43,7 +44,16 @@ import { ColorRow, RadioRow, SelectRow, SliderRow, Tabs, TextRow, ToggleRow } fr
 import { CATEGORY_ORDER } from "./sessionlog";
 import type { SessionsAppearance, SessionsAxisMode } from "../scene/sessions/appearance";
 
-const TABS = ["General", "Appearance", "Model Probing", "Snapshot", "Sessions", "Data", "About"];
+const TABS = [
+  "General",
+  "Appearance",
+  "Behavior",
+  "Model Probing",
+  "Snapshot",
+  "Sessions",
+  "Data",
+  "About",
+];
 
 const STAGE_ORDER: readonly string[] = [
   "probing",
@@ -105,6 +115,7 @@ export function SettingsPage() {
         <div class="settings-body">
           {tab.value === "General" && <GeneralTab />}
           {tab.value === "Appearance" && <AppearanceTab />}
+          {tab.value === "Behavior" && <BehaviorTab />}
           {tab.value === "Model Probing" && <ProbingTab />}
           {tab.value === "Snapshot" && <SnapshotTab />}
           {tab.value === "Sessions" && <SessionsTab />}
@@ -113,6 +124,103 @@ export function SettingsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// ── Behavior ───────────────────────────────────────────────────────────────
+
+/*  The Behavior page's knobs, per the Settings-home rule. Two of them carry a
+ *  claim, not just a preference, and their wording is load-bearing.
+ *
+ *  "Hide cues whose significance is indeterminate" is a DECLUTTER and is off by
+ *  default. Indeterminate is a third answer in this study — it means q could
+ *  not be computed for that cue, which is not the same as "no effect". A
+ *  default that hid them would silently convert "we could not tell" into
+ *  "nothing there", the exact move the plan's claim contract forbids.
+ *
+ *  "Reveal sensitive cue text" is off by default and hides RAW RESPONSES only.
+ *  It never changes a number: the metrics are computed over every trial
+ *  regardless, so turning it on reveals text and turning it off conceals text,
+ *  and neither reruns an analysis. */
+function BehaviorTab() {
+  const b = $behavior.value;
+  const set = appStore.getState();
+  return (
+    <>
+      <SettingsSection
+        title="Cue set"
+        hint="How the Behavior page presents the cues. These are view choices; none of them re-runs an analysis or changes a reported number."
+      >
+        <SelectRow
+          label="Default view"
+          value={b.view}
+          options={[
+            { value: "landscape", label: "Landscape (fixed PCA of the cue words)" },
+            { value: "ranked", label: "Ranked by effect" },
+            { value: "table", label: "Table of every metric" },
+          ]}
+          onChange={(v) => set.setBehaviorView(v as typeof b.view)}
+        />
+        <SelectRow
+          label="Sort"
+          value={b.sort}
+          options={[
+            { value: "effect", label: "Effect size |\u0394\u0302|" },
+            { value: "q", label: "q value" },
+            { value: "alpha", label: "Cue, alphabetical" },
+            { value: "reliability", label: "Split-half reliability" },
+          ]}
+          onChange={(v) => set.setBehaviorSort(v as typeof b.sort)}
+        />
+        <SelectRow
+          label="Filter"
+          value={b.filter}
+          options={[
+            { value: "all", label: "All cues, including gated and not-measured" },
+            { value: "measured", label: "Only cues with a computed effect" },
+            { value: "significant", label: "Only cues at or below the study's q threshold" },
+          ]}
+          onChange={(v) => set.setBehaviorFilter(v as typeof b.filter)}
+        />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Declutter"
+        hint="Indeterminate is a real answer in this study: it means q could not be computed for that cue, which is not the same as no effect. Hiding those tidies the plot; it does not change what was found."
+      >
+        <ToggleRow
+          label="Show cues whose significance is indeterminate"
+          checked={b.showIndeterminate}
+          onChange={(on) => set.setBehaviorFlag("showIndeterminate", on)}
+        />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Raw responses"
+        hint="Sample responses are read-only excerpts, never the analysis. Every metric is computed over all trials whether or not these are shown."
+      >
+        <ToggleRow
+          label="Show the sample-response panel"
+          checked={b.showSamples}
+          onChange={(on) => set.setBehaviorFlag("showSamples", on)}
+        />
+        <ToggleRow
+          label="Reveal text from cue packs marked sensitive"
+          checked={b.revealSensitive}
+          onChange={(on) => set.setBehaviorFlag("revealSensitive", on)}
+        />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Running a study"
+        hint="The viewer never calls a paid model on its own. A run is started from the command line, or from a loopback server you start yourself with `nebulai behavior serve`, and any paid arm prints its cost estimate and waits for an explicit approval before a single request is sent."
+      >
+        <p class="settings-note">
+          Studies are read from <code>out/behavior/behavior.json</code>. This page
+          displays a study; it does not collect one, and nothing on it can spend money.
+        </p>
+      </SettingsSection>
+    </>
   );
 }
 

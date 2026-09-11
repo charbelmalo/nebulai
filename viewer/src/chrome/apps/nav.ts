@@ -104,6 +104,7 @@ export const APP_CHROME: Record<AppId, AppChrome> = {
     tagline: "map what a model knows",
     nav: [
       { label: "Semantic map", page: "map" },
+      { label: "Behavior", page: "behavior" },
       { label: "Internals", page: "interp" },
       { label: "Guide", page: "guide" },
     ],

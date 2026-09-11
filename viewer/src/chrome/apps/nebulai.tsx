@@ -1,4 +1,5 @@
-/** apps/nebulai.tsx — Nebulai's page set: Semantic map · Internals · Guide.
+/** apps/nebulai.tsx — Nebulai's page set: Semantic map · Behavior · Internals
+ *  · Guide.
  *
  *  This module is imported by `src/main.ts` and by nothing else. It is the
  *  only place the atlas-side components are named, which is what keeps them
@@ -6,6 +7,7 @@
  *  (and through it all 25 interp drivers), the Sidebar, the legend and the
  *  search panel are not in its graph at all. */
 
+import { BehaviorPage } from "../BehaviorPage";
 import { ComparePanel, CompareTransport } from "../ComparePanel";
 import { GuidePage } from "../GuidePage";
 import { InterpPage } from "../InterpPage";
@@ -38,6 +40,8 @@ export const NEBULAI_APP: AppShell = {
     switch (page) {
       case "map":
         return <MapPanels />;
+      case "behavior":
+        return <BehaviorPage />;
       case "interp":
         return <InterpPage />;
       case "guide":
