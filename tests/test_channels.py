@@ -309,12 +309,18 @@ def test_shipped_gpt2_channels_are_aligned_and_honest():
     n = doc["meta"]["n_points"]
     mapdoc = json.loads((root / "nebulai.json").read_text())
     assert n == len(mapdoc["points"]), "channels must be aligned to the map's points"
-    assert set(channel_ids(doc)) == {"we_norm", "we_centroid_dist"}
+    ids = set(channel_ids(doc))
+    assert {"we_norm", "we_centroid_dist"} <= ids
+    # `nebulai direction project` merges into this same file, so anything else
+    # in it must be a projection channel — nothing may appear here unexplained
+    extra = ids - {"we_norm", "we_centroid_dist"}
+    assert all(e.startswith("proj.") for e in extra), sorted(extra)
     for ch in doc["channels"]:
         assert len(ch["values"]) == n
-        assert ch["space"] == "W_E.raw", "the map is centred; these numbers are not"
         assert ch["fidelity"] == "deterministic"
         assert ch["stats"]["n_missing"] == 0
+        if ch["id"] in ("we_norm", "we_centroid_dist"):
+            assert ch["space"] == "W_E.raw", "the map is centred; these numbers are not"
     cd = find_channel(doc, "we_centroid_dist")["values"]
     labels = [p["label"] for p in mapdoc["points"]]
     nearest = sorted(range(n), key=lambda i: cd[i])[:10]

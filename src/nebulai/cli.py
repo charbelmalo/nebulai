@@ -335,6 +335,351 @@ def _run_channels(args: argparse.Namespace) -> None:
             )
 
 
+def _map_space(meta: dict) -> str:
+    """The space tag of a built map's own point vectors.
+
+    Read from the map's `meta`, never guessed: `centered` decides between
+    `W_E.raw` and `W_E.centered`, and those are deliberately different spaces
+    (the whole glitch-token experiment is about rows that never moved from
+    initialisation, which is a fact about the raw rows).
+    """
+    from .spaces import Space, SpaceFamily, we_space
+
+    unit = meta.get("unit", "")
+    if unit == "token_unembedding":
+        return str(Space(SpaceFamily.WU_RAW))
+    if unit == "token_embedding":
+        return str(we_space(bool(meta.get("centered", True))))
+    raise SystemExit(
+        f"directions are defined over token maps for now; this map's unit is "
+        f"{unit!r}. An SAE or neuron map's points live in a different space and "
+        f"need their own space tag before a direction can be projected onto "
+        f"them (D2 is not a warning that can be waived)."
+    )
+
+
+def _load_map_vectors(out_dir: Path, model: str) -> tuple[dict, np.ndarray, list[int]]:
+    """(map doc, source vectors, unit indices) for a built token map.
+
+    Rebuilds the front-end's `Units` and proves the curation still lines up with
+    the exported points, exactly as `_run_channels` does — a direction projected
+    onto a shifted vocabulary would mislabel every point past the shift, and the
+    resulting channel would look perfectly ordinary.
+    """
+    from .frontends.tokens import load_token_units
+
+    jp = out_dir / "nebulai.json"
+    if not jp.exists():
+        raise SystemExit(f"no map at {jp} — build it with `nebulai tokens {model}`")
+    doc = json.loads(jp.read_text())
+    meta = doc["meta"]
+    _map_space(meta)  # refuses a non-token map before the expensive load
+    want = [int(p["unit_ref"]["index"]) for p in doc["points"]]
+    units = load_token_units(
+        meta.get("model", model),
+        center=bool(meta.get("centered", True)),
+        max_tokens=len(want),
+        revision=str(meta.get("revision", "main")),
+        which=meta.get("which", "input"),
+    )
+    if list(units.ids) != want:
+        first = next((i for i, (a, b) in enumerate(zip(units.ids, want)) if a != b), "length")
+        raise SystemExit(
+            f"{out_dir.name}: the curated vocabulary no longer matches the built "
+            f"map (first difference at {first}). Projections are aligned by "
+            f"INDEX — refusing to write one. Rebuild the map."
+        )
+    return doc, np.asarray(units.vectors, dtype=np.float32), want
+
+
+def _direction_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
+    from .backend.channels import CHANNELS_FILENAME
+    from .backend.directions import DIRECTIONS_FILENAME
+
+    out_dir = Path(args.out) / args.model.replace("/", "__")
+    return out_dir, out_dir / DIRECTIONS_FILENAME, out_dir / CHANNELS_FILENAME
+
+
+def _run_direction_list(args: argparse.Namespace) -> None:
+    """Print the registry, and say of each entry whether it can be drawn."""
+    from .backend.channels import read_channels
+    from .backend.directions import read_directions, renderable
+
+    out_dir, dpath, cpath = _direction_paths(args)
+    doc = read_directions(dpath)
+    if doc is None:
+        print(f"{out_dir.name}: no directions.json — nothing is measured here")
+        return
+    ok, drops = renderable(doc, read_channels(cpath))
+    reason = dict(drops)
+    print(f"{out_dir.name}: {len(doc['directions'])} direction(s), {len(ok)} renderable")
+    for d in doc["directions"]:
+        did = d.get("id", "?")
+        status = "renderable" if did not in reason else "NOT RENDERABLE"
+        print(
+            f"  {did:<34} {d.get('space', ''):<16} {d.get('method', ''):<14} "
+            f"d={d.get('d', '?'):<6} {status}"
+        )
+        print(f"      {str((d.get('source') or {}).get('protocol', ''))[:140]}")
+        stats = (d.get("projection") or {}).get("stats") or {}
+        if stats:
+            print(
+                f"      vs null: cohen's d {stats.get('cohens_d')}  "
+                f"overlap {stats.get('overlap')}  n {stats.get('n')}"
+            )
+        con = (d.get("source") or {}).get("contrast") or {}
+        if con:
+            hd = con.get("heldout_cohens_d", "missing")
+            hd_s = hd if hd == "missing" else f"{hd:+}"
+            print(
+                f"      on its own two sets: cohen's d {con.get('cohens_d')} "
+                f"(in sample)  held out {hd_s}  "
+                f"random directions mean |d| {con.get('null_cohens_d_mean')}"
+            )
+        if did in reason:
+            print(f"      reason: {reason[did]}")
+
+
+def _run_direction_add(args: argparse.Namespace) -> None:
+    """Import a published direction, refusing anything this model cannot carry."""
+    from .backend import import_directions as imp
+    from .backend.directions import write_directions
+
+    out_dir, dpath, _ = _direction_paths(args)
+    doc, vectors, _ = _load_map_vectors(out_dir, args.model)
+    space = _map_space(doc["meta"])
+    target_d = int(vectors.shape[1])
+
+    if args.source == "refusal":
+        if not args.run:
+            raise SystemExit(
+                f"--run is required; published runs: {sorted(imp.REFUSAL_RUNS)}"
+            )
+        d = imp.from_refusal_direction(args.run, id=args.id)
+    elif args.source == "amongus":
+        d = imp.from_among_us_probe(args.checkpoint, id=args.id)
+    elif args.source == "neuronpedia":
+        if not args.feature:
+            raise SystemExit("--feature is required, e.g. gpt2-small/8-res-jb/12345")
+        d = imp.from_neuronpedia(args.feature, id=args.id)
+    elif args.source == "persona":
+        d = imp.from_persona_vectors(args.trait or "evil")
+    else:
+        d = imp.from_assistant_axis()
+
+    imp.check_dimensionality(
+        d,
+        target_model=doc["meta"].get("model", args.model),
+        target_d=target_d,
+        target_space=space,
+    )
+    write_directions(
+        dpath,
+        model=doc["meta"].get("model", args.model),
+        revision=str(doc["meta"].get("revision", "")),
+        directions=[d],
+    )
+    print(f"{out_dir.name}: imported {d.id} ({d.method}, d={d.d}, {d.space})")
+    print(f"  {d.source['protocol']}")
+    print(f"  not renderable until `nebulai direction project {args.model} {d.id}`")
+
+
+def _run_direction_survey(args: argparse.Namespace) -> None:
+    """What every published artefact would do against this model, measured.
+
+    Prints the table the phase-1 report quotes. It exists because "the refusal
+    direction does not fit" is a claim, and a claim about numbers should be
+    produced by reading the numbers.
+    """
+    from .backend import import_directions as imp
+
+    out_dir, _, _ = _direction_paths(args)
+    doc, vectors, _ = _load_map_vectors(out_dir, args.model)
+    target_d = int(vectors.shape[1])
+    model = doc["meta"].get("model", args.model)
+    print(f"{out_dir.name}: {model} has d={target_d}, space {_map_space(doc['meta'])}")
+    for r in imp.survey(target_d, model):
+        mark = "IMPORTABLE" if r["importable"] else "refused"
+        dd = "—" if r["d"] is None else str(r["d"])
+        print(
+            f"  {r['artefact']:<42} d={dd:<6} {str(r['space'] or '—'):<14} "
+            f"{mark:<11} {r.get('reason', '')}"
+        )
+
+
+def _run_direction_make(args: argparse.Namespace) -> None:
+    """Diff-of-means between two clusters (or two explicit index sets).
+
+    The two-selection gesture of R6, on the command line. The direction is named
+    after its two inputs: `make` never takes a free-text claim about what the
+    difference *means*, because a label is the one part of a direction nobody
+    can check.
+    """
+    from .backend.directions import from_two_selections, write_directions
+
+    out_dir, dpath, _ = _direction_paths(args)
+    doc, vectors, _ = _load_map_vectors(out_dir, args.model)
+    space = _map_space(doc["meta"])
+    points = doc["points"]
+    titles = {c["id"]: c["title"] for c in doc.get("clusters", [])}
+
+    if args.a_cluster is not None or args.b_cluster is not None:
+        if args.a_cluster is None or args.b_cluster is None:
+            raise SystemExit("--a-cluster and --b-cluster come as a pair")
+        if args.a_cluster == args.b_cluster:
+            raise SystemExit("a cluster does not differ from itself")
+        for cid in (args.a_cluster, args.b_cluster):
+            if cid not in titles:
+                raise SystemExit(f"no cluster {cid} in this map")
+        a = [i for i, p in enumerate(points) if p["cluster_id"] == args.a_cluster]
+        b = [i for i, p in enumerate(points) if p["cluster_id"] == args.b_cluster]
+        auto_id = f"c{args.a_cluster}-minus-c{args.b_cluster}"
+        label = f"{titles[args.a_cluster]} − {titles[args.b_cluster]}"
+        protocol = (
+            f"diff of means over this map's own point vectors: cluster "
+            f"{args.a_cluster} ({titles[args.a_cluster]!r}, n={len(a)}) minus "
+            f"cluster {args.b_cluster} ({titles[args.b_cluster]!r}, n={len(b)}); "
+            f"space {space}; map {out_dir.name}"
+        )
+    else:
+        if not (args.a_ids and args.b_ids):
+            raise SystemExit("pass either --a-cluster/--b-cluster or --a-ids/--b-ids")
+        a, b = [int(x) for x in args.a_ids], [int(x) for x in args.b_ids]
+        auto_id = f"sel-{len(a)}v{len(b)}"
+        label = f"{len(a)} points − {len(b)} points"
+        protocol = f"diff of means over explicit point ids in {out_dir.name}; space {space}"
+
+    d = from_two_selections(
+        a,
+        b,
+        vectors,
+        space,
+        id=args.id or auto_id,
+        label=args.label or label,
+        protocol=protocol,
+    )
+    write_directions(
+        dpath,
+        model=doc["meta"].get("model", args.model),
+        revision=str(doc["meta"].get("revision", "")),
+        directions=[d],
+    )
+    print(f"{out_dir.name}: made {d.id} — {d.label}")
+    print(f"  {d.space}  d={d.d}  n_pos={d.source['n_pos']}  n_neg={d.source['n_neg']}")
+    c = d.source.get("contrast") or {}
+    if c:
+        print(
+            f"  contrast on its own two sets: cohen's d {c['cohens_d']:+.4f}, "
+            f"overlap {c['overlap']:.4f}"
+        )
+        print(
+            f"  the same two sets on {c['null_n']} random unit directions "
+            f"(seed {c['null_seed']}): mean |d| {c['null_cohens_d_mean']:.4f}, "
+            f"p95 |d| {c['null_cohens_d_p95']:.4f}"
+        )
+        hd = c.get("heldout_cohens_d")
+        if hd == "missing":
+            print("  held out: missing — a set with fewer than 4 members cannot be split")
+        else:
+            print(
+                f"  held out (fit on half, scored on the other half, "
+                f"n={c['heldout_n_pos']}/{c['heldout_n_neg']}): cohen's d "
+                f"{hd:+.4f}, overlap {c['heldout_overlap']:.4f}"
+            )
+    if not args.no_project:
+        _project_one(args, d.id)
+
+
+def _project_one(args: argparse.Namespace, direction_id: str) -> None:
+    """Compute a direction's four channels and mark it renderable."""
+    from .backend.channels import write_channels
+    from .backend.directions import (
+        Direction,
+        projection_channels,
+        read_directions,
+        write_directions,
+    )
+
+    out_dir, dpath, cpath = _direction_paths(args)
+    reg = read_directions(dpath)
+    if reg is None:
+        raise SystemExit(f"no {dpath} — make or add a direction first")
+    raw = next((x for x in reg["directions"] if x.get("id") == direction_id), None)
+    if raw is None:
+        raise SystemExit(
+            f"no direction {direction_id!r} in {dpath}; have "
+            f"{[x.get('id') for x in reg['directions']]}"
+        )
+    d = Direction.from_json(raw)
+    doc, vectors, _ = _load_map_vectors(out_dir, args.model)
+    space = _map_space(doc["meta"])
+    if d.space != space:
+        raise SystemExit(
+            f"{d.id} is in space {d.space!r} but this map's points are in "
+            f"{space!r} — refusing to project (D2). Different bases are never "
+            f"comparable, and a number would come out regardless."
+        )
+    t = _timer()
+    chans = projection_channels(
+        d, vectors.astype(np.float64), n_null=args.null_n, seed=args.seed
+    )
+    write_channels(
+        cpath,
+        model=doc["meta"].get("model", args.model),
+        revision=str(doc["meta"].get("revision", "")),
+        n_points=len(doc["points"]),
+        channels=chans,
+    )
+    write_directions(
+        dpath,
+        model=doc["meta"].get("model", args.model),
+        revision=str(doc["meta"].get("revision", "")),
+        directions=[d],
+    )
+    s = d.projection["stats"]
+    print(f"{out_dir.name}: projected {d.id} onto {len(doc['points'])} points [{t()}]")
+    for c in chans:
+        st = c.stats()
+        print(
+            f"  {c.id:<38} min {st['min']:>9.4f}  max {st['max']:>9.4f}  "
+            f"mean {st['mean']:>9.4f}"
+        )
+    print(
+        f"  real vs null ({d.null['n']} random unit vectors, seed "
+        f"{d.null['seed']}): cohen's d {s['cohens_d']}, histogram overlap "
+        f"{s['overlap']}, n {s['n']}"
+    )
+
+
+def _run_direction_project(args: argparse.Namespace) -> None:
+    _project_one(args, args.id)
+
+
+def _run_direction_drop(args: argparse.Namespace) -> None:
+    """Remove a direction and, unless told otherwise, its four channels."""
+    from .backend.channels import drop_channels
+    from .backend.directions import drop_directions, read_directions
+
+    out_dir, dpath, cpath = _direction_paths(args)
+    reg = read_directions(dpath)
+    if reg is None:
+        raise SystemExit(f"no {dpath}")
+    ch_ids: list[str] = []
+    for did in args.ids:
+        raw = next((x for x in reg["directions"] if x.get("id") == did), None)
+        if raw is None:
+            continue
+        ch_ids += [
+            (raw.get("projection") or {}).get("channel"),
+            (raw.get("projection") or {}).get("orth_channel"),
+            (raw.get("null") or {}).get("channel"),
+            (raw.get("null") or {}).get("orth_channel"),
+        ]
+    n = drop_directions(dpath, args.ids)
+    m = 0 if args.keep_channels else drop_channels(cpath, [c for c in ch_ids if c])
+    print(f"{out_dir.name}: dropped {n} direction(s) and {m} channel(s)")
+
+
 def _run_sae(args: argparse.Namespace) -> None:
     """Plan A: SAE decoder-direction map. Mirrors _run_tokens's 5-stage
     structure and its exact `[k/5] ...` prints (build_server parses them)."""
@@ -1853,6 +2198,94 @@ def main() -> None:
     c.add_argument("--embed-model", default="mxbai-embed-large")
     c.add_argument("--seed", type=int, default=42)
     c.set_defaults(fn=_run_compare)
+
+    dr = sub.add_parser(
+        "direction",
+        help="a direction as a first-class object: import, make, project, drop "
+        "(writes directions.json + projection/null channels — nebulai.json is "
+        "never touched)",
+    )
+    drsub = dr.add_subparsers(dest="dcmd", required=True)
+
+    def _common(sp):
+        sp.add_argument("model", help="model id of a map already built with `tokens`")
+        sp.add_argument("--out", default="out", help="output directory root")
+        return sp
+
+    dl = _common(drsub.add_parser("list", help="list directions and say which can be drawn"))
+    dl.set_defaults(fn=_run_direction_list)
+
+    dsv = _common(
+        drsub.add_parser(
+            "survey",
+            help="print every published artefact's dimensionality against this "
+            "model — the table behind the import refusals",
+        )
+    )
+    dsv.set_defaults(fn=_run_direction_survey)
+
+    da = _common(drsub.add_parser("add", help="import a published direction"))
+    da.add_argument(
+        "--source",
+        required=True,
+        choices=["refusal", "persona", "assistant-axis", "neuronpedia", "amongus"],
+    )
+    da.add_argument("--run", default=None, help="refusal: published run dir, e.g. gemma-2b-it")
+    da.add_argument("--trait", default=None, help="persona: trait name, e.g. evil")
+    da.add_argument(
+        "--feature", default=None, help="neuronpedia: <model>/<layer>-<release>/<index>"
+    )
+    da.add_argument(
+        "--checkpoint",
+        default="AmongUsDataset_probe_phi4",
+        help="amongus: checkpoint stem under linear-probes/checkpoints/",
+    )
+    da.add_argument("--id", default=None, help="override the direction id")
+    da.set_defaults(fn=_run_direction_add)
+
+    dm = _common(
+        drsub.add_parser(
+            "make",
+            help="diff-of-means between two clusters (or two explicit index "
+            "sets) of this map's own vectors",
+        )
+    )
+    dm.add_argument("--a-cluster", type=int, default=None)
+    dm.add_argument("--b-cluster", type=int, default=None)
+    dm.add_argument("--a-ids", nargs="+", default=None, help="point indices (0-based)")
+    dm.add_argument("--b-ids", nargs="+", default=None)
+    dm.add_argument("--id", default=None)
+    dm.add_argument("--label", default=None)
+    dm.add_argument("--null-n", type=int, default=32, help="how many null directions")
+    dm.add_argument("--seed", type=int, default=0, help="null seed")
+    dm.add_argument(
+        "--no-project",
+        action="store_true",
+        help="write the registry entry only — it stays NOT RENDERABLE until "
+        "`direction project` gives it a null",
+    )
+    dm.set_defaults(fn=_run_direction_make)
+
+    dp = _common(
+        drsub.add_parser(
+            "project",
+            help="compute a direction's parallel/orthogonal channels and its "
+            "null, appending them to channels.json",
+        )
+    )
+    dp.add_argument("id", help="direction id")
+    dp.add_argument("--null-n", type=int, default=32)
+    dp.add_argument("--seed", type=int, default=0)
+    dp.set_defaults(fn=_run_direction_project)
+
+    dd = _common(drsub.add_parser("drop", help="remove directions and their channels"))
+    dd.add_argument("ids", nargs="+")
+    dd.add_argument(
+        "--keep-channels",
+        action="store_true",
+        help="leave the projection/null channels in channels.json",
+    )
+    dd.set_defaults(fn=_run_direction_drop)
 
     args = p.parse_args()
     args.fn(args)
