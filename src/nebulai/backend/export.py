@@ -12,6 +12,20 @@ from ..units import Units
 SCHEMA_VERSION = 2
 
 
+def public_meta(meta: dict) -> dict:
+    """`Units.meta` minus its side channels.
+
+    Everything in `meta` is copied verbatim into `nebulai.json`, which is what
+    makes each artifact self-describing — and which means a front-end cannot use
+    `meta` to hand the CLI a 50,000-element array without that array landing in
+    the export. Keys beginning with `_` are the escape hatch: they travel from a
+    front-end to the CLI (the token front-end's raw-space glitch channels use
+    `_channels`) and are dropped here, so `nebulai.json` keeps its shape and its
+    schema version.
+    """
+    return {k: v for k, v in meta.items() if not k.startswith("_")}
+
+
 def export_json(
     path: Path,
     units: Units,
@@ -58,7 +72,7 @@ def export_json(
     n_noise = int((cluster_ids < 0).sum())
     doc = {
         "meta": {
-            **units.meta,
+            **public_meta(units.meta),
             "schema_version": SCHEMA_VERSION,
             "n_points": len(units),
             "n_clusters": len(clusters),

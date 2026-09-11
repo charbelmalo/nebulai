@@ -207,9 +207,19 @@ def compute_embed(m: GPT2Numpy, dims: int = 3) -> dict:
 
     PCA is done via the 768×768 covariance eigendecomposition (cheap and exact),
     not a giant thin-U SVD, so it runs in seconds and stays float64.
+
+    Two RAW-space scalars ship beside the coordinates, and "raw" is the whole
+    point of them: `norm` = ‖W_E[t]‖₂ and `centroid_dist` = ‖W_E[t] − mean_row‖₂,
+    both computed on the stored matrix BEFORE any centring. A glitch token's
+    signature (SolidGoldMagikarp and its ~40 siblings) is that its row barely
+    moved from initialisation — a fact about the raw rows. The PCA coordinates
+    above are centred; these two are not, and `space: "W_E.raw"` on the exported
+    channel is what keeps the two from ever being plotted against each other.
     """
     coords, evr, total_var = _pca_rows(m.wte, dims)  # (V, dims) exact PC scores
-    norms = np.linalg.norm(m.wte.astype(np.float64), axis=1)  # exact per-token magnitude
+    W64 = m.wte.astype(np.float64)
+    norms = np.linalg.norm(W64, axis=1)  # exact per-token magnitude (RAW rows)
+    centroid_dist = np.linalg.norm(W64 - W64.mean(axis=0), axis=1)  # RAW, uncentred
     strs = [m.decode1(i) for i in range(m.V)]
     lead = [1 if s[:1] == " " else 0 for s in strs]
     xy = coords[:, :2].reshape(-1)  # flat [pc1_0, pc2_0, pc1_1, pc2_1, …]
@@ -218,11 +228,29 @@ def compute_embed(m: GPT2Numpy, dims: int = 3) -> dict:
         "meta": {
             "model": m.model_id,
             "created": _now(),
-            "quantity": "PCA projection of the token embedding matrix W_E",
+            "quantity": "PCA projection of the token embedding matrix W_E, with "
+            "the two RAW-space glitch scalars (row norm, distance to the "
+            "embedding centroid)",
             "formula": "Wc = W_E - mean_row(W_E); eig(WcᵀWc) → top-k axes V; "
-            "coords = Wc·V (exact PC scores). size = ‖W_E[i]‖₂.",
+            "coords = Wc·V (exact PC scores). size = ‖W_E[i]‖₂. "
+            "centroid_dist[i] = ‖W_E[i] − mean_row(W_E)‖₂.",
             "note": "color = leading-space (orthographic), decoded per token; "
-            "coords rounded to 3 dp for transport",
+            "coords rounded to 3 dp for transport. `norm` and `centroid_dist` "
+            "are computed on the RAW stored W_E (space W_E.raw), never on the "
+            "centred matrix the map's own geometry uses — an under-trained row "
+            "is recognised by where it sits in the raw space.",
+            "quantities": {
+                "norm": {
+                    "space": "W_E.raw",
+                    "formula": "sqrt(sum(W_E[i]**2))",
+                    "units": "l2",
+                },
+                "centroid_dist": {
+                    "space": "W_E.raw",
+                    "formula": "sqrt(sum((W_E[i] - mean_row(W_E))**2))",
+                    "units": "l2",
+                },
+            },
             "d": m.d,
             "n_tokens": int(m.V),
         },
@@ -233,6 +261,7 @@ def compute_embed(m: GPT2Numpy, dims: int = 3) -> dict:
         "coords": [round(float(v), 3) for v in xy],  # flat 2N (PC1, PC2)
         "z": [round(float(v), 3) for v in z],  # PC3 (hover only)
         "norm": [round(float(v), 3) for v in norms],
+        "centroid_dist": [round(float(v), 3) for v in centroid_dist],
         "lead_space": lead,  # 1 if the token string starts with a space
         "strs": strs,
     }

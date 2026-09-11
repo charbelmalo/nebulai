@@ -227,10 +227,112 @@ def _run_tokens(args: argparse.Namespace) -> None:
             f"{geometry_line} -> UMAP -> HDBSCAN"
         ),
     )
+    # per-point scalars beside the map (glitch lens). A front-end that offers
+    # none writes no file at all — absence is "not measured", and the viewer
+    # renders no channel UI rather than an empty one.
+    from .backend.channels import CHANNELS_FILENAME, channels_from_meta, write_channels
+
+    chans = channels_from_meta(units.meta)
+    ch_path = None
+    if chans:
+        ch_path = write_channels(
+            out_dir / CHANNELS_FILENAME,
+            model=args.model,
+            revision=str(units.meta.get("revision", "")),
+            n_points=len(units),
+            channels=chans,
+        )
+
     _update_index(Path(args.out))
     print(f"[5/5] exported [{t()}]")
     for p in (json_path, png, html):
         print(f"  {p}")
+    if ch_path is not None:
+        print(f"  {ch_path}  ({', '.join(c.id for c in chans)})")
+
+
+def _run_channels(args: argparse.Namespace) -> None:
+    """Recompute `channels.json` for an already-built map.
+
+    Channels and coordinates have separate lifetimes — the same argument that
+    gives `nebulai rename` its own subcommand. A channel is a scalar per point;
+    adding one must not cost a UMAP run, and must not be able to move a single
+    point of a map whose goldens are pinned.
+
+    The alignment is checked rather than assumed: `channels.json` is aligned to
+    `nebulai.json` BY INDEX, so if the curated vocabulary has shifted under the
+    map (a tokenizer revision moved, `--max-tokens` differs) every point past
+    the first change would be mislabelled. This refuses instead.
+    """
+    from .backend.channels import CHANNELS_FILENAME, channels_from_meta, write_channels
+    from .frontends.tokens import load_token_units
+
+    out_root = Path(args.out)
+    for model in args.models:
+        dataset_id = model.replace("/", "__")
+        out_dir = out_root / dataset_id
+        map_path = out_dir / "nebulai.json"
+        if not map_path.exists():
+            raise SystemExit(f"no map at {map_path} — build it with `nebulai tokens {model}`")
+
+        doc = json.loads(map_path.read_text())
+        meta = doc["meta"]
+        unit = meta.get("unit", "")
+        if unit not in ("token_embedding", "token_unembedding"):
+            raise SystemExit(
+                f"{dataset_id}: channels are only defined for token maps "
+                f"(this map's unit is {unit!r}). Phase 0 ships the W_E glitch "
+                f"lens; SAE/neuron channels are a later front-end change, not a "
+                f"reinterpretation of this file."
+            )
+
+        ch_path = out_dir / CHANNELS_FILENAME
+        if ch_path.exists() and not args.recompute:
+            print(f"{dataset_id}: {ch_path} exists — pass --recompute to rewrite")
+            continue
+
+        t = _timer()
+        want = [int(p["unit_ref"]["index"]) for p in doc["points"]]
+        units = load_token_units(
+            meta.get("model", model),
+            center=bool(meta.get("centered", True)),
+            # `--max-tokens` truncates the curated list from the front, so
+            # rebuilding the full curation and clipping it reproduces any
+            # truncated map exactly — and the identity check below proves it did
+            max_tokens=len(want),
+            revision=str(meta.get("revision", "main")),
+            which=meta.get("which", "input"),
+        )
+        if list(units.ids) != want:
+            first = next(
+                (i for i, (a, b) in enumerate(zip(units.ids, want)) if a != b), "length"
+            )
+            raise SystemExit(
+                f"{dataset_id}: the curated vocabulary no longer matches the "
+                f"built map ({len(units.ids)} rows vs {len(want)} points, first "
+                f"difference at {first}). channels.json is aligned by INDEX, so "
+                f"writing it now would mislabel every point past that "
+                f"difference. Rebuild the map."
+            )
+
+        chans = channels_from_meta(units.meta)
+        if not chans:
+            print(f"{dataset_id}: this front-end offers no channels — nothing written")
+            continue
+        write_channels(
+            ch_path,
+            model=meta.get("model", model),
+            revision=str(units.meta.get("revision", "")),
+            n_points=len(want),
+            channels=chans,
+        )
+        print(f"{dataset_id}: wrote {len(chans)} channels to {ch_path} [{t()}]")
+        for c in chans:
+            s = c.stats()
+            print(
+                f"  {c.id:<20} {c.space:<14} min {s['min']:.3f}  "
+                f"max {s['max']:.3f}  mean {s['mean']:.3f}  missing {s['n_missing']}"
+            )
 
 
 def _run_sae(args: argparse.Namespace) -> None:
@@ -1501,6 +1603,24 @@ def main() -> None:
         help="knn = cluster edges + per-point kNN; cluster = cluster edges only",
     )
     e.set_defaults(fn=_run_edges)
+
+    ch = sub.add_parser(
+        "channels",
+        help="write per-point scalars (channels.json) beside an already-built "
+        "token map — the glitch lens, computed on the RAW W_E rows",
+    )
+    ch.add_argument(
+        "models",
+        nargs="+",
+        help="model ids already built with `tokens` (e.g. gpt2 distilgpt2)",
+    )
+    ch.add_argument("--out", default="out", help="output directory root")
+    ch.add_argument(
+        "--recompute",
+        action="store_true",
+        help="rewrite channels.json even when one already exists",
+    )
+    ch.set_defaults(fn=_run_channels)
 
     ip = sub.add_parser(
         "interp",
