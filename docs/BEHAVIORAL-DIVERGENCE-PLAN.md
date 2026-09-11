@@ -1174,6 +1174,25 @@ they clicked. The title is therefore **“Behavior — semantic divergence”**,
 keeps the pill's promise honest and still names the analysis. The reasoning above
 is preserved exactly; only the shared token is added.
 
+> **Contention with the generative-variance study, resolved 2026-09-11.**
+> `GENERATIVE-VARIANCE-PLAN.md` §9 had also reasoned its way toward a page in
+> this shell, so for a while two studies were pointing at one unbuilt pill.
+> The pill went to this study, and this study has now built it:
+> `APP_PAGES.nebulai` is `["map", "behavior", "interp", "guide"]`, `shell.ts`'s
+> `Page` union gained `"behavior"`, and `app-pages.test.ts` pins seven pages
+> with the partition, boot-pill and no-orphan invariants intact.
+>
+> The reason is not seniority. W1 (generative variance) reports a **ranked
+> table of questions by variance contribution**, which is a table; this study
+> reports per-cue effects with uncertainty over a fixed landscape, which needs
+> a plotted surface, a cue inspector, per-run provenance and an approval path
+> for paid work. W1 therefore gets **no page and no pill** and ships a CLI
+> report plus a static JSON artifact — recorded on the other side too, in
+> `GENERATIVE-VARIANCE-PLAN.md` §9, so the two plans cannot come to disagree
+> about what was decided. The A10 blocker W1 named (`_pca_rows` discarding the
+> fit) was fixed anyway, because this page needed it; that closes the blocker
+> and leaves W1's own n≈40 objection to a projection standing untouched.
+
 ### 8.2 Progressive-disclosure layout
 
 ```

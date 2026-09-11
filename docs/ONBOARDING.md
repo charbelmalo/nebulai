@@ -167,8 +167,13 @@ re-export re-runs the embedder, and the GGUF build is not bit-deterministic
 (measured against the July cache: ~1e-3 elementwise, cosine >= 0.999945), so
 every coordinate in five maps would have moved to fix one metadata string. The
 substitution was verified to leave each parsed document differing at exactly one
-key. Originals are in `nebulai-data/.pre-redaction-backup/` — outside the served
-`out/` tree, deliberately.
+key. Originals are in `/Users/charbelmalo/Developer/nebulai-data/.pre-redaction-backup/`
+— outside the served `out/` tree, deliberately. Verified 2026-09-11: 20 MB, five
+files, matching the five redacted artifacts one-for-one — the `claude-tokenizer`
+MiniLM map (19.7 MB of it), the `gpt2` mxbai map, and the three `probe__*` clouds.
+That directory took an embarrassingly long time to find again because it is a
+*dotted* one, and `mdfind` does not index dotted paths; searching for it by name
+returns nothing whatever it contains. Go to the path directly with `ls -la`.
 
 ## Archived ideas, not current Nebul.AI scope
 
