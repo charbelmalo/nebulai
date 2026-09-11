@@ -1250,6 +1250,163 @@ def _add_persona_model_args(q) -> None:
     )
 
 
+# ── absorbing state (Attractors P3 / the Waluigi test) ──────────────────────
+# Self-play under a persona rule, judged by a stated regex, then P(violate at
+# t+1 | violated at t) against the base rate AND against a null that keeps
+# each conversation's own violation rate. The judge is deterministic and is
+# printed with the result — no model judges these transcripts.
+
+
+def _absorbing_model(args):
+    from .backend.interp.llama_numpy import LlamaNumpy
+
+    return LlamaNumpy(args.model, revision=args.revision, local_dir=args.local_dir)
+
+
+def _absorbing_progress(quiet: bool):
+    if quiet:
+        return None
+
+    def fn(done: int, total: int, secs: float) -> None:
+        rate = done / secs if secs > 0 else 0.0
+        eta = (total - done) / rate if rate > 0 else float("nan")
+        print(f"  conversations {done}/{total}  {rate*60:.1f}/min  "
+              f"eta {eta/60:.0f} min", flush=True)
+
+    return fn
+
+
+def _absorbing_report(doc: dict) -> None:
+    m, s = doc["meta"], doc["stats"]
+    r = doc["rule"]
+    print(f"study_id  {m['study_id']}")
+    print(f"model     {m['model']} @ {m['revision']}")
+    print(f"rule      {r['id']}  /{r['pattern']}/")
+    print(f"          {r['statement']}")
+    print(f"judge     {r['judge']}")
+    cfg = m["config"]
+    print(f"n         {s['n_conversations']} conversations x {cfg['n_turns']} turns "
+          f"= {s['n_turns']} judged turns, {s['n_transitions']} transitions")
+    if cfg.get("n_conversations_run") != cfg.get("n_conversations_requested"):
+        print(f"          STOPPED EARLY at {cfg['n_conversations_run']} of "
+              f"{cfg['n_conversations_requested']} (deadline {cfg['deadline_s']}s)")
+    c = s["counts"]
+    print("transition matrix (rows = state at t, cols = state at t+1)")
+    print(f"          in-character  ->  {c['n00']:6d} in-character   {c['n01']:6d} violation")
+    print(f"          violation     ->  {c['n10']:6d} in-character   {c['n11']:6d} violation")
+    b = s["base_rate"]
+    a1 = s["p_violate_given_violated"]
+    a0 = s["p_violate_given_in_character"]
+    print(f"base rate {b['p']:.4f}  [{b['ci95'][0]:.4f}, {b['ci95'][1]:.4f}]  "
+          f"({b['k']}/{b['n']}, {b['over']})")
+    print(f"P(1|1)    {a1['p']:.4f}  [{a1['ci95'][0]:.4f}, {a1['ci95'][1]:.4f}]  "
+          f"({a1['k']}/{a1['n']})")
+    print(f"P(1|0)    {a0['p']:.4f}  [{a0['ci95'][0]:.4f}, {a0['ci95'][1]:.4f}]  "
+          f"({a0['k']}/{a0['n']})")
+    print(f"          P(1|1) interval {'SPANS' if s['interval_spans_base_rate'] else 'excludes'}"
+          f" the base rate")
+    n = s["null"]
+    print(f"null      {n['method']} n={n['n']} on {n['statistic']}")
+    print(f"          p95 {n['p95']:.4f} (mean {n['mean']:.4f})  p {n['p_value']:.4f}")
+    import textwrap
+
+    print(textwrap.fill(n["note"], 78, initial_indent="          ",
+                        subsequent_indent="          "))
+    print(f"verdict   {s['verdict']}")
+    if s["verdict"] != "absorbing_above_null":
+        print(
+            "\n  This is NOT evidence of an absorbing state. `not_absorbing` means "
+            "the conditional does not clear the base rate; "
+            "`above_base_rate_explained_by_heterogeneity` means it clears the base "
+            "rate but not the within-conversation null, i.e. conversations differ "
+            "from each other rather than a violation pulling the next turn."
+        )
+
+
+def _run_absorbing_run(args) -> None:
+    from .backend.absorbing import RULES, choose_rule, pilot_rates, run_study, write_study
+
+    model = _absorbing_model(args)
+    print(f"{model.model_id} @ {model.revision} — {model.n_layer} layers, d={model.d}")
+    pilot = None
+    rule_id = args.rule
+    if rule_id is None:
+        print(f"pilot: {args.pilot_conversations} conversations x 4 turns per rule …")
+        rates = pilot_rates(model, n_conversations=args.pilot_conversations)
+        for rid in sorted(rates):
+            print(f"  {rid:16s} rate {rates[rid]:.3f}")
+        rule_id = choose_rule(rates)
+        pilot = {"rates": rates, "chosen": rule_id, "target": 0.35,
+                 "n_conversations": args.pilot_conversations, "n_turns": 4,
+                 "note": "the rule is chosen for headroom, before any transition "
+                         "is counted, so the choice cannot be tuned to the result"}
+        print(f"chose {rule_id}")
+    elif rule_id not in RULES:
+        raise SystemExit(f"unknown rule {rule_id!r}; have {sorted(RULES)}")
+    study = run_study(
+        model,
+        rule_id=rule_id,
+        n_conversations=args.conversations,
+        n_turns=args.turns,
+        batch_size=args.batch_size,
+        max_new_assistant=args.max_new_assistant,
+        max_new_user=args.max_new_user,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        seed_base=args.seed_base,
+        null_n=args.null_n,
+        pilot=pilot,
+        progress=_absorbing_progress(args.quiet),
+        deadline_s=None if args.deadline_min is None else args.deadline_min * 60.0,
+    )
+    path = write_study(study, Path(args.out) / "absorbing")
+    _absorbing_report(study.to_dict())
+    print(f"\nwrote {path}")
+
+
+def _run_absorbing_report(args) -> None:
+    from .backend.absorbing import read_study
+
+    _absorbing_report(read_study(args.study_id, Path(args.out) / "absorbing"))
+
+
+def _run_absorbing_list(args) -> None:
+    from .backend.absorbing import read_study
+
+    root = Path(args.out) / "absorbing"
+    ids = sorted(p.name for p in root.glob("*") if (p / "absorbing.json").exists())
+    if not ids:
+        print(f"no absorbing studies under {root}")
+        return
+    for sid in ids:
+        d = read_study(sid, root)
+        s = d["stats"]
+        print(f"{sid}  n={s['n_conversations']}  "
+              f"P(1|1)={s['p_violate_given_violated']['p']:.4f} "
+              f"base={s['base_rate']['p']:.4f}  {s['verdict']}")
+
+
+def _add_absorbing_model_args(q) -> None:
+    q.add_argument(
+        "--model",
+        default="HuggingFaceTB/SmolLM2-135M-Instruct",
+        help="instruct model that plays BOTH sides (default: SmolLM2-135M-Instruct)",
+    )
+    q.add_argument(
+        "--revision",
+        default="main",
+        help="pinned commit sha. With --local-dir this is the *claim* about which "
+        "commit those bytes are, and it is what lands in the study's provenance",
+    )
+    q.add_argument(
+        "--local-dir",
+        default=None,
+        help="directory holding config.json / model.safetensors / tokenizer.json, "
+        "instead of downloading from the hub",
+    )
+    q.add_argument("--out", default="out", help="output directory root")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(
         prog="nebulai",
@@ -1914,6 +2071,58 @@ def main() -> None:
     pl = pers_sub.add_parser("list", help="list built persona spaces and their verdicts")
     pl.add_argument("--out", default="out", help="output directory root")
     pl.set_defaults(fn=_run_persona_list)
+
+    # ── absorbing (Attractors P3 / the Waluigi absorbing-state test) ─────
+    absb = sub.add_parser(
+        "absorbing",
+        help="self-play absorbing-state test: P(violate at t+1 | violated at t)",
+    )
+    absb_sub = absb.add_subparsers(dest="absorbing_cmd", required=True)
+
+    ar = absb_sub.add_parser(
+        "run",
+        help="run the self-play study and write absorbing.json",
+    )
+    _add_absorbing_model_args(ar)
+    ar.add_argument(
+        "--rule",
+        default=None,
+        help="persona rule id (default: pick one by a pilot, before any "
+        "transition is counted, so the choice cannot be tuned to the result)",
+    )
+    ar.add_argument("--pilot-conversations", type=int, default=24)
+    ar.add_argument("--conversations", type=int, default=2000)
+    ar.add_argument("--turns", type=int, default=6, help="assistant turns per conversation")
+    ar.add_argument("--batch-size", type=int, default=48)
+    ar.add_argument("--max-new-assistant", type=int, default=40)
+    ar.add_argument("--max-new-user", type=int, default=20)
+    ar.add_argument("--temperature", type=float, default=1.0)
+    ar.add_argument("--top-p", type=float, default=0.95)
+    ar.add_argument("--seed-base", type=int, default=1234)
+    ar.add_argument(
+        "--null-n",
+        type=int,
+        default=500,
+        help="within-conversation shuffle draws (default: 500)",
+    )
+    ar.add_argument(
+        "--deadline-min",
+        type=float,
+        default=None,
+        help="stop starting new batches after this many minutes and report the N "
+        "actually reached, marked stopped_early",
+    )
+    ar.add_argument("--quiet", action="store_true", help="no progress lines")
+    ar.set_defaults(fn=_run_absorbing_run)
+
+    arp = absb_sub.add_parser("report", help="print an existing study's numbers")
+    arp.add_argument("study_id", help="study id under <out>/absorbing/")
+    arp.add_argument("--out", default="out", help="output directory root")
+    arp.set_defaults(fn=_run_absorbing_report)
+
+    aal = absb_sub.add_parser("list", help="list studies and their verdicts")
+    aal.add_argument("--out", default="out", help="output directory root")
+    aal.set_defaults(fn=_run_absorbing_list)
 
     args = p.parse_args()
     args.fn(args)
