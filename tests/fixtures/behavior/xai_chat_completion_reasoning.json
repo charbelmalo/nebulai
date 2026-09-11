@@ -1,0 +1,30 @@
+{
+  "_fixture_provenance": {
+    "status": "SYNTHESIZED, NOT CAPTURED",
+    "why": "Same provenance as xai_chat_completion.json. This variant carries a non-zero reasoning_tokens count and a system_fingerprint so both branches of the optional-if-absent rule and of the reasoning-token statistic are exercised. The reasoning_tokens value is INVENTED; the §5.1 budget p95 must never be taken from it.",
+    "authored": "2026-09-11"
+  },
+  "id": "chatcmpl-fixture-0002",
+  "object": "chat.completion",
+  "created": 1788134460,
+  "model": "grok-4-0709",
+  "system_fingerprint": "fp_fixture_2f1a",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "Father, Money, Sugar"
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 139,
+    "completion_tokens": 6,
+    "total_tokens": 397,
+    "completion_tokens_details": {
+      "reasoning_tokens": 252
+    }
+  }
+}

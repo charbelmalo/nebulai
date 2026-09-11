@@ -1734,6 +1734,17 @@ def main() -> None:
     c.add_argument("--seed", type=int, default=42)
     c.set_defaults(fn=_run_compare)
 
+    # Behavioral divergence (docs/BEHAVIORAL-DIVERGENCE-PLAN.md) and generative
+    # variance (docs/GENERATIVE-VARIANCE-PLAN.md) are separate studies, not new
+    # front-ends: neither produces `Units`, so each owns its own subcommand
+    # group rather than threading options through `tokens`/`sae`/`neurons`.
+    # Imported here so the base CLI keeps its current import cost.
+    from .behavior.cli import add_behavior_parser
+    from .backend.variance_cli import add_variance_parser
+
+    add_behavior_parser(sub)
+    add_variance_parser(sub)
+
     args = p.parse_args()
     args.fn(args)
 
