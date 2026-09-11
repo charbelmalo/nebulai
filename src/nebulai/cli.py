@@ -1082,11 +1082,17 @@ def _run_compare(args: argparse.Namespace) -> None:
     # resolve_embed_host turns a discovery sentinel ("auto"/"m4"/...) — whether it
     # arrives via --embed-host or NEBULAI_EMBED_HOST — into the dynamically located
     # M4 URL, and passes any concrete URL (or None) through untouched.
-    embed_host = (
-        embed_mod.resolve_embed_host(args.embed_host)
-        or embed_mod.resolve_embed_host(os.environ.get(embed_mod.EMBED_HOST_ENV))
-        or args.ollama_host
-    )
+    if args.embed_api == "local":
+        # An in-process encoder has no endpoint. Resolving one anyway would
+        # fire the M4 discovery probe and, worse, stamp a LAN address into an
+        # artifact that never touched it.
+        embed_host = embed_mod.LOCAL_EMBED_HOST
+    else:
+        embed_host = (
+            embed_mod.resolve_embed_host(args.embed_host)
+            or embed_mod.resolve_embed_host(os.environ.get(embed_mod.EMBED_HOST_ENV))
+            or args.ollama_host
+        )
     try:
         comp = build_comparison(
             json_paths,
@@ -1793,9 +1799,13 @@ def main() -> None:
     )
     c.add_argument(
         "--embed-api",
-        choices=["ollama", "openai"],
+        choices=["ollama", "openai", "local"],
         default="ollama",
-        help="ollama /api/embed, or any OpenAI-compatible /v1/embeddings",
+        help="ollama /api/embed, any OpenAI-compatible /v1/embeddings, or "
+        "'local' to run a pinned fp32 sentence-transformers encoder in this "
+        "process (needs the optional behavior-local group; --embed-model must "
+        "then be a pinned id or 'repo@<40-hex sha>', and --embed-host is "
+        "ignored)",
     )
     c.add_argument("--embed-model", default="mxbai-embed-large")
     c.add_argument("--seed", type=int, default=42)

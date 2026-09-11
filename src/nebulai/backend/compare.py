@@ -64,6 +64,16 @@ _PALETTE = [
     [1.00, 0.40, 0.40],  # coral
     [0.45, 0.55, 0.70],  # slate
     [0.85, 0.85, 0.95],  # frost
+    # Extended again the same day: a five-layer `down_proj` depth series on one
+    # model is five maps, and a depth series is the kind of thing this project
+    # adds in bulk. Growing the palette one crisis at a time is how the guard
+    # kept firing, so this leaves headroom instead of exactly enough.
+    [0.60, 0.35, 0.30],  # rust
+    [0.35, 0.80, 0.55],  # fern
+    [0.95, 0.75, 0.85],  # blush
+    [0.25, 0.45, 0.60],  # harbour
+    [0.80, 0.95, 0.60],  # chartreuse
+    [0.70, 0.40, 0.20],  # umber
 ]
 
 
@@ -183,6 +193,21 @@ def build_comparison(
         api=embed_api,
         api_key=embed_api_key,
     )
+    # Which neutral space this comparison lives in is not a detail: two
+    # compare.json files built from the same maps in two different embedders
+    # are not point-for-point comparable, and the shipped artifact carried
+    # only a bare model name with no way to tell them apart. For `local` the
+    # revision is a real commit sha, so record it.
+    embed_revision = ""
+    if embed_api == "local":
+        from .embed import LOCAL_EMBED_HOST, resolve_local_embed_model
+
+        _repo, embed_revision = resolve_local_embed_model(embed_model)
+        embed_endpoint = LOCAL_EMBED_HOST
+    else:
+        from .embed import public_embed_host
+
+        embed_endpoint = public_embed_host(embed_host)
     u_cluster, u3, _u2 = reduce_vectors(E, cluster_dim=10, n_neighbors=15, seed=seed)
     meta_ids, _probs = cluster_units(
         u_cluster, min_cluster_size=3, min_samples=1, method="leaf"
@@ -297,6 +322,9 @@ def build_comparison(
             "n_points": len(points),
             "n_meta_clusters": len(meta_clusters),
             "embed_model": embed_model,
+            "embed_api": embed_api,
+            "embed_revision": embed_revision,
+            "embed_endpoint": embed_endpoint,
         },
         "states": ["native", "semantic", "by_model", "by_concept"],
         "colors": {model_ids[i]: _PALETTE[i % len(_PALETTE)] for i in range(len(models))},

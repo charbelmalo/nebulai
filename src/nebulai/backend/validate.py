@@ -305,12 +305,24 @@ def reload_units(meta: dict):
     if unit.startswith("mlp_neuron"):
         from ..frontends.neurons import load_neuron_units
 
+        # `revision`, `remote` and `expert` are forwarded for the same reason
+        # the W_U branch above forwards them, and the reason is not symmetry.
+        # A neuron map built over HTTP ranges against a pinned 24 GB checkpoint
+        # replayed at "main" would either score a different commit's weights or
+        # decide to download the whole repo to do it; an MoE layer replayed
+        # without its `expert` raises deep inside the loader with a message
+        # about ambiguous tensor keys rather than about the map. None of that
+        # is caught by `validate_map`'s length guard: a different commit's
+        # `down_proj` has exactly the same number of rows.
         return load_neuron_units(
             meta["model_repo"],
             layer=int(meta["layer"]),
             max_neurons=kept,
             center=centered,
             labels_source=str(meta.get("labels_source", "none")),
+            revision=str(meta.get("revision") or "main"),
+            remote=True if meta.get("source") == "remote-range" else None,
+            expert=meta.get("expert"),
         )
 
     if unit.startswith("sae_decoder"):

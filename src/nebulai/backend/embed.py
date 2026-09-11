@@ -64,6 +64,47 @@ import numpy as np
 _DEFAULT_OLLAMA_HOST = "http://localhost:11434"  # local ollama server
 _DEFAULT_EMBED_MODEL = "mxbai-embed-large"
 
+#: `api="local"`: the encoder runs IN THIS PROCESS, from the fp32 Hub repo,
+#: pinned to a commit SHA. Added 2026-09-11 for one concrete reason: the LAN
+#: box that served every previous `compare` reports
+#: `{"running": false, "state": "insufficient_ram"}` today, and `:8050` — the
+#: OpenAI-compatible server that actually produced the shipped
+#: `out/compare/compare.json` with `all-MiniLM-L6-v2` — does not answer at all.
+#: With no reachable endpoint the choice is not "which neutral space" but
+#: "a comparison or none".
+#:
+#: This is NOT a fallback and nothing selects it automatically. The module
+#: docstring's rule stands: swapping the neutral space is a substitution that
+#: must never happen quietly, so `local` has to be asked for by name, the
+#: revision is pinned (a bare repo id without a known pin is refused, not
+#: resolved to `main`), and the caller stamps the result into the artifact.
+#: An fp32 `sentence-transformers` load of all-MiniLM-L6-v2 is the same weights
+#: as the shipped artifact's `all-MiniLM-L6-v2`, but a different runtime and a
+#: different precision from whatever `:8050` served — near, not identical, and
+#: coordinates from the two are not point-for-point comparable.
+LOCAL_EMBED_PINS: dict[str, tuple[str, str]] = {
+    "all-MiniLM-L6-v2": (
+        "sentence-transformers/all-MiniLM-L6-v2",
+        "c9745ed1d9f207416be6d2e6f8de32d1f16199bf",
+    ),
+    "sentence-transformers/all-MiniLM-L6-v2": (
+        "sentence-transformers/all-MiniLM-L6-v2",
+        "c9745ed1d9f207416be6d2e6f8de32d1f16199bf",
+    ),
+    "all-mpnet-base-v2": (
+        "sentence-transformers/all-mpnet-base-v2",
+        "9a3225965996d404b775526de6dbfe85d3368642",
+    ),
+    "sentence-transformers/all-mpnet-base-v2": (
+        "sentence-transformers/all-mpnet-base-v2",
+        "9a3225965996d404b775526de6dbfe85d3368642",
+    ),
+}
+
+#: What `embed_host` becomes for an in-process encoder. There is no host; the
+#: field still has to say something true, and "" would read as "unknown".
+LOCAL_EMBED_HOST = "local:in-process"
+
 #: Env override for the embeddings base URL. Exists because the working host on
 #: this network is a LAN box on a non-stock port (see the module docstring), and
 #: hardcoding a LAN IP as the library default would be wrong for everyone else
@@ -280,6 +321,50 @@ def _embed_batch(
     )
 
 
+def resolve_local_embed_model(model: str) -> tuple[str, str]:
+    """`model` -> (repo id, commit sha) for `api="local"`.
+
+    Accepts an explicit `repo@sha` for anything not in the pin table. A bare
+    repo id that is not pinned raises: resolving it to `main` would make the
+    neutral space a moving target, and a moving semantic space silently
+    re-scores every comparison built on it.
+    """
+    key = model.strip()
+    if "@" in key:
+        repo, _, rev = key.partition("@")
+        repo, rev = repo.strip(), rev.strip()
+        if len(rev) != 40 or any(c not in "0123456789abcdef" for c in rev.lower()):
+            raise ValueError(
+                f"local embedder {model!r}: the part after '@' must be a full "
+                "40-hex commit sha. A branch or tag is a moving target wearing "
+                "a pin's clothes."
+            )
+        return repo, rev.lower()
+    if key in LOCAL_EMBED_PINS:
+        return LOCAL_EMBED_PINS[key]
+    raise ValueError(
+        f"local embedder {model!r} is not pinned. Pass it as 'repo@<40-hex sha>', "
+        f"or use one of the pinned ids: {', '.join(sorted(LOCAL_EMBED_PINS))}.\n"
+        "Nothing here resolves a bare id to 'main': the neutral space a "
+        "comparison is measured in must not move between runs."
+    )
+
+
+def _embed_local(texts: list[str], model: str, batch_size: int) -> np.ndarray:
+    """Encode in-process with the pinned fp32 sentence-transformers stack.
+
+    Reuses `behavior.embed.LocalSentenceEmbedder` rather than re-implementing
+    it: that class already pins the revision, forces fp32 and CPU, seeds torch
+    and refuses to exist when the optional dependency group is absent. Two
+    copies of "load the judge deterministically" is one copy too many.
+    """
+    from ..behavior.embed import LocalSentenceEmbedder
+
+    repo, rev = resolve_local_embed_model(model)
+    enc = LocalSentenceEmbedder(id=repo, revision=rev, batch_size=batch_size)
+    return enc.encode(list(texts))
+
+
 def embed_texts(
     texts: list[str],
     host: str = _DEFAULT_OLLAMA_HOST,
@@ -293,10 +378,19 @@ def embed_texts(
     """Return (n, d) L2-normalized float32 embeddings for texts.
 
     api="ollama" posts to {host}/api/embed; api="openai" posts to any
-    OpenAI-compatible {host}/v1/embeddings (with optional bearer api_key).
+    OpenAI-compatible {host}/v1/embeddings (with optional bearer api_key);
+    api="local" runs the pinned fp32 sentence-transformers encoder in this
+    process and ignores `host` entirely.
     """
-    if api not in ("ollama", "openai"):
-        raise ValueError(f"unknown embed api {api!r} (expected 'ollama' or 'openai')")
+    if api not in ("ollama", "openai", "local"):
+        raise ValueError(
+            f"unknown embed api {api!r} (expected 'ollama', 'openai' or 'local')"
+        )
+    if api == "local":
+        # no host, no batching loop, no retries: nothing here crosses a socket
+        arr = np.asarray(_embed_local(texts, model, batch_size), dtype=np.float32)
+        arr /= np.linalg.norm(arr, axis=1, keepdims=True) + 1e-8
+        return arr
     out: list[list[float]] = []
     for start in range(0, len(texts), batch_size):
         batch = texts[start : start + batch_size]
