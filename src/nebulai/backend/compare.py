@@ -302,3 +302,186 @@ def build_comparison(
 
 def export_comparison(out_path: Path, comparison: dict) -> None:
     out_path.write_text(json.dumps(comparison))
+
+
+# ---------------------------------------------------------------------------
+# Route B — orthogonal Procrustes over shared tokens (README roadmap)
+# ---------------------------------------------------------------------------
+#
+# Everything above is Route A: it never touches raw geometry, because two
+# models' embedding spaces have no shared basis. Route B asks a narrower
+# question that *can* be answered in the raw spaces:
+#
+#     For two models with the SAME tokenizer, is there a single rigid rotation
+#     that carries one model's token cloud onto the other's?
+#
+# If one exists, the two geometries agree up to a change of basis and the
+# difference between their maps is a difference of coordinates, not of content.
+# If none exists, they genuinely arrange the vocabulary differently.
+#
+# Three constraints make the answer mean something, and all three are enforced
+# rather than merely documented:
+#
+# * **Same tokenizer only.** Aligning across tokenizers would pair token id 42
+#   of one vocabulary with an unrelated string in the other; the result would be
+#   noise with a rotation matrix attached.
+# * **Held-out evaluation.** A rotation fitted on all 49,857 tokens and scored
+#   on the same 49,857 is fitting, not testing. The reported residual is
+#   measured on tokens the fit never saw.
+# * **A permutation null.** A residual of 0.4 means nothing without knowing what
+#   a *wrong* pairing scores. The null shuffles which row of B each row of A is
+#   matched to and refits, holding both clouds' internal structure fixed and
+#   destroying only the correspondence — which is exactly the hypothesis.
+
+_ROUTE_B_MIN_SHARED = 256
+
+
+class RouteBError(ValueError):
+    """Route B was asked for a pair it cannot honestly answer for."""
+
+
+def _orthogonal_procrustes(A: np.ndarray, B: np.ndarray) -> np.ndarray:
+    """The R minimising ‖A R − B‖_F subject to RᵀR = I.
+
+    For equal widths this is the classical solution `R = U Vᵀ` from the SVD of
+    `AᵀB`. The same formula solves the unequal-width case with R semi-orthogonal
+    (`d_a × d_b`), which is what lets gpt2 (768-d) be compared with gpt2-medium
+    (1024-d) without throwing away dimensions by hand. That case is a projection
+    and the result says so: a projection can only lose structure, so a *low*
+    residual across widths is still evidence while a high one is partly an
+    artifact of the width gap.
+    """
+    u, _, vt = np.linalg.svd(A.T @ B, full_matrices=False)
+    return u @ vt
+
+
+def _residual(A: np.ndarray, B: np.ndarray, R: np.ndarray) -> float:
+    """‖A R − B‖²_F / ‖B‖²_F — 0 is a perfect fit, 1 is no better than zero."""
+    denom = float((B * B).sum())
+    if denom <= 0:
+        return float("nan")
+    return float(((A @ R - B) ** 2).sum() / denom)
+
+
+def _prepare(V: np.ndarray) -> np.ndarray:
+    """Centre, then scale to unit Frobenius norm.
+
+    Orthogonal Procrustes has no scale parameter, so two clouds of different
+    overall magnitude would report a large residual for a reason that has
+    nothing to do with their shape. Normalising both leaves the residual
+    measuring what it is meant to: relative arrangement.
+    """
+    X = np.asarray(V, dtype=np.float64)
+    X = X - X.mean(axis=0, keepdims=True)
+    n = float(np.sqrt((X * X).sum()))
+    return X / n if n > 0 else X
+
+
+def route_b_procrustes(
+    model_a: str,
+    model_b: str,
+    *,
+    max_tokens: int | None = None,
+    n_permutations: int = 200,
+    holdout_fraction: float = 0.5,
+    seed: int = 0,
+    remote: bool | None = False,
+    units_loader=None,
+) -> dict:
+    """Fit and test a rigid alignment between two same-family token clouds.
+
+    Returns a JSON-serialisable report. Raises `RouteBError` when the pair
+    cannot support the question — a different tokenizer, or too few shared
+    tokens — rather than returning a number that would look like an answer.
+    """
+    if units_loader is None:
+        from ..frontends.tokens import load_token_units
+
+        units_loader = load_token_units
+
+    ua = units_loader(model_a, center=False, max_tokens=max_tokens, remote=remote)
+    ub = units_loader(model_b, center=False, max_tokens=max_tokens, remote=remote)
+
+    # Tokenizer identity is checked on the token STRINGS, not on the vocab size:
+    # two tokenizers can agree on a count and disagree on every entry.
+    la, lb = list(ua.labels), list(ub.labels)
+    index_b = {s: i for i, s in enumerate(lb)}
+    pairs = [(i, index_b[s]) for i, s in enumerate(la) if s in index_b]
+    overlap = len(pairs) / max(len(la), len(lb)) if la and lb else 0.0
+    if len(pairs) < _ROUTE_B_MIN_SHARED:
+        raise RouteBError(
+            f"{model_a} and {model_b} share only {len(pairs)} token strings "
+            f"({overlap:.1%} of the larger vocabulary). Route B answers a "
+            f"question about a shared vocabulary; below {_ROUTE_B_MIN_SHARED} "
+            f"shared tokens there is no such vocabulary, and a rotation fitted "
+            f"on what remains would describe the overlap rather than the "
+            f"models. Use the Route A comparison for cross-tokenizer pairs."
+        )
+
+    ia = np.array([p[0] for p in pairs], dtype=int)
+    ib = np.array([p[1] for p in pairs], dtype=int)
+    A = _prepare(np.asarray(ua.vectors)[ia])
+    B = _prepare(np.asarray(ub.vectors)[ib])
+
+    rng = np.random.default_rng(seed)
+    n = len(A)
+    perm = rng.permutation(n)
+    n_fit = max(1, int(round(n * (1.0 - holdout_fraction))))
+    fit_idx, test_idx = perm[:n_fit], perm[n_fit:]
+    if len(test_idx) < _ROUTE_B_MIN_SHARED // 4:
+        raise RouteBError(
+            f"holdout_fraction={holdout_fraction} leaves {len(test_idx)} "
+            f"evaluation tokens, too few to distinguish a real alignment from a "
+            f"lucky one."
+        )
+
+    R = _orthogonal_procrustes(A[fit_idx], B[fit_idx])
+    resid_fit = _residual(A[fit_idx], B[fit_idx], R)
+    resid_held = _residual(A[test_idx], B[test_idx], R)
+    resid_full = _residual(A, B, _orthogonal_procrustes(A, B))
+
+    # Permutation null: the same two clouds, the wrong correspondence. Refitting
+    # inside the loop is the point — the null must be "the best rotation
+    # available to a wrong pairing", not "this rotation applied to a wrong
+    # pairing", which would be trivial to beat.
+    null: list[float] = []
+    for _ in range(n_permutations):
+        Rn = _orthogonal_procrustes(A[fit_idx], B[fit_idx][rng.permutation(len(fit_idx))])
+        shuffled_test = B[test_idx][rng.permutation(len(test_idx))]
+        null.append(_residual(A[test_idx], shuffled_test, Rn))
+    null_arr = np.asarray([v for v in null if np.isfinite(v)], dtype=np.float64)
+    # Lower residual = better alignment, so the tail of interest is the LEFT one.
+    r = int((null_arr <= resid_held).sum())
+    p_value = (r + 1) / (len(null_arr) + 1) if len(null_arr) else float("nan")
+
+    return {
+        "route": "B",
+        "method": "orthogonal Procrustes over shared tokens, held-out residual",
+        "model_a": model_a,
+        "model_b": model_b,
+        "dim_a": int(A.shape[1]),
+        "dim_b": int(B.shape[1]),
+        "square_rotation": bool(A.shape[1] == B.shape[1]),
+        "n_shared_tokens": int(n),
+        "vocab_overlap": round(float(overlap), 6),
+        "n_fit": int(len(fit_idx)),
+        "n_heldout": int(len(test_idx)),
+        "residual_fit": round(resid_fit, 6),
+        "residual_heldout": round(resid_held, 6),
+        "residual_full_insample": round(resid_full, 6),
+        "alignment_heldout": round(1.0 - resid_held, 6),
+        "null_residual_mean": round(float(null_arr.mean()), 6) if len(null_arr) else None,
+        "null_residual_min": round(float(null_arr.min()), 6) if len(null_arr) else None,
+        "n_permutations_effective": int(len(null_arr)),
+        "p_value": round(float(p_value), 6) if np.isfinite(p_value) else None,
+        "seed": int(seed),
+        "interpretation": (
+            "residual_heldout is the fraction of the target cloud's variance the "
+            "fitted rotation fails to explain on tokens it never saw; p_value is "
+            "the (r+1)/(B+1) permutation probability of matching it under a "
+            "shuffled token correspondence. A low residual with a small p means "
+            "the two models arrange this shared vocabulary the same way up to a "
+            "change of basis. It does NOT mean the models behave alike, and it "
+            "ranks neither of them."
+        ),
+    }

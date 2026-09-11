@@ -970,6 +970,69 @@ def _run_rename(args: argparse.Namespace) -> None:
         print(f"  {r['id']:<52} {r['was']} -> {r['namer']}")
 
 
+def _run_route_b(args: argparse.Namespace, out_root: Path) -> None:
+    """`nebulai compare --route-b A B` — the raw-geometry alignment test.
+
+    Deliberately a mode of `compare` rather than its own verb: it answers the
+    same question ("how do these two models relate?") from the other end, and
+    keeping the two under one command is what makes the *choice* between them
+    visible. Route A works across tokenizers and never touches raw geometry;
+    Route B needs a shared tokenizer and touches nothing else.
+    """
+    from .backend.compare import RouteBError, route_b_procrustes
+
+    if len(args.models) != 2:
+        raise SystemExit(
+            f"--route-b takes exactly two models, got {len(args.models)}. A "
+            f"Procrustes alignment is defined between a pair; averaging several "
+            f"pairwise residuals into one figure would hide which pair aligned."
+        )
+    t = _timer()
+    try:
+        rep = route_b_procrustes(
+            args.models[0],
+            args.models[1],
+            max_tokens=args.route_b_max_tokens,
+            n_permutations=args.route_b_permutations,
+            holdout_fraction=args.route_b_holdout,
+            seed=args.seed,
+        )
+    except RouteBError as e:
+        raise SystemExit(f"route B refused this pair:\n  {e}") from e
+
+    cmp_dir = out_root / "compare"
+    cmp_dir.mkdir(parents=True, exist_ok=True)
+    slug = f"{args.models[0]}__{args.models[1]}".replace("/", "__")
+    path = cmp_dir / f"route_b__{slug}.json"
+    path.write_text(json.dumps(rep, indent=1), encoding="utf-8")
+
+    kind = "rotation" if rep["square_rotation"] else "semi-orthogonal projection"
+    print(f"  route B: {rep['model_a']} -> {rep['model_b']}  ({kind}) [{t()}]")
+    print(
+        f"    shared tokens      {rep['n_shared_tokens']} "
+        f"({rep['vocab_overlap']:.1%} of the larger vocabulary); "
+        f"{rep['dim_a']}d -> {rep['dim_b']}d"
+    )
+    print(f"    residual (fit)     {rep['residual_fit']:.4f} on {rep['n_fit']} tokens")
+    print(
+        f"    residual (held-out) {rep['residual_heldout']:.4f} on "
+        f"{rep['n_heldout']} tokens   <- the number that means something"
+    )
+    if rep["null_residual_mean"] is not None:
+        print(
+            f"    permutation null    mean {rep['null_residual_mean']:.4f}, "
+            f"best {rep['null_residual_min']:.4f} over "
+            f"{rep['n_permutations_effective']} shuffles"
+        )
+    print(f"    p                   {rep['p_value']}")
+    print(f"  wrote {path}")
+    print(
+        "\n  This says whether two models arrange a shared vocabulary the same "
+        "way up to a change of basis.\n  It says nothing about behaviour, and "
+        "it ranks neither model."
+    )
+
+
 def _run_compare(args: argparse.Namespace) -> None:
     import os
 
@@ -978,6 +1041,10 @@ def _run_compare(args: argparse.Namespace) -> None:
     from .backend.viewer import write_viewer
 
     out_root = Path(args.out)
+
+    if getattr(args, "route_b", False):
+        _run_route_b(args, out_root)
+        return
 
     # `all` is not a convenience — hand-listing eleven dataset ids is how a
     # comparison silently ends up missing the front-ends it exists to contrast
@@ -1732,6 +1799,35 @@ def main() -> None:
     )
     c.add_argument("--embed-model", default="mxbai-embed-large")
     c.add_argument("--seed", type=int, default=42)
+    c.add_argument(
+        "--route-b",
+        action="store_true",
+        help="instead of the concept-space comparison, fit an orthogonal "
+        "Procrustes alignment between exactly TWO same-tokenizer models' raw "
+        "token clouds and test it on held-out tokens against a permutation "
+        "null. Needs no embedder; reads the weights, not the built maps.",
+    )
+    c.add_argument(
+        "--route-b-max-tokens",
+        type=int,
+        default=None,
+        help="[--route-b] curate to the N most frequent tokens before aligning "
+        "(default: the full curated vocabulary, ~49.9k for the gpt2 family)",
+    )
+    c.add_argument(
+        "--route-b-permutations",
+        type=int,
+        default=200,
+        help="[--route-b] permutation-null size; the reported p can never be "
+        "smaller than 1/(B+1)",
+    )
+    c.add_argument(
+        "--route-b-holdout",
+        type=float,
+        default=0.5,
+        help="[--route-b] fraction of shared tokens held out of the fit and "
+        "used for the reported residual",
+    )
     c.set_defaults(fn=_run_compare)
 
     # Behavioral divergence (docs/BEHAVIORAL-DIVERGENCE-PLAN.md) and generative

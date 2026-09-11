@@ -177,6 +177,48 @@ switch:
 Colors encode the source model; a "shared concepts only" filter isolates the
 overlap; hover a point for its concept title, source model, and token count.
 
+### Route B — the geometry-space companion
+
+`compare` works in concept space precisely because two models share no
+embedding basis. Route B is the test of that premise rather than a way around
+it: over the tokens two models' vocabularies actually share, it fits the single
+**orthogonal** map that best carries one cloud onto the other and reports how
+much of the target it fails to explain.
+
+```sh
+uv run nebulai compare gpt2 distilgpt2 --route-b
+# -> out/compare/route_b__gpt2__distilgpt2.json
+```
+
+Three things keep the residual from being a number that always looks good:
+
+- **It is held out.** The rotation is fitted on half the shared tokens and
+  scored on the other half. The in-sample residual is printed beside it so the
+  gap is visible instead of hidden.
+- **The null refits.** Each of the permutations shuffles the token
+  correspondence and fits that shuffle its *own* best rotation. A null that
+  reused the true rotation would be beaten by anything.
+- **A pair that cannot be asked is refused.** Under 256 shared token strings
+  the command stops and points at concept-space `compare`; it does not align
+  whatever it can find. Unequal widths (gpt2's 768 vs gpt2-medium's 1024) are
+  handled by the semi-orthogonal solution and flagged `square_rotation: false`,
+  because a projection can only lose structure.
+
+Measured, gpt2 → distilgpt2 (49,857 shared tokens, 100% of the vocabulary, 200
+permutations):
+
+| | |
+|---|---|
+| residual, held out | **0.0531** on 24,929 tokens |
+| residual, fit half | 0.0512 on 24,928 tokens |
+| permutation null | mean 1.9996, best 1.9977 |
+| p | 0.004975 (the floor, 1/201) |
+
+A single rotation explains ~95% of distilgpt2's token geometry from gpt2's —
+unsurprising for a distillation, and exactly the sanity check the method needed.
+It says the two arrange a shared vocabulary alike **up to a change of basis**.
+It says nothing about behaviour and ranks neither model.
+
 ## Semantic probe — a cloud with no model in it
 
 The three front-ends above all decompose a model. `nebulai probe` does not: you
@@ -392,5 +434,4 @@ uses: [`docs/OBSERVABILITY-SURFACE.md`](docs/OBSERVABILITY-SURFACE.md).
 - Held-out auto-interp scores and activation-based coherence — the two validation layers `nebulai validate` does not yet cover (it measures geometry and stability, not whether a cluster predicts behaviour).
 - Intervention-based validation: does ablating a cluster's units change the behaviour its title claims?
 - Phase 2: WebGPU point cloud reading `nebulai.json` — 3D flythrough, hover, cluster hulls, filters, 2D↔3D toggle. (The `compare` viewer is the first cut of this renderer.)
-- Cross-model: Route B (orthogonal Procrustes alignment on shared tokens) as a geometry-space companion to the current concept-space `compare`, for same-family models.
 - W_E vs W_U on the untied corpus models — which token families the model reads differently from how it writes them — with the tied model as the control that says what "no difference" scores. See [`recommended-plan.md`](recommended-plan.md).
