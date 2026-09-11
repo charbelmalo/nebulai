@@ -75,9 +75,17 @@ def _run_tokens(args: argparse.Namespace) -> None:
     if args.source == "api":
         from .frontends.api_tokens import load_api_token_units
 
+        # Same rule as `compare`: an in-process encoder has no endpoint, so
+        # never resolve one — a discovery probe would fire and a LAN address
+        # would end up stamped into an artifact that never touched it.
+        from .backend import embed as _embed_mod
+
+        api_embed_host = (
+            _embed_mod.LOCAL_EMBED_HOST if args.embed_api == "local" else args.embed_host
+        )
         units = load_api_token_units(
             args.model,
-            embed_host=args.embed_host,
+            embed_host=api_embed_host,
             embed_model=args.embed_model,
             api=args.embed_api,
             api_key=os.environ.get("EMBED_API_KEY") or os.environ.get("OPENAI_API_KEY"),
@@ -87,7 +95,7 @@ def _run_tokens(args: argparse.Namespace) -> None:
         )
         print(
             f"[1/5] loaded {len(units)} token units from {args.model} via "
-            f"{args.embed_model}@{args.embed_host} — api text embeddings, "
+            f"{args.embed_model}@{units.meta['embed_host']} — api text embeddings, "
             f"NOT model-internal geometry (vocab {units.meta['vocab_size']}, "
             f"curated to {units.meta['kept']}) [{t()}]"
         )
@@ -1214,10 +1222,14 @@ def main() -> None:
     )
     t.add_argument(
         "--embed-api",
-        choices=["ollama", "openai"],
+        choices=["ollama", "openai", "local"],
         default="ollama",
-        help="[--source api] transport: ollama /api/embed or OpenAI-compatible "
-        "/v1/embeddings (bearer key from EMBED_API_KEY or OPENAI_API_KEY)",
+        help="[--source api] transport: ollama /api/embed, OpenAI-compatible "
+        "/v1/embeddings (bearer key from EMBED_API_KEY or OPENAI_API_KEY), or "
+        "'local' to run a pinned fp32 sentence-transformers encoder in this "
+        "process (needs the optional behavior-local group; --embed-host is "
+        "ignored, and the pinned commit is stamped into the map so `nebulai "
+        "validate` can rebuild the vectors)",
     )
     t.add_argument(
         "--max-tokens",
