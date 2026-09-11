@@ -21,6 +21,7 @@ is not a zero, and the viewer renders the two differently (§8.5).
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -218,11 +219,38 @@ def build_export(
 
 
 def write_export(path: str | Path, payload: dict[str, Any]) -> Path:
+    """Serialize, refusing to write a file no JSON reader can read.
+
+    `allow_nan=False` is the belt to `_r`'s braces: `_r` sanitizes every metric
+    that goes through it, and this catches anything that reached the payload by
+    another route (a diagnostics block, a future field). Failing here is loud
+    and fixable; writing `NaN` produces a `behavior.json` whose `JSON.parse`
+    throws in the viewer with no indication of which field caused it.
+    """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    try:
+        text = json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False)
+    except ValueError as exc:
+        raise ValueError(
+            f"{path}: the export carries a non-finite number ({exc}). A metric "
+            f"that could not be computed is written as null, never as NaN — a "
+            f"NaN here would make the whole artifact unparseable instead of "
+            f"marking one field as not measured."
+        ) from exc
+    p.write_text(text, encoding="utf-8")
     return p
 
 
 def _r(x: float | None, nd: int = 5) -> float | None:
-    return None if x is None else round(float(x), nd)
+    """Round, and map every non-finite value to `None`.
+
+    NaN and ±inf are not metrics and they are not `null` either: `json.dumps`
+    writes them as the bare tokens `NaN` / `Infinity`, which no conforming JSON
+    reader accepts, so a single un-computable statistic would make the whole
+    artifact unparseable rather than showing one field as "not measured".
+    """
+    if x is None:
+        return None
+    v = float(x)
+    return None if math.isnan(v) or math.isinf(v) else round(v, nd)

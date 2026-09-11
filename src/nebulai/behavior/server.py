@@ -175,18 +175,26 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def _execute(m: Any, arm: str, out_dir: str, limit: int | None) -> None:
-    store = TrialStore(Path(out_dir) / m.study_id / "trials.sqlite")
-    budget = RunBudget(m.max_cost_usd, label=f"behavior:{m.study_id}")
-    est = estimate(m, [arm] if arm != "canary" else [])
-    if est.n_paid_trials:
-        budget.preflight(est.est_cost_usd or 0.0, est.n_paid_trials, "paid arms")
-        budget.approve()  # the HTTP layer already required an explicit approval
+    store: TrialStore | None = None
 
     def on_progress(p: dict[str, Any]) -> None:
         with _LOCK:
             _STATE.update({"done": p["done"], "total": p["total"], "spent_usd": p["spent_usd"]})
 
+    # Everything, setup included, inside the try. This runs on a daemon thread
+    # whose only channel back to the page is `_STATE`: an exception raised
+    # before the try — opening the store on a read-only directory, a preflight
+    # that trips the ceiling — would kill the thread with `running` still True,
+    # and the page would show a run in flight forever with no reason given. A
+    # failure that cannot be reported is worse than the failure.
     try:
+        store = TrialStore(Path(out_dir) / m.study_id / "trials.sqlite")
+        budget = RunBudget(m.max_cost_usd, label=f"behavior:{m.study_id}")
+        est = estimate(m, [arm] if arm != "canary" else [])
+        if est.n_paid_trials:
+            budget.preflight(est.est_cost_usd or 0.0, est.n_paid_trials, "paid arms")
+            budget.approve()  # the HTTP layer already required an explicit approval
+
         res = Runner(m, store, budget=budget, progress=on_progress).run(arm, limit=limit)
         with _LOCK:
             _STATE.update(
@@ -206,7 +214,8 @@ def _execute(m: Any, arm: str, out_dir: str, limit: int | None) -> None:
         with _LOCK:
             _STATE.update({"running": False, "error": f"{type(exc).__name__}: {exc}"})
     finally:
-        store.close()
+        if store is not None:
+            store.close()
 
 
 def serve(out_dir: str, *, host: str = "127.0.0.1", port: int = 8765, allow_paid: bool = False) -> None:

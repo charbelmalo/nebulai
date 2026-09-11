@@ -27,6 +27,7 @@ remainder.
 
 from __future__ import annotations
 
+import hashlib
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -45,6 +46,22 @@ from .store import TrialStore
 
 class RunnerError(RuntimeError):
     pass
+
+
+def _stable_seed(*parts: object) -> int:
+    """A seed derived from CONTENT, never from `hash()`.
+
+    Python salts `hash()` on strings and on tuples containing them with
+    `PYTHONHASHSEED`, which is random per interpreter. Deriving the schedule
+    shuffle or a trial's sampler seed from `hash()` therefore makes both
+    unreproducible between processes — the same frozen manifest would collect
+    in a different order, and every trial would be sampled at a different seed,
+    on every run. That contradicts the only thing the manifest's `seed` field
+    exists for, and it is invisible inside a single process, which is why it is
+    pinned by a cross-process test rather than an in-process one.
+    """
+    payload = "\x1f".join(repr(p) for p in parts).encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big") % (2**31)
 
 
 @dataclass(frozen=True)
@@ -97,7 +114,7 @@ def build_schedule(m: Manifest, arm: str) -> list[ScheduledTrial]:
     # block 0 execute after one from block 3, and the block label would then be
     # a lie about collection time — which is exactly what the permutation test
     # conditions on.
-    rng = np.random.default_rng(m.seed ^ hash(arm) % (2**31))
+    rng = np.random.default_rng(_stable_seed(m.seed, arm))
     grouped: dict[int, list[ScheduledTrial]] = {}
     for t in out:
         grouped.setdefault(t.block, []).append(t)
@@ -336,8 +353,9 @@ class Runner:
             seed=self.m.seed,
             stop=frame.stop,
         )
-        trial_seed = abs(hash((self.m.seed, t.arm, t.cue, t.frame_id, t.model_key, t.repeat)))
-        trial_seed %= 2**31
+        trial_seed = _stable_seed(
+            self.m.seed, t.arm, t.cue, t.frame_id, t.model_key, t.repeat
+        )
 
         rec = TrialRecord(
             study_id=self.m.study_id,

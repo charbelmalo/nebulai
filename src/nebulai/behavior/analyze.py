@@ -156,7 +156,15 @@ def _profile(
     if vecs:
         p.vectors = np.stack(vecs)
         p.blocks = np.asarray(blocks)
-        p.reliability = S.split_half_reliability(p.vectors, draws=m.split_half_draws, seed=m.seed)
+        # `_f`, not the raw value: `split_half_reliability` returns NaN when
+        # there are too few trials to halve, and NaN is neither a measurement
+        # nor a missing marker. Left raw it would (a) pass gate 2 silently,
+        # because `nan < floor` is False, and (b) reach the exporter, where
+        # `json.dumps` writes the literal `NaN` — not valid JSON, and not the
+        # `null` §8.5 requires the viewer to render as "not measured".
+        p.reliability = _f(
+            S.split_half_reliability(p.vectors, draws=m.split_half_draws, seed=m.seed)
+        )
 
     c = Counter(p.associates)
     p.counts = dict(c)
