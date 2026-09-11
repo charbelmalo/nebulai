@@ -93,6 +93,17 @@ export interface SessionsAppearance {
   projection: SessionsProjection;
   /** Seconds the cross-fade takes. 0 cuts. */
   projectionFade: number;
+  // ── The fan (Attractors P3) ─────────────────────────────────────────────
+  /** Whether the ensemble's per-step p10/p90 boxes are drawn around the
+   *  median path. Default TRUE, and deliberately: the band is the finding
+   *  and the median is its summary, so the honest default is the one that
+   *  shows the spread. A reader who turns it off has chosen to look at a
+   *  median alone; a reader who never saw it would not know there was a
+   *  spread to look at. Nothing is drawn at all unless an ensemble is
+   *  selected AND at least three of its runs are loaded — see
+   *  `scene/sessions/envelope.ts`. */
+  showEnvelope: boolean;
+
   /** In the persona projection the time axis is gone, so the playback cursor
    *  degrades to a trail parameter: how many turns of history stay lit behind
    *  the cursor. 0 means the whole path stays lit. */
@@ -154,6 +165,7 @@ export const DEFAULT_SESSIONS_APPEARANCE: SessionsAppearance = {
 
   projection: "usage",
   projectionFade: 0.7,
+  showEnvelope: true,
   trailLength: 0,
 
   categoryColors: { ...DEFAULT_CATEGORY_COLORS },

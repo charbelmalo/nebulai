@@ -456,6 +456,44 @@ export function fetchAnalysis(runId: string): Promise<RunAnalyses> {
   return getJSON<RunAnalyses>(`/seer/run/${encodeURIComponent(runId)}/analysis`);
 }
 
+// ── Attractors P2/P3: placement and the fan ─────────────────────────────────
+
+/** A run's `placement.json`. Rebuilt from the file on every call, never cached
+ *  here: `seer place` can be re-run from another process, and a viewer holding
+ *  a stale placement would draw last space's coordinates under this one's
+ *  name. A run that was never placed is `null`, not an empty placement. */
+export async function fetchPlacement(runId: string): Promise<unknown | null> {
+  try {
+    return await getJSON(`/seer/run/${encodeURIComponent(runId)}/placement`);
+  } catch {
+    return null;
+  }
+}
+
+/** The fan over one ensemble, recomputed by the server from the member runs'
+ *  own logs. Errors propagate: an ensemble id that does not resolve must reach
+ *  the panel as an error, because an empty fan and an absent one look identical
+ *  on screen and only one of them is a measurement. */
+export function fetchEnsemble(ensembleId: string): Promise<unknown> {
+  return getJSON(`/seer/ensemble/${encodeURIComponent(ensembleId)}`);
+}
+
+export async function fetchEnsembles(limit = 50): Promise<{ ensembleId: string; protocolId: string | null; nMembers: number; created: string | null }[]> {
+  try {
+    const { ensembles } = await getJSON<{ ensembles: any[] }>(`/seer/ensembles?limit=${limit}`);
+    return (ensembles ?? [])
+      .map((e) => ({
+        ensembleId: String(e?.ensemble_id ?? ""),
+        protocolId: e?.protocol_id ? String(e.protocol_id) : null,
+        nMembers: Number(e?.n_members ?? 0),
+        created: e?.created ? String(e.created) : null,
+      }))
+      .filter((e) => e.ensembleId);
+  } catch {
+    return [];
+  }
+}
+
 /** Append a human note to the run's own append-only log. */
 export function annotate(
   runId: string,

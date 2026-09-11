@@ -41,6 +41,22 @@ export interface SessionsState {
    *  a reason per turn that could not. A turn missing from `points` is never
    *  drawn at the origin. */
   placements: Record<string, PlacementDoc>;
+
+  // ── Attractors P3: the fan ───────────────────────────────────────────────
+  /** The ensemble currently on screen, or null when a single run is. Selecting
+   *  one does NOT deselect the runs: an ensemble is a way of reading the runs
+   *  that are already there, and the fan is drawn over them. */
+  ensembleId: string | null;
+  /** The ensemble's member run ids, verbatim from its document. The field
+   *  draws the fan over the ones it actually has and reports how many that
+   *  was; it never infers membership from whatever runs are on screen,
+   *  because membership is a claim about protocol identity that only the
+   *  ensemble document can make.
+   *
+   *  NOT here: whether the envelope is drawn. That is a look, so it lives in
+   *  `appearance.sessions.showEnvelope` with the rest of the field's knobs
+   *  and has exactly one home in Settings. */
+  ensembleRunIds: string[];
 }
 
 /** `placement.json` as the viewer reads it — `seer place` writes it, the seer
@@ -82,6 +98,11 @@ export interface SessionsSlice {
    *  and whatever draws can then state it. */
   setPersonaSpace(spaceId: string | null, verdict?: SessionsState["personaVerdict"]): void;
   setPlacement(runId: string, doc: PlacementDoc | null): void;
+
+  /** Put an ensemble on screen, or clear it with null. `runIds` are the
+   *  document's own members; omitting them clears the group rather than
+   *  keeping the last ensemble's. */
+  setEnsemble(ensembleId: string | null, runIds?: string[]): void;
 }
 
 export const createSessionsSlice: StateCreator<AppState, [], [], SessionsSlice> = (set) => ({
@@ -92,6 +113,8 @@ export const createSessionsSlice: StateCreator<AppState, [], [], SessionsSlice> 
     personaSpaceId: null,
     personaVerdict: "unknown",
     placements: {},
+    ensembleId: null,
+    ensembleRunIds: [],
   },
 
   // ── sessions (3-D plotter) ───────────────────────────────────────────────
@@ -163,4 +186,8 @@ export const createSessionsSlice: StateCreator<AppState, [], [], SessionsSlice> 
       else delete placements[runId];
       return { sessions: { ...s.sessions, placements } };
     }),
+  setEnsemble: (ensembleId, runIds) =>
+    set((s) => ({
+      sessions: { ...s.sessions, ensembleId, ensembleRunIds: ensembleId ? (runIds ?? []) : [] },
+    })),
 });

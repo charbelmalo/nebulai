@@ -14,6 +14,7 @@ import { signal, useSignal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
 import { appStore } from "../app/store";
 import { AbsorbingPanel } from "./AbsorbingPanel";
+import { EnsemblePanel } from "./EnsemblePanel";
 import {
   buildAgentGraph,
   CATEGORY_ORDER,
@@ -134,6 +135,11 @@ export function SessionsPage() {
               the plot — and renders nothing at all when this deploy ships no
               study. See chrome/AbsorbingPanel.tsx. */}
           <AbsorbingPanel />
+          {/* The fan is about a set of runs the seer STORE holds, not about
+              the transcripts loaded into this tab, so it renders on the same
+              terms as the absorbing readout: whenever the store has an
+              ensemble, and nothing at all when it does not. */}
+          <EnsemblePanel />
         </div>
       </div>
     </div>
@@ -245,6 +251,17 @@ function SessionPlot(props: { analyses: SessionAnalysis[] }) {
   useEffect(() => {
     if (ready.value) driverRef.current?.setPlacements(placements);
   }, [placements, ready.value]);
+
+  // Attractors P3 — which runs the fan is drawn over. Separate from the
+  // analyses for the same reason the placements are: membership arrives with
+  // the ensemble document, long after the transcripts were parsed, and a run
+  // of the ensemble that is not loaded must lower the fan's n rather than be
+  // quietly stood in for.
+  const ensembleRunIds = $sessions.value.ensembleRunIds;
+  useEffect(() => {
+    if (ready.value)
+      driverRef.current?.setEnsembleGroup(ensembleRunIds.length ? ensembleRunIds : null);
+  }, [ensembleRunIds, ready.value]);
 
   // global Settings › bloom toggle (webgpu rung only)
   const bloom = $settings.value.bloom;

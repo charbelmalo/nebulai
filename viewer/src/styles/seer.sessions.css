@@ -1310,3 +1310,249 @@
 .absorb-verdict-unknown {
   color: var(--text-faint);
 }
+
+/* ── Attractors P3: the fan (chrome/EnsemblePanel.tsx) ─────────────────────
+ *
+ * The band is the drawing. Everything here is sized so the envelope reads as
+ * the primary mark and the median as a line inside it — the reverse of the
+ * usual chart, and deliberately so: a median drawn boldly over a faint band is
+ * a picture that tells the reader to read the median.
+ */
+
+.ens-panel {
+  margin-top: 18px;
+  padding: 14px 16px 16px;
+  background: var(--bg-raise);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+}
+
+.ens-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.ens-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.ens-toggle {
+  background: none;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 11px;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.ens-toggle:hover {
+  color: inherit;
+}
+
+.ens-provenance {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+  word-break: break-all;
+}
+
+.ens-mono {
+  font-family: var(--font-mono);
+}
+.ens-dim {
+  color: var(--text-faint);
+}
+
+.ens-note {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+.ens-note-warn {
+  color: var(--warn);
+}
+.ens-note-missing {
+  color: var(--danger);
+}
+
+.ens-block {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+.ens-block-alarm {
+  border-top-color: var(--danger);
+}
+
+.ens-h {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ── the fan ─────────────────────────────────────────────────────────────── */
+
+.ens-fan {
+  margin-top: 10px;
+}
+
+.ens-fan-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.ens-fan-band {
+  fill: var(--accent);
+  fill-opacity: 0.28;
+  stroke: var(--accent);
+  stroke-opacity: 0.45;
+  stroke-width: 1;
+}
+
+/* thin on purpose: the median is a summary of the band, not the result */
+.ens-fan-median {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.25;
+  stroke-opacity: 0.9;
+}
+
+.ens-fan-n {
+  fill: var(--text-faint);
+}
+
+/* ── rates ───────────────────────────────────────────────────────────────── */
+
+.ens-rate {
+  margin-top: 12px;
+}
+
+.ens-rate-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.ens-rate-label {
+  color: inherit;
+}
+
+.ens-rate-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.ens-rate-underpowered .ens-rate-value {
+  color: var(--warn);
+}
+
+.ens-missing {
+  color: var(--danger);
+}
+
+.ens-rate-track {
+  position: relative;
+  height: 10px;
+  margin-top: 4px;
+  border: 1px solid var(--hairline);
+  border-radius: 2px;
+  background: transparent;
+  overflow: hidden;
+}
+
+/* the INTERVAL is the bar */
+.ens-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+.ens-rate-underpowered .ens-band {
+  background: var(--warn);
+  opacity: 0.45;
+}
+
+/* the point estimate is a tick inside its interval, never the bar itself */
+.ens-tick {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+}
+
+/* n = 0 is a hatch, not a full-width band: "nothing was measured" and "it
+   could be anything" are different facts and must not share a mark */
+.ens-noband {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent 0 3px,
+    var(--hairline) 3px 5px
+  );
+}
+
+.ens-rate-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+/* ── reliability ─────────────────────────────────────────────────────────── */
+
+.ens-terms {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ens-terms > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+}
+
+.ens-term-label {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.ens-term-value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.ens-dropped,
+.ens-missing-list {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+.ens-block-alarm .ens-missing-list {
+  color: var(--danger);
+}

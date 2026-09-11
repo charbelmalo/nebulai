@@ -139,6 +139,9 @@ def _print_view(v: RunView) -> None:
 
 
 def _cmd_run(args: argparse.Namespace, store: EventStore) -> int:
+    repeat = int(getattr(args, "repeat", 1) or 1)
+    if repeat > 1:
+        return _cmd_run_ensemble(args, store, repeat)
     agents = [args.agent] + list(args.compare_with or [])
     results = []
     for agent in agents:
@@ -166,6 +169,215 @@ def _cmd_run(args: argparse.Namespace, store: EventStore) -> int:
     if len(results) > 1:
         _print_comparison([r.view for r in results])
     return 0 if all(r.exit_code in (0, None) for r in results) else 1
+
+
+# ── P3: the repeat ───────────────────────────────────────────────────────────
+#
+# `--repeat N` is the only path in `seer` that can spend N times as much money
+# as the human typed a command for, so it is the only one with a budget in
+# front of it. The shape is `budget.SeerBudget`'s and is deliberately visible
+# here rather than buried: preflight the whole repeat, approve it, launch run
+# 1, charge what it really reported, and then preflight AGAIN for runs 2…N now
+# that there is a measured number to estimate from. The second preflight is
+# what turns `MISSING` into `ESTIMATED`, and it is also what refuses a repeat
+# whose first run turned out to be expensive.
+
+
+def _fmt_cost(m) -> str:
+    return "—" if m.absent else f"${float(m.value):.4f}"
+
+
+def _print_ensemble(doc: dict) -> None:
+    w = sys.stdout.write
+    w(f"\nensemble {doc['ensemble_id']}  ({doc['n_runs']}"
+      f" of {doc['n_runs_requested']} runs)\n")
+    w(f"  protocol   {doc['protocol'].get('id')} "
+      f"[{doc['protocol'].get('hash_algorithm')} over "
+      f"{'+'.join(doc['protocol'].get('hash_fields') or [])}]\n")
+    if doc["n_runs"] < doc["point_estimate_min_runs"]:
+        w(f"  n = {doc['n_runs']} < {doc['point_estimate_min_runs']}: read every "
+          f"number below as an interval, never a point\n")
+    for name, r in doc["rates"].items():
+        if r.get("p") is None:
+            w(f"  {name:<26} —   ({r.get('missing', 'missing')})\n")
+        else:
+            lo, hi = r["ci95"]
+            w(f"  {name:<26} {r['p']:.2f}  [{lo:.2f}, {hi:.2f}]  "
+              f"k={r['k']}/n={r['n']}\n")
+    fan = doc["fan"]
+    if fan:
+        w(f"  fan        {len(fan)} steps of {doc['fan_metric']}, envelope "
+          f"{doc['fan_envelope']}\n")
+    rel = doc["reliability"]
+    if rel.get("delta_hat") is None:
+        w(f"  delta_hat  —   ({rel.get('missing', 'missing')})\n")
+    else:
+        w(f"  delta_hat  {rel['delta_hat']:+.4f}  "
+          f"(between {rel['between']:.4f} − ½[{rel['within_a']:.4f} + "
+          f"{rel['within_b']:.4f}])\n")
+    for quantity, why in doc.get("missing", {}).items():
+        w(f"  missing: {quantity} — {why}\n")
+    w("\n")
+
+
+def _cmd_run_ensemble(
+    args: argparse.Namespace, store: EventStore, repeat: int
+) -> int:
+    from .budget import SeerBudget, SeerBudgetError, protocol_fingerprint
+    from .ensemble import (
+        EnsembleManifest,
+        Member,
+        build_ensemble,
+        new_ensemble_id,
+        write_manifest,
+    )
+
+    agents = [args.agent] + list(args.compare_with or [])
+    cwd = str(args.cwd) if args.cwd else str(Path.cwd())
+    fps = {
+        a: protocol_fingerprint(a, args.prompt, model=args.model, cwd=cwd)
+        for a in agents
+    }
+    total = repeat * len(agents)
+
+    budget = SeerBudget(
+        store,
+        ceiling_usd=args.max_cost_usd,
+        label=f"seer run --repeat {repeat}",
+    )
+    try:
+        budget.preflight(
+            fps[args.agent]["id"],
+            total,
+            acknowledge_unpriced=args.acknowledge_unpriced,
+        )
+    except SeerBudgetError as exc:
+        sys.stderr.write(f"[seer] {exc}\n")
+        return 2
+    budget.approve()
+
+    manifest = EnsembleManifest(
+        ensemble_id=new_ensemble_id(),
+        protocol=fps[args.agent],
+        n_runs_requested=total,
+        seed_base=args.seed_base,
+        # recorded, never handed to an agent — none of the three accept one
+        seed_applied=False,
+    )
+    # written before the first launch, so a repeat killed halfway still leaves
+    # an ensemble a reader can find the surviving runs through
+    write_manifest(store, manifest)
+    sys.stderr.write(f"[seer] ensemble {manifest.ensemble_id}\n")
+
+    results = []
+    launched = {a: 0 for a in agents}
+    stopped: str | None = None
+    for i in range(repeat):
+        for agent in agents:
+            pid = fps[agent]["id"]
+            if launched[agent] == 1:
+                # run 2 of this protocol: run 1 has happened, so there may now
+                # be a measured number to estimate the rest from
+                try:
+                    budget.preflight(
+                        pid,
+                        repeat - 1,
+                        acknowledge_unpriced=args.acknowledge_unpriced,
+                    )
+                    budget.approve()
+                except SeerBudgetError as exc:
+                    stopped = str(exc)
+                    break
+            sys.stderr.write(
+                f"[seer] launching {agent} ({i + 1}/{repeat}) …\n"
+            )
+            r = Runner(
+                agent,
+                args.prompt,
+                store=store,
+                cwd=args.cwd,
+                model=args.model,
+                keep_reasoning=args.keep_reasoning,
+                label=args.label,
+                on_event=(_tick if args.progress else None),
+            ).run(timeout_s=args.timeout)
+            results.append(r)
+            launched[agent] += 1
+            if args.progress:
+                sys.stderr.write("\n")
+            manifest.members.append(
+                Member(
+                    run_id=r.run_id,
+                    index=len(manifest.members),
+                    condition=agent,
+                    protocol_id=pid,
+                    seed=(
+                        None if args.seed_base is None
+                        else int(args.seed_base) + i
+                    ),
+                )
+            )
+            manifest.budget = budget.to_dict()
+            write_manifest(store, manifest)
+            sys.stderr.write(
+                f"[seer]   {r.run_id} {r.view.state.value} "
+                f"cost={_fmt_cost(r.view.cost_usd)}\n"
+            )
+            cost = r.view.cost_usd
+            try:
+                budget.charge_run(
+                    pid,
+                    r.run_id,
+                    None if cost.absent else float(cost.value),
+                    source_fidelity=cost.fidelity.value,
+                )
+            except SeerBudgetError as exc:
+                stopped = str(exc)
+                break
+        if stopped:
+            break
+
+    manifest.budget = budget.to_dict()
+    write_manifest(store, manifest)
+    if stopped:
+        sys.stderr.write(f"[seer] {stopped}\n")
+    sys.stderr.write(f"[seer] {budget.summary()}\n")
+
+    doc = build_ensemble(store, manifest).to_dict()
+    if args.json:
+        print(json.dumps(doc, indent=2))
+    else:
+        _print_ensemble(doc)
+    if stopped:
+        return 2
+    return 0 if all(r.exit_code in (0, None) for r in results) else 1
+
+
+def _cmd_ensemble(args: argparse.Namespace, store: EventStore) -> int:
+    from .ensemble import build_ensemble, list_ensembles, read_manifest
+
+    if not args.ensemble_id:
+        rows = list_ensembles(store, args.limit)
+        if not rows:
+            sys.stdout.write("no ensembles\n")
+            return 0
+        for row in rows:
+            sys.stdout.write(
+                f"{row['ensemble_id']}  {row['n_members']}"
+                f"/{row['n_runs_requested']} runs  {row['protocol_id']}  "
+                f"{row['created']}\n"
+            )
+        return 0
+    manifest = read_manifest(store, args.ensemble_id)
+    if manifest is None:
+        sys.stderr.write(f"[seer] unknown ensemble {args.ensemble_id}\n")
+        return 2
+    doc = build_ensemble(store, manifest).to_dict()
+    if args.json:
+        print(json.dumps(doc, indent=2))
+    else:
+        _print_ensemble(doc)
+    return 0
 
 
 def _cmd_attach(args: argparse.Namespace, store: EventStore) -> int:
@@ -698,6 +910,10 @@ def _cmd_import(args: argparse.Namespace, store: EventStore) -> int:
 
 
 def _add_subcommands(p: argparse.ArgumentParser) -> None:
+    # The project-wide spend ceiling, shared with the namer and probe rather
+    # than a second number that could drift from it (Attractors P3).
+    from ..corpus import DEFAULT_MAX_COST_USD as _DEFAULT_MAX_COST_USD
+
     p.add_argument(
         "--root", default=None,
         help=f"event log root (default: {DEFAULT_ROOT})",
@@ -722,6 +938,40 @@ def _add_subcommands(p: argparse.ArgumentParser) -> None:
              "asked for, and the resulting fields say dropped_by_policy when not",
     )
     r.add_argument("--progress", action="store_true", help="a dot per event on stderr")
+    # ── Attractors P3: variance as the headline ──────────────────────────
+    r.add_argument(
+        "--repeat", type=int, default=1, metavar="N",
+        help="run the same protocol N times and group them under one "
+             "ensemble id. N > 1 prices itself through the budget before "
+             "spending: the FIRST run of a protocol has no estimate at all "
+             "(missing, not $0) and needs --acknowledge-unpriced; runs 2..N "
+             "are estimated from what run 1 actually reported",
+    )
+    r.add_argument(
+        "--seed-base", type=int, default=None, metavar="K",
+        help="recorded per run as K, K+1, … and used to seed the split-half "
+             "draws. It is NOT handed to the agent: none of codex, claude or "
+             "hermes accepts a seed, and the ensemble says so rather than "
+             "implying the fan is seeded",
+    )
+    r.add_argument(
+        "--max-cost-usd", type=float, default=_DEFAULT_MAX_COST_USD,
+        metavar="USD",
+        help=f"ceiling for the whole repeat (default ${_DEFAULT_MAX_COST_USD:.2f}, "
+             f"the project-wide one from corpus.py). Over it the repeat is "
+             f"REFUSED; nothing is downgraded to fit",
+    )
+    r.add_argument(
+        "--acknowledge-unpriced", action="store_true",
+        help="proceed with a repeat whose cost is unknown. Required for the "
+             "first repeat of any protocol, because Seer cannot see the "
+             "agent's own billing; the acknowledgement is recorded in the "
+             "ensemble so a reader knows the spend was never estimated",
+    )
+    r.add_argument(
+        "--json", action="store_true",
+        help="[--repeat] print the ensemble document instead of the summary",
+    )
     r.set_defaults(seer_fn=_cmd_run)
 
     at = s.add_parser(
@@ -799,6 +1049,25 @@ def _add_subcommands(p: argparse.ArgumentParser) -> None:
     sh.add_argument("run_id")
     sh.add_argument("--json", action="store_true")
     sh.set_defaults(seer_fn=_cmd_show)
+
+    # ── ensemble (Attractors P3): the fan a `--repeat` produced ──────────
+    en = s.add_parser(
+        "ensemble",
+        help="the fan statistics over one `run --repeat` (no id: list them)",
+        description=(
+            "The statistics are recomputed from the runs' own logs on every "
+            "read, never cached, so a run deleted since the repeat ran drops "
+            "out of the fan and `n_runs` reports the true n.\n\n"
+            "A quantity the run count cannot support comes back as missing "
+            "with a reason — three runs have no p10, two runs per condition "
+            "have no split half — rather than as a point estimate."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    en.add_argument("ensemble_id", nargs="?", default=None)
+    en.add_argument("--limit", type=int, default=30, help="[list] how many")
+    en.add_argument("--json", action="store_true")
+    en.set_defaults(seer_fn=_cmd_ensemble)
 
     # ── place (Attractors P2 / D5: built in Nebul.AI, drawn in Seer) ─────
     pl = s.add_parser(

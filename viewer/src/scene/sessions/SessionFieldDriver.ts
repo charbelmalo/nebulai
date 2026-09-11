@@ -65,6 +65,15 @@ import { createBloomPipeline, type BloomPipeline } from "../post/bloom";
 import { IdPicker } from "../picking";
 import { asinhScale, suggestK, type AxisScale } from "./scales";
 import {
+  envelopeVertices,
+  envelopeSteps,
+  firstThinStep,
+  medianVertices,
+  MIN_RUNS_FOR_FAN,
+  type EnvelopeStep,
+  type RunPath,
+} from "./envelope";
+import {
   DEFAULT_SESSIONS_APPEARANCE,
   hexToRgb,
   orderedCategoryRgb,
@@ -291,6 +300,23 @@ export class SessionFieldDriver {
   private lastProjClock = 0;
   onProjection: ((s: ProjectionState) => void) | null = null;
 
+  // ── the fan (Attractors P3) ──────────────────────────────────────
+  /** The runs the envelope is computed over — the ensemble's members that
+   *  are actually LOADED, nothing else. null draws no envelope at all.
+   *
+   *  Membership is pushed in rather than derived from the analyses, because
+   *  an ensemble is a claim about which runs were the same protocol, and only
+   *  the ensemble document knows that. The field must never invent it from
+   *  whatever happens to be on screen. */
+  private ensembleIds: string[] | null = null;
+  private envelope: THREE.LineSegments | null = null;
+  private envelopeMat: THREE.LineBasicNodeMaterial | null = null;
+  private envMedian: THREE.LineSegments | null = null;
+  private envMedianMat: THREE.LineBasicNodeMaterial | null = null;
+  /** What the last build actually drew, for `describe()` and the chrome. */
+  private envSteps: EnvelopeStep[] = [];
+  private envRuns = 0;
+
   // ── camera / interaction ───────────────────────────────────────────────
   private az = -0.62;
   private el = 0.42;
@@ -405,6 +431,29 @@ export class SessionFieldDriver {
     };
   }
 
+  /** Which runs the fan is drawn over. Pass the ensemble's `run_ids`; the
+   *  driver keeps only the ones it has geometry for and reports how many that
+   *  was, so a fan over three of fifty runs can never look like a fan over
+   *  fifty. null clears the envelope. */
+  setEnsembleGroup(ids: string[] | null): void {
+    this.ensembleIds = ids && ids.length ? [...ids] : null;
+    this.buildEnvelope();
+    this.cameraDirty = true;
+  }
+
+  /** What the envelope currently shows: how many of the ensemble's runs were
+   *  found in the field, the per-step summary, and the first step the band had
+   *  to stop at. `runs < MIN_RUNS_FOR_FAN` means nothing is drawn — the caller
+   *  is expected to SAY that rather than leave an empty box. */
+  envelopeState(): { runs: number; steps: EnvelopeStep[]; thinFrom: number | null; drawn: boolean } {
+    return {
+      runs: this.envRuns,
+      steps: this.envSteps,
+      thinFrom: firstThinStep(this.envSteps),
+      drawn: this.envSteps.length > 0 && this.envRuns >= MIN_RUNS_FOR_FAN,
+    };
+  }
+
   /** Apply a full appearance config. Most knobs are uniforms or a cheap CPU
    *  pass and update in place; only an axis-mode change reshapes the field, so
    *  only that path rebuilds the geometry. */
@@ -422,6 +471,10 @@ export class SessionFieldDriver {
       prev.axisNewContext !== cfg.axisNewContext;
     if (axisChanged) this.rebuild();
     else this.cameraDirty = true;
+    // cheap: re-reads the live positions and rewrites two line buffers. The
+    // envelope has to follow every knob that moves a mote, and `showEnvelope`
+    // is the only one that turns it off.
+    if (!axisChanged) this.buildEnvelope();
     if (prev.projection !== cfg.projection) this.startProjectionFade();
   }
 
@@ -516,6 +569,12 @@ export class SessionFieldDriver {
       this.trailEndAttr.needsUpdate = true;
     }
     this.uGrowth.value = 1 - t;
+    // The envelope is computed FROM the positions just written, so it tracks
+    // the persona cross-fade for free and is never a band around where the
+    // motes used to be. It is also why it is rebuilt per frame during a fade:
+    // a quantile of the mid-fade positions is the honest picture of a mid-fade
+    // field, and a cached one would be a picture of neither endpoint.
+    this.buildEnvelope();
   }
 
   /** Persona-space positions for every node, or a zero-filled buffer when no
@@ -1255,6 +1314,111 @@ export class SessionFieldDriver {
     this.scene.add(this.frame3);
   }
 
+  // ── the fan ─────────────────────────────────────────────────────
+
+  /** Per-step p10/p90 boxes plus the median path, over the ensemble's runs.
+   *
+   *  Reads the LIVE positions out of `posAttr` rather than `nd.pos` or
+   *  `posUsage`: those are the usage-space geometry, and during (or after) a
+   *  persona cross-fade the motes are somewhere else. A band around the wrong
+   *  coordinates is worse than no band.
+   *
+   *  "Step" is the ordinal position of a turn within its own run, not the turn
+   *  id and not a time — runs number their turns however their adapter did, and
+   *  step 3 of one run has to line up with step 3 of another for the quantile to
+   *  mean anything.
+   *
+   *  Draws nothing at all (and says so through `envelopeState`) when fewer than
+   *  MIN_RUNS_FOR_FAN of the ensemble's runs are loaded. */
+  private buildEnvelope(): void {
+    this.envSteps = [];
+    this.envRuns = 0;
+    const off = () => {
+      if (this.envelope) this.envelope.visible = false;
+      if (this.envMedian) this.envMedian.visible = false;
+    };
+    if (!this.ensembleIds || !this.cfg.showEnvelope || this.nodes.length === 0) return off();
+
+    const wanted = new Set(this.ensembleIds);
+    const byRun = new Map<string, number[]>();
+    for (let i = 0; i < this.nodes.length; i++) {
+      const nd = this.nodes[i]!;
+      if (!wanted.has(nd.sessionId)) continue;
+      const list = byRun.get(nd.sessionId);
+      if (list) list.push(i);
+      else byRun.set(nd.sessionId, [i]);
+    }
+    this.envRuns = byRun.size;
+    if (byRun.size < MIN_RUNS_FOR_FAN) return off();
+
+    const live = this.posAttr?.array as Float32Array | undefined;
+    const runs: RunPath[] = [];
+    for (const idx of byRun.values()) {
+      // a run's own order, by turn index — the field's node order interleaves
+      // sessions, so it is not the order within any one of them
+      idx.sort((a, b) => this.nodes[a]!.index - this.nodes[b]!.index);
+      const path: RunPath = idx.map((i) => {
+        if (live && live.length >= (i + 1) * 3) {
+          return [live[i * 3]!, live[i * 3 + 1]!, live[i * 3 + 2]!];
+        }
+        const p = this.nodes[i]!.pos;
+        return [p.x, p.y, p.z];
+      });
+      runs.push(path);
+    }
+
+    const steps = envelopeSteps(runs);
+    this.envSteps = steps;
+    const boxes = envelopeVertices(steps);
+    const median = medianVertices(steps);
+
+    this.envelope = this.writeLines(this.envelope, "envelopeMat", boxes, 0x4d8dff, 0.32);
+    this.envMedian = this.writeLines(this.envMedian, "envMedianMat", median, 0x4d8dff, 0.85);
+  }
+
+  /** Write a flat vertex array into a reusable LineSegments, growing its buffer
+   *  only when it has to. Called every frame of a cross-fade, so it must not
+   *  allocate a geometry per call. */
+  private writeLines(
+    obj: THREE.LineSegments | null,
+    matKey: "envelopeMat" | "envMedianMat",
+    verts: Float32Array,
+    color: number,
+    opacity: number,
+  ): THREE.LineSegments | null {
+    if (verts.length === 0) {
+      if (obj) obj.visible = false;
+      return obj;
+    }
+    if (!obj) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(verts.slice(), 3));
+      const mat = new THREE.LineBasicNodeMaterial({
+        color: new THREE.Color(color),
+        transparent: true,
+        opacity,
+        depthWrite: false,
+      });
+      this[matKey] = mat;
+      const line = new THREE.LineSegments(geo, mat);
+      line.frustumCulled = false;
+      line.renderOrder = 2;
+      this.scene.add(line);
+      return line;
+    }
+    const attr = obj.geometry.getAttribute("position") as THREE.BufferAttribute;
+    if (attr.array.length < verts.length) {
+      obj.geometry.setAttribute("position", new THREE.Float32BufferAttribute(verts.slice(), 3));
+    } else {
+      (attr.array as Float32Array).set(verts);
+      attr.needsUpdate = true;
+    }
+    obj.geometry.setDrawRange(0, verts.length / 3);
+    obj.geometry.computeBoundingSphere();
+    obj.visible = true;
+    return obj;
+  }
+
   /** Drop-lines for the ONE turn under the cursor / pinned. Three rails to the
    *  floor and two walls, so a single point's coordinates are readable without
    *  drawing 1600 of them. */
@@ -1757,6 +1921,12 @@ export class SessionFieldDriver {
     this.trailPersona = { starts: new Float32Array(0), ends: new Float32Array(0) };
     this.trailHasPersona = new Uint8Array(0);
     this.trailSeq = new Float32Array(0);
+    // the envelope is a summary OF the nodes; with the nodes gone it would be
+    // a band around last dataset's positions
+    this.envSteps = [];
+    this.envRuns = 0;
+    if (this.envelope) this.envelope.visible = false;
+    if (this.envMedian) this.envMedian.visible = false;
     if (this.probe) this.probe.visible = false;
     this.tooltipEl && (this.tooltipEl.style.display = "none");
   }
@@ -1789,6 +1959,20 @@ export class SessionFieldDriver {
       this.sweep = null;
       this.sweepMat = null;
     }
+    if (this.envelope) {
+      this.scene.remove(this.envelope);
+      this.envelope.geometry.dispose();
+      this.envelope = null;
+    }
+    this.envelopeMat?.dispose();
+    this.envelopeMat = null;
+    if (this.envMedian) {
+      this.scene.remove(this.envMedian);
+      this.envMedian.geometry.dispose();
+      this.envMedian = null;
+    }
+    this.envMedianMat?.dispose();
+    this.envMedianMat = null;
     this.bloomPipe?.dispose();
     this.bloomPipe = null;
     for (const el of this.labels) el.remove();

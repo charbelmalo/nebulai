@@ -817,6 +817,22 @@ function SessionsAppearanceControls(props: { a: SessionsAppearance }) {
           nothing above or below is reflowed. */}
       <SessionsProjectionControls a={a} set={set} />
 
+      {/* ── Attractors P3: the fan ──────────────────────────────────────
+          Also a clearly delimited block, and also only `appearance.sessions`.
+          WHICH ensemble is on screen is a data selection and lives beside the
+          readout it labels, on the Sessions page; whether its spread is drawn
+          is a look, so it lives here with the other field knobs. */}
+      <SettingsSection
+        title="Ensemble — the fan"
+        hint="With an ensemble selected on the Sessions page, the field can draw where its runs actually were at each step: a p10–p90 box per step around the median path. Boxes, not a tube — a smooth surface between steps would interpolate a quantile that was never measured. A step reached by fewer than two runs gets no box at all, and nothing is drawn until at least three of the ensemble's runs are loaded."
+      >
+        <ToggleRow
+          label="Draw the p10–p90 envelope"
+          checked={a.showEnvelope}
+          onChange={(v) => set("showEnvelope", v)}
+        />
+      </SettingsSection>
+
       <SettingsSection
         title="Colours — category hues"
         hint="Drive the legend, the inspector and the field from one place, so a chip and a node can never disagree."
