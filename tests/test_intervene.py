@@ -488,14 +488,23 @@ _EXPORT_CALLS = (
     r"upload_folder\s*\(",
 )
 
-#: every module that can reach a hook. If a new runner is added it belongs
-#: here — the point of the list is that it is short enough to keep honest.
+#: every module that can reach a hook, plus the one module that holds adapted
+#: weights. If a new runner is added it belongs here — the point of the list is
+#: that it is short enough to keep honest.
+#:
+#: `organisms/emergent_misalignment.py` is the odd one out and the most
+#: important: every other file here measures a model it left alone, so for them
+#: D6 forbids an export that was never tempting. That one trains a rank-1 LoRA,
+#: so an adapted checkpoint genuinely exists in its process and writing it out
+#: would be one line. The rule is worth exactly as much as it is enforced on the
+#: file that could break it.
 _INTERVENTION_PATHS = (
     "backend/interp/intervene.py",
     "backend/interp/hooks.py",
     "backend/interp/gpt2_numpy.py",
     "backend/interp/live_server.py",
     "backend/directions.py",
+    "organisms/emergent_misalignment.py",
 )
 
 

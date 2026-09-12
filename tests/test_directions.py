@@ -155,9 +155,44 @@ def test_pca_component_k_out_of_range_is_refused():
         pca_component(np.eye(3), 5, "W_E.raw", id="x", label="x", protocol="p")
 
 
-def test_from_lora_rank1_is_an_explicit_phase_5_refusal():
-    with pytest.raises(NotImplementedError, match="phase 5"):
-        from_lora_rank1("/nowhere/adapter.safetensors")
+def test_from_lora_rank1_returns_the_output_side_factor():
+    """Phase 5 landed it. `b` is the direction; `a` is a gate in another space."""
+    b = np.array([0.0, 3.0, 4.0])
+    a = np.array([1.0, 1.0, 1.0, 1.0])  # deliberately a different width
+    d = from_lora_rank1(
+        b, a, "mlp_out.L7", id="em-L7", label="rank-1 update", protocol="p", scaling=16.0
+    )
+    assert d.method == "lora_rank1"
+    assert np.allclose(d.vector, [0.0, 0.6, 0.8])
+    lora = d.source["lora"]
+    assert lora["rank"] == 1 and lora["side"] == "output"
+    assert lora["b_dim"] == 3 and lora["a_dim"] == 4
+    assert lora["b_norm"] == pytest.approx(5.0)
+    assert lora["a_norm"] == pytest.approx(2.0)
+    # ||scaling * b a^T||_F = scaling * ||b|| * ||a||, exactly
+    assert lora["delta_w_fro"] == pytest.approx(16.0 * 5.0 * 2.0)
+
+
+def test_from_lora_rank1_refuses_an_adapter_that_has_not_moved():
+    """B is initialised at zero; an unmoved adapter has no direction to round."""
+    with pytest.raises(DirectionError, match="has not moved"):
+        from_lora_rank1(
+            np.zeros(4), np.ones(4), "mlp_out.L0", id="x", label="x", protocol="p"
+        )
+
+
+def test_from_lora_rank1_takes_no_path_because_of_d6():
+    """D6 means no run here writes an adapter, so there is no file to read.
+
+    Pinned as a signature, not as prose: a later convenience overload that let
+    this constructor load a checkpoint would also be the first code path in the
+    project that implied one exists.
+    """
+    import inspect
+
+    names = list(inspect.signature(from_lora_rank1).parameters)
+    assert "path" not in names
+    assert names[:3] == ["b", "a", "space"]
 
 
 def test_from_two_selections_uses_row_indices_by_default():
