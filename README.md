@@ -308,19 +308,18 @@ uv run nebulai metrics gpt2 gpt2__neurons__h.8.mlp.c_proj   # picks up the resul
 These re-run UMAP, so they are a separate command rather than part of a build.
 Results land in `validation.json` next to `nebulai.json`.
 
-**What this currently shows**, across all twenty-one **built and validated**
+**What this currently shows**, across all twenty-two **built and validated**
 maps. Every number here came from a run — a planned map earns a row once it is
 built and has cleared its null floor, not before. The four endpoint-era models
 ([above](#reading-a-model-you-never-download)) now have rows; three of them
 have a second row for the `W_U` twin of their token map, built over the same
 curated vocabulary, and one a third for an `api_text_embedding` contrast drawn
 over that vocabulary too. A `down_proj` depth series on the same model —
-identical parameters at five depths — adds four more rows, with one still
-validating.
+identical parameters at five depths — adds five more rows.
 
-**Seven maps in `out/` carry no `validation.json`, and the reason splits in
-three.** Six *cannot* be validated: three `api_text_embedding` contrast maps
-(`Xenova__claude-tokenizer__api-sentence-transformers__all-MiniLM-L6-v2`,
+**Six maps in `out/` carry no `validation.json`, and not one of them ever
+will.** All six *cannot* be validated: three `api_text_embedding` contrast
+maps (`Xenova__claude-tokenizer__api-sentence-transformers__all-MiniLM-L6-v2`,
 `gpt2__api-mxbai-embed-large`,
 `mistralai__Mistral-Nemo-Instruct-2407__api-mxbai-embed-large`) and the three
 `probe__*` clouds. Their vectors came from a hosted embedding service over the
@@ -340,10 +339,9 @@ better than the model's own weights do, it is what a 384-dimensional space
 produced by a model trained to make sentences cluster scores when you project it
 to two dimensions.
 
-The remaining one —
-`mistralai__Mistral-Nemo-Instruct-2407__neurons__model.layers.36.mlp.down_proj`
-— *can* be validated and simply has not been yet. It is a build in flight, not
-a refusal, and it earns a row when it clears a floor and not before:
+Nothing else is outstanding: every map in `out/` that *can* be validated now
+has been, so the rows below are the whole validated corpus rather than a
+snapshot of one in flight:
 
 | map | points | silhouette | null floor | margin | trust | seed ARI |
 |---|---|---|---|---|---|---|
@@ -368,6 +366,7 @@ a refusal, and it earns a row when it clears a floor and not before:
 | Mistral-Nemo · neurons **L12** | 4096 | 0.4053 | 0.2945 | +0.111 | 0.61 | 0.57 |
 | Mistral-Nemo · neurons **L20** | 4096 | 0.3786 | 0.2123 | +0.166 | 0.59 | 0.62 |
 | Mistral-Nemo · neurons **L28** | 4096 | 0.2466 | 0.1930 | +0.054 | 0.60 | 0.24 |
+| Mistral-Nemo · neurons **L36** | 4096 | 0.2971 | 0.2028 | +0.094 | 0.57 | 0.32 |
 
 ⚠ = the null resolved a cluster count far from the map's own (16 vs 69; 277 vs
 130). Silhouette rises as a partition coarsens, so those two rows compare
