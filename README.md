@@ -516,3 +516,15 @@ uses: [`docs/OBSERVABILITY-SURFACE.md`](docs/OBSERVABILITY-SURFACE.md).
   other two. Full tables, the per-family figures and the validation of the three
   new `W_U` maps: [`recommended-plan.md`](recommended-plan.md)
   § "Track 2b — result".
+- Depth, on one model, with every other knob nailed down — **measured, not
+  proposed.** Five `down_proj` maps on Mistral-Nemo (layers 4, 12, 20, 28, 36;
+  the same 4096 of 14336 neurons, same clusterer, same seed, no namer) say that
+  a neuron map of this model resolves 41–56 clusters and discards 62–71% of its
+  units as noise *wherever* you cut the stack, and that all five clear their
+  null floor (+0.054 to +0.181). What moves with depth is the reproducibility,
+  not the separation: seed ARI runs 0.62 at layer 20 down to 0.24 at layer 28,
+  the lowest of any validated map here. There is deliberately **no** cross-layer
+  neighbourhood-overlap column — neuron *i* of layer 12 is not neuron *i* of
+  layer 20, so that number would be an index coincidence, not a finding. Full
+  table and the absent-column argument: [`recommended-plan.md`](recommended-plan.md)
+  § "Track 2c — result".

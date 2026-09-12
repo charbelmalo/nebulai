@@ -231,6 +231,30 @@ The last row is not a new artifact: `google__gemma-4-26b-a4b-it` is the model's 
 
 **What none of this shows.** These are geometric agreement scores between two weight matrices. They say nothing about what either matrix *does* to the model's behaviour, they are not a ranking, and a model with lower overlap is not worse at anything. The one claim they support is the qualifier this track was opened to settle: **"the model's token geometry" is not one thing in an untied model, and a finding read off a W_E map has to say which of the two spaces it came from.**
 
+## Track 2c — result
+
+Measured 2026-09-12. Five `down_proj` maps on `mistralai/Mistral-Nemo-Instruct-2407` (dense, 40 layers), at layers 4, 12, 20, 28, 36. **Every build parameter is identical across the five** — the first 4096 of 14336 neurons, uncentered, HDBSCAN `leaf`/15/5, UMAP seed 42, `--labels none` so no namer is in the loop — so a difference between two rows is attributable to depth and to nothing else. That is the whole point of building a series rather than picking a layer.
+
+| layer | neurons | clusters | noise | silhouette | null floor | margin | trust | seed ARI |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 4 | 4096 | 41 | 0.6958 | 0.3816 | 0.2006 | +0.1810 | 0.6332 | 0.5796 |
+| 12 | 4096 | 43 | 0.7073 | 0.4053 | 0.2945 | +0.1108 | 0.6087 | 0.5687 |
+| 20 | 4096 | 43 | 0.6377 | 0.3786 | 0.2123 | +0.1663 | 0.5891 | 0.6239 |
+| 28 | 4096 | 56 | 0.6250 | 0.2466 | 0.1930 | +0.0536 | 0.5967 | 0.2411 |
+| 36 | 4096 | 53 | 0.6228 | 0.2971 | 0.2028 | +0.0943 | 0.5706 | 0.3231 |
+
+### What it says
+
+**The series is monotone in nothing.** Cluster count runs 41 → 43 → 43 → 56 → 53 across layers 4 → 12 → 20 → 28 → 36, peaking at layer 28 (56) and bottoming at layer 4 (41); noise fraction runs 0.70 → 0.71 → 0.64 → 0.62 → 0.62. What the series does establish is a **range**: at fixed parameters, a `down_proj` map of this model resolves 41–56 clusters over 4096 neurons and discards 62%–71% of them as noise wherever you cut the stack.
+
+**Every layer clears its null floor.** Margins run +0.0536 to +0.1810. Put that beside the project's other two raw-neuron maps, which clear by +0.0564 (gpt2__neurons__h.8.mlp.c_proj), +0.0993 (HuggingFaceTB__SmolLM2-135M__neurons__model.layers.21.mlp.down_proj): 3 of the 5 validated depths clear by more than both of them and the rest land inside their range, so the three neuron maps do not separate into better and worse by unit type. And against the 9 validated token maps in `out/`, which clear by +0.0087 to +0.2935, this series sits inside that range rather than below it — so "tokens carry structure, raw neurons do not" is not what these numbers say.
+
+What *is* consistently weaker here is the projection, not the separation. Trustworthiness runs 0.5706 to 0.6332; of the 17 other validated maps in `out/`, **17 score above this series' best**, so these are the least faithful 2-D layouts in the repo. Seed ARI runs 0.2411 to 0.6239, and 0 of the 17 others fall below this series' worst. **The honest reading: the 2-D layout is the least faithful in the repo at every depth, and seed reproducibility is not a property of the unit type but of the depth: layer 28 is less reproducible than every other validated map in `out/`, while the series' best sits inside the pack.** Read a territory on these maps as a claim about cluster membership, not about what sits next to what.
+
+**What is deliberately not measured here, and why.** There is no cross-layer neighbourhood-overlap column of the kind Track 2b has for W_E vs W_U. Neuron *i* of layer 12 and neuron *i* of layer 20 are not the same unit — nothing identifies them with each other — so a kNN overlap between two layers' clouds would be comparing arbitrary index alignments and reporting the result as a finding. Track 2b could take that measurement because a token id means the same thing in W_E and W_U. Here it does not, and the column is absent rather than filled with a number that looks like one.
+
+**And the series is 4096 of 14336 neurons per layer** (the first contiguous slice, as every neuron map in this repo is), so it speaks about 29% of each layer's MLP. That is a curation, not a sample: it is the same 4096 indices at every depth, which is what makes the five rows comparable to each other, and what stops any of them from being a statement about the layer as a whole.
+
 ## Track 3 — The instrument
 
 The namer is the pipeline's quality bottleneck. It is now also the only place
