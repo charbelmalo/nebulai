@@ -560,6 +560,109 @@ def generate(
     }
 
 
+def axis_block(
+    model: ForwardPass,
+    iv: Intervention,
+    base_resid: np.ndarray,
+    int_resid: np.ndarray,
+) -> dict[str, Any]:
+    """Where this prompt sits ON the intervention's own direction, before and after.
+
+    This is the one measurement that lets a viewer slide a placed point along a
+    phase-1 axis instead of only reporting that the logits moved. It is a scalar
+    pair: the last token's residual stream at the intervention's hook layer,
+    projected onto the unit direction, baseline and intervened — plus the norm
+    of the orthogonal remainder, because a point that moved 2 units along the
+    axis while its perpendicular component moved 40 did not travel along the
+    axis in any useful sense and the reader has to be able to see that.
+
+    **It refuses far more often than it answers, and says why.** Three of the
+    four verbs have no direction at all (`clamp` moves an SAE feature, `cap`
+    clips a box), and the shipped GPT-2 sweep is one of them. A `proj` computed
+    for those would be a projection onto whatever direction happened to be in
+    scope, which is worse than no number. So the return value is either a
+    measurement or `{"refused": <sentence>}`, and the sentence is the thing the
+    UI puts on screen.
+
+    **The layer is the hook layer, not the space's.** `ablate` fires at every
+    layer by construction, so there is no single place to observe it; the
+    projection is then taken at the layer the DIRECTION's own space names, and
+    `observed_where` says so in words. `Trace.resid[L]` is the stream *entering*
+    block L, so hook layer L is read at `resid[L + 1]` — the same off-by-one
+    `hook_layer()` exists to write down once.
+    """
+    if iv.verb not in ("add", "ablate"):
+        return {
+            "refused": (
+                f"the {iv.verb} verb carries no direction, so there is no axis to "
+                f"project onto — a projection here would be onto some other "
+                f"direction that happened to be in scope"
+            )
+        }
+    if iv.vector is None or iv.space is None:
+        return {
+            "refused": (
+                f"{iv.verb} was built without a vector or a space, so nothing "
+                f"names the axis"
+            )
+        }
+    try:
+        layer = iv.layer if iv.layer is not None else hook_layer(iv.space, n_layer=model.n_layer)
+    except InterventionError as e:
+        return {"refused": str(e)}
+
+    d = np.asarray(iv.vector, dtype=np.float64)
+    n = float(np.linalg.norm(d))
+    if not np.isfinite(n) or n <= 0.0:
+        return {"refused": "the direction has zero norm, so it names no axis"}
+    d = d / n
+
+    k = int(layer) + 1  # resid[L] enters block L; hook L is observed at L+1
+    if k < 0 or k >= base_resid.shape[0]:
+        return {
+            "refused": (
+                f"hook layer {layer} has no recorded residual stream (the trace "
+                f"holds {base_resid.shape[0]} layers)"
+            )
+        }
+    xb = np.asarray(base_resid[k][-1], dtype=np.float64)
+    xi = np.asarray(int_resid[k][-1], dtype=np.float64)
+    if xb.shape != d.shape:
+        return {
+            "refused": (
+                f"the direction is {d.shape[0]}-dimensional and the residual "
+                f"stream at hook layer {layer} is {xb.shape[0]} — a projection "
+                f"across widths is not a projection"
+            )
+        }
+
+    pb, pi = float(xb @ d), float(xi @ d)
+    ob = float(np.linalg.norm(xb - pb * d))
+    oi = float(np.linalg.norm(xi - pi * d))
+    return {
+        "direction_id": iv.direction_id,
+        "space": iv.space,
+        "layer": int(layer),
+        "resid_index": k,
+        "observed_where": (
+            f"the last token's residual stream at hook layer {layer} "
+            + (
+                "(the layer this intervention fires at)"
+                if iv.layer is not None
+                else f"(the layer {iv.space} names; ablate itself fires at every layer)"
+            )
+        ),
+        "token": "last",
+        "proj_baseline": _round(pb, 4),
+        "proj_intervened": _round(pi, 4),
+        "proj_delta": _round(pi - pb, 4),
+        "orth_norm_baseline": _round(ob, 4),
+        "orth_norm_intervened": _round(oi, 4),
+        "orth_norm_delta": _round(oi - ob, 4),
+        "unit": "residual-stream units at this layer, on a unit direction",
+    }
+
+
 def run(
     model: ForwardPass,
     prompt: str,
@@ -572,9 +675,12 @@ def run(
     """Baseline and intervened, from one prompt, side by side.
 
     Returns both generations, both next-token distributions' top-8, the KL
-    between them in bits, and the residual-norm change the intervention
-    actually made — so a reader can see whether "nothing happened" means the
-    hook did nothing or means the model did not care.
+    between them in bits, the residual-norm change the intervention actually
+    made — so a reader can see whether "nothing happened" means the hook did
+    nothing or means the model did not care — and, for the two direction verbs,
+    an `axis` block giving the prompt's position ON that direction before and
+    after. For the other two verbs `axis` carries a refusal sentence instead:
+    see `axis_block`.
     """
     hooks = clamp_hooks(model, iv, sae) if iv.verb == "clamp" and sae is not None else iv.resid_hooks(model)
     base_tr = model.forward(prompt)
@@ -599,6 +705,7 @@ def run(
         "kl_bits": _round(kl_bits, 5),
         "resid_norm_baseline": _round(float(np.linalg.norm(base_tr.resid[-1][-1])), 4),
         "resid_norm_intervened": _round(float(np.linalg.norm(int_tr.resid[-1][-1])), 4),
+        "axis": axis_block(model, iv, base_tr.resid, int_tr.resid),
         "baseline": {
             "top": top8(blp),
             **generate(model, prompt, max_tokens=max_tokens),
@@ -671,17 +778,39 @@ def sweep(
         for p in prompts:
             per.append(run(model, p, iv, max_tokens=max_tokens, sae=sae, targets=targets))
         kl = [r["kl_bits"] for r in per]
-        rows.append(
-            {
-                "alpha": _round(float(a)),
-                "is_identity": iv.is_identity,
-                "protocol": iv.protocol,
-                "kl_bits_mean": _round(float(np.mean(kl)), 5),
-                "kl_bits_max": _round(float(np.max(kl)), 5),
-                "identical_to_baseline": all(r["identical"] for r in per),
-                "runs": per,
+        row: dict[str, Any] = {
+            "alpha": _round(float(a)),
+            "is_identity": iv.is_identity,
+            "protocol": iv.protocol,
+            "kl_bits_mean": _round(float(np.mean(kl)), 5),
+            "kl_bits_max": _round(float(np.max(kl)), 5),
+            "identical_to_baseline": all(r["identical"] for r in per),
+            "runs": per,
+        }
+        # one scalar pair per alpha, averaged over the prompts, so a rail can
+        # draw travel along the axis without re-reading every run. When the verb
+        # has no direction this is the refusal sentence and nothing else: a
+        # mean of numbers that do not exist is the failure mode being avoided.
+        ax = [r["axis"] for r in per if isinstance(r.get("axis"), dict)]
+        refused = [x["refused"] for x in ax if "refused" in x]
+        if refused:
+            row["axis_refused"] = refused[0]
+        elif ax:
+            row["axis"] = {
+                "direction_id": ax[0]["direction_id"],
+                "space": ax[0]["space"],
+                "layer": ax[0]["layer"],
+                "n_prompts": len(ax),
+                "proj_mean_baseline": _round(float(np.mean([x["proj_baseline"] for x in ax])), 4),
+                "proj_mean_intervened": _round(
+                    float(np.mean([x["proj_intervened"] for x in ax])), 4
+                ),
+                "proj_mean_delta": _round(float(np.mean([x["proj_delta"] for x in ax])), 4),
+                "orth_mean_delta": _round(
+                    float(np.mean([x["orth_norm_delta"] for x in ax])), 4
+                ),
             }
-        )
+        rows.append(row)
     return {
         "kind": "intervention_sweep",
         "alphas": [_round(float(a)) for a in alphas],
@@ -696,6 +825,11 @@ def sweep(
             "to the baseline; `identical_to_baseline` asserts it per row",
             "d6": "no weights were modified or written; every verb is an "
             "inference-time hook",
+            "axis": "for `add` / `ablate`, each row carries the prompts' mean "
+            "position ON the direction at its hook layer, baseline and "
+            "intervened, beside the mean change in the orthogonal remainder. "
+            "`clamp` and `cap` carry `axis_refused` instead, because they name "
+            "no direction and a projection would be onto something else",
         },
     }
 

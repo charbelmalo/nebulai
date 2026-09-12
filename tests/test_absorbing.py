@@ -23,6 +23,8 @@ from nebulai.backend.absorbing import (
     analyse,
     choose_rule,
     read_study,
+    resume_from,
+    run_study,
     transition_counts,
     wilson,
     within_conversation_null,
@@ -337,6 +339,7 @@ def test_write_study_also_writes_the_index_the_viewer_discovers_studies_through(
                 "n_conversations": 7,
                 "verdict": "absorbing_above_null",
                 "stopped_early": True,
+                "resumed_from": None,
             }
         ]
     }
@@ -345,3 +348,240 @@ def test_write_study_also_writes_the_index_the_viewer_discovers_studies_through(
 
     shutil.rmtree(root / "s1")
     assert json.loads(write_index(root).read_text()) == {"studies": []}
+
+
+# ── the continuation ────────────────────────────────────────────────────────
+# A study that stopped early can be continued instead of recomputed, and the
+# whole value of that depends on the added conversations being the ones the
+# original run would have produced. These tests pin the two halves of that: the
+# seeds and openers really are a function of the conversation index, and every
+# way the continuation could silently become a different experiment is refused.
+
+
+class _Echo:
+    """A model stand-in that reports the seed it was handed.
+
+    It is not pretending to be a language model. The only property under test
+    is that the same conversation index, reached by two different routes
+    through the batch loop, is generated from the same seed — so the text it
+    returns IS the seed, and a violation happens on a stated arithmetic rule
+    rather than anything resembling a judgement.
+    """
+
+    model_id = "HuggingFaceTB/SmolLM2-135M-Instruct"
+    revision = "0" * 40
+    n_layer = 30
+    d = 576
+
+    def __init__(self):
+        self.seeds: list[int] = []
+
+    def apply_chat_template(self, msgs, add_generation_prompt=True):
+        return "\n".join(m["content"] for m in msgs)
+
+    def generate_batch(self, prompts, max_new, *, temperature, top_p, seed):
+        self.seeds.append(seed)
+
+        class G:
+            def __init__(self, text):
+                self.text = text
+                self.finish_reason = "length"
+
+        # "seed 1234!" for odd batches, no "!" for even ones: a deterministic
+        # function of the seed, so the flags are reproducible too
+        mark = "!" if (seed // 48) % 2 else ""
+        return [G(f"seed {seed}{mark}") for _ in prompts]
+
+
+_RUN = dict(rule_id="no_exclamation", n_turns=3, batch_size=4,
+            max_new_assistant=8, max_new_user=4, temperature=1.0, top_p=0.95,
+            seed_base=1234, null_n=20)
+
+
+def test_a_continuation_draws_the_seeds_the_long_run_would_have_drawn(tmp_path):
+    long = _Echo()
+    whole = run_study(long, n_conversations=12, **_RUN)
+
+    first = _Echo()
+    half = run_study(first, n_conversations=8, **_RUN)
+    write_study(half, tmp_path)
+    second = _Echo()
+    rest = run_study(
+        second,
+        n_conversations=12,
+        resume=resume_from(read_study(half.study_id, tmp_path)),
+        **_RUN,
+    )
+
+    # the continuation's own generate calls use the tail of the long run's seeds
+    assert second.seeds == long.seeds[len(first.seeds):]
+    # and the resulting flags are identical to the uninterrupted run's
+    assert rest.to_dict()["sequences"] == whole.to_dict()["sequences"]
+    assert rest.to_dict()["stats"]["counts"] == whole.to_dict()["stats"]["counts"]
+
+
+def test_the_continuation_does_not_recompute_what_it_resumes(tmp_path):
+    first = _Echo()
+    half = run_study(first, n_conversations=8, **_RUN)
+    write_study(half, tmp_path)
+    second = _Echo()
+    rest = run_study(second, n_conversations=12,
+                     resume=resume_from(read_study(half.study_id, tmp_path)),
+                     **_RUN)
+    # one batch of four, not three batches of four
+    assert len(rest.conversations) == 4
+    assert [c.index for c in rest.conversations] == [8, 9, 10, 11]
+    # but the artifact carries all twelve
+    doc = rest.to_dict()
+    assert len(doc["sequences"]) == 12
+    assert doc["stats"]["n_conversations"] == 12
+    assert doc["meta"]["config"]["n_conversations_run"] == 12
+    assert doc["meta"]["config"]["resumed_from"]["n"] == 8
+
+
+def test_the_continuation_keeps_the_first_runs_transcripts(tmp_path):
+    first = _Echo()
+    half = run_study(first, n_conversations=8, **_RUN)
+    write_study(half, tmp_path)
+    doc = run_study(_Echo(), n_conversations=12,
+                    resume=resume_from(read_study(half.study_id, tmp_path)),
+                    **_RUN).to_dict()
+    idx = [t["index"] for t in doc["transcripts"]]
+    # the earlier indices are still auditable, and the new ones were added
+    assert idx[:8] == list(range(8))
+    assert 8 in idx
+
+
+def test_the_elapsed_time_is_both_halves_and_says_so(tmp_path):
+    first = _Echo()
+    half = run_study(first, n_conversations=8, **_RUN)
+    write_study(half, tmp_path)
+    prior = resume_from(read_study(half.study_id, tmp_path))
+    doc = run_study(_Echo(), n_conversations=12, resume=prior, **_RUN).to_dict()
+    assert doc["meta"]["elapsed_s"] >= prior.elapsed_s
+    assert doc["meta"]["config"]["resumed_from"]["elapsed_s"] == round(
+        prior.elapsed_s, 1
+    )
+
+
+def test_resuming_off_a_batch_boundary_is_refused(tmp_path):
+    # 10 conversations at batch_size 4 means the last batch held two, so the
+    # next batch would start at 10 where the long run would have started it at
+    # 8 — every seed after that point differs
+    first = _Echo()
+    half = run_study(first, n_conversations=10, **_RUN)
+    write_study(half, tmp_path)
+    prior = resume_from(read_study(half.study_id, tmp_path))
+    assert prior.start_index == 10
+    with pytest.raises(AbsorbingError, match="shift every later batch boundary"):
+        run_study(_Echo(), n_conversations=16, resume=prior, **_RUN)
+
+
+def test_resuming_with_a_changed_generation_parameter_is_refused(tmp_path):
+    first = _Echo()
+    half = run_study(first, n_conversations=8, **_RUN)
+    write_study(half, tmp_path)
+    prior = resume_from(read_study(half.study_id, tmp_path))
+    for key, bad in [("temperature", 0.7), ("top_p", 0.5), ("seed_base", 7),
+                     ("max_new_assistant", 16), ("max_new_user", 2),
+                     ("n_turns", 4)]:
+        with pytest.raises(AbsorbingError, match=key):
+            run_study(_Echo(), n_conversations=12, resume=prior,
+                      **{**_RUN, key: bad})
+
+
+def test_resuming_onto_a_different_rule_or_model_is_refused(tmp_path):
+    first = _Echo()
+    half = run_study(first, n_conversations=8, **_RUN)
+    write_study(half, tmp_path)
+    prior = resume_from(read_study(half.study_id, tmp_path))
+    with pytest.raises(AbsorbingError, match="different experiments"):
+        run_study(_Echo(), n_conversations=12, resume=prior,
+                  **{**_RUN, "rule_id": "no_questions"})
+
+    class Other(_Echo):
+        model_id = "HuggingFaceTB/SmolLM2-360M-Instruct"
+
+    with pytest.raises(AbsorbingError, match="stored study ran"):
+        run_study(Other(), n_conversations=12, resume=prior, **_RUN)
+
+    class Moved(_Echo):
+        revision = "1" * 40
+
+    with pytest.raises(AbsorbingError, match="across weights is not a resume"):
+        run_study(Moved(), n_conversations=12, resume=prior, **_RUN)
+
+
+def test_a_continuation_that_adds_nothing_is_refused(tmp_path):
+    first = _Echo()
+    half = run_study(first, n_conversations=8, **_RUN)
+    write_study(half, tmp_path)
+    prior = resume_from(read_study(half.study_id, tmp_path))
+    with pytest.raises(AbsorbingError, match="adds nothing"):
+        run_study(_Echo(), n_conversations=8, resume=prior, **_RUN)
+
+
+def test_a_stored_study_whose_n_and_sequences_disagree_is_refused(tmp_path):
+    first = _Echo()
+    half = run_study(first, n_conversations=8, **_RUN)
+    write_study(half, tmp_path)
+    doc = read_study(half.study_id, tmp_path)
+    doc["sequences"] = doc["sequences"][:-1]
+    with pytest.raises(AbsorbingError, match="carries 7 violation sequences"):
+        run_study(_Echo(), n_conversations=12, resume=resume_from(doc), **_RUN)
+
+
+def test_resume_from_refuses_a_document_that_is_not_a_study():
+    with pytest.raises(AbsorbingError, match="not an absorbing study"):
+        resume_from({"hello": 1})
+
+
+def test_the_index_is_rewritten_by_the_continuation_not_left_stale(tmp_path):
+    import json
+
+    first = _Echo()
+    half = run_study(first, n_conversations=8, **_RUN)
+    write_study(half, tmp_path)
+    idx = json.loads((tmp_path / "index.json").read_text())["studies"]
+    assert [r["n_conversations"] for r in idx] == [8]
+
+    rest = run_study(_Echo(), n_conversations=12,
+                     resume=resume_from(read_study(half.study_id, tmp_path)),
+                     **_RUN)
+    write_study(rest, tmp_path)
+    idx = json.loads((tmp_path / "index.json").read_text())["studies"]
+    assert len(idx) == 1
+    assert idx[0]["n_conversations"] == 12
+    assert idx[0]["resumed_from"] == 8
+    assert idx[0]["verdict"] == rest.stats["verdict"]
+
+
+def test_the_analysis_is_over_both_halves_not_two_analyses_added_up(tmp_path):
+    first = _Echo()
+    half = run_study(first, n_conversations=8, **_RUN)
+    write_study(half, tmp_path)
+    rest = run_study(_Echo(), n_conversations=12,
+                     resume=resume_from(read_study(half.study_id, tmp_path)),
+                     **_RUN)
+    seqs = rest.to_dict()["sequences"]
+    assert rest.stats["counts"] == transition_counts(seqs)
+    assert rest.stats["n_turns"] == sum(len(x) for x in seqs)
+
+
+
+def test_stopped_early_is_about_n_not_about_the_clock():
+    """A run that reached its full N is not "stopped early", whatever the clock says.
+
+    The flag used to compare elapsed against the deadline, which mislabels the
+    run whose final batch is the one that crosses it — and `write_index`
+    republishes the flag, so a wrong label would travel to the index and be read
+    by the viewer. `deadline_s=0` is the sharpest version of that case: every
+    batch overruns, yet a study asked for exactly one batch still finished.
+    """
+    done = run_study(_Echo(), n_conversations=4, deadline_s=0.0, **_RUN)
+    assert done.config["n_conversations_run"] == 4
+    assert done.config["stopped_early"] is False
+
+    cut = run_study(_Echo(), n_conversations=12, deadline_s=0.0, **_RUN)
+    assert cut.config["n_conversations_run"] == 4
+    assert cut.config["stopped_early"] is True

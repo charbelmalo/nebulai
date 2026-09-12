@@ -22,16 +22,32 @@ says whether the axis GENERALISES is `heldout_cohens_d`, and the two are
 printed side by side so neither can be read as the other.
 
 ────────────────────────────────────────────────────────────────────────────
-FOR THE MERGE: this is a duplicate §3.2 writer.
+WHERE THIS WRITES. Nowhere of its own. `backend/directions.py` is the single
+registry, and this module is one of its callers: `diff_of_means` builds the
+`Direction`, `projection_channels` makes it renderable, `write_directions` and
+`write_channels` put it on disk. What survives here is the part that is actually
+about eval-awareness — the matched-pair prompt construction, and two controls
+that `directions.contrast()` does not have:
 
-`backend/directions.py` is another agent's file and does not exist on this
-branch; the schema below was matched field-for-field against a `directions.json`
-that file produced (`out/gpt2/directions.json`: `meta` + `directions[]`, each
-with `source.kind/protocol/...` and the same `contrast` keys). When the two
-branches meet, this module's `fit_direction` / `_cohens_d` / `_overlap` /
-`_null` should collapse into that file's equivalents and only the prompt-set
-loading and the protocol string should survive here. Nothing in the viewer
-reads this module, so the collapse is a backend-only edit.
+* a **label-permutation** null (refit the direction on shuffled labels, 32 draws)
+  beside `contrast`'s random-unit-direction null. The random-direction null asks
+  "would any axis separate these two sets this well"; the permutation null asks
+  "would this *fitting procedure* separate two arbitrary halves of these 128
+  prompts this well", which is the question a fitted direction invites;
+* a held-out split over **unseen framings** beside `contrast`'s random-half
+  split. A random half shares framings with the fit, so it cannot catch a
+  direction that only learned the words "grader" and "benchmark".
+
+Both live under `source["eval_awareness"]`, never merged into `source["contrast"]`:
+two different held-out numbers under one key is the kind of collision that makes a
+file unreadable six months later.
+
+THE POINT CLOUD. These directions live in `resid.L<k>`, so the only points they
+may be projected onto (D2) are activations in `resid.L<k>` — not a token map,
+whose points are in a `W_E` space. The cloud used is the prompt set's own 128
+activations, and `channels.json`'s `point_source` says so verbatim. That is what
+makes the entry pass `directions.renderable()`; projecting it onto a token map
+would also produce numbers, and they would mean nothing.
 ────────────────────────────────────────────────────────────────────────────
 """
 
@@ -48,6 +64,21 @@ from typing import Any
 import numpy as np
 
 from ..prompts import load_prompt_set
+from ..spaces import resid
+from .channels import CHANNELS_FILENAME, Channel, write_channels
+from .directions import (
+    DEFAULT_NULL_N,
+    DIRECTIONS_FILENAME,
+    Direction,
+    DirectionError,
+    diff_of_means,
+    projection_channels,
+    read_directions,
+    renderable,
+    separation,
+    unit,
+    write_directions,
+)
 
 DEFAULT_PROMPT_SET = "eval_awareness.v1"
 NULL_N = 32
@@ -123,28 +154,33 @@ def fit_direction(acts: np.ndarray, label: np.ndarray) -> np.ndarray:
     Raises rather than returning a zero vector when a side is empty: a
     direction with no examples on one side is not a small effect, it is not a
     direction.
+
+    The means are taken in float64 because `directions.diff_of_means` takes them
+    in float64, and this function's result has to BE the vector that gets
+    written. Accumulating 64 rows of a 576-wide residual stream in float32
+    instead moved the unit vector by ~1e-5 per component — enough that the
+    statistics computed here would have described a slightly different direction
+    from the one on disk. `_entry_for` asserts the two agree; this is why it can.
     """
-    pos = acts[label == 1]
-    neg = acts[label == 0]
+    a = np.asarray(acts, dtype=np.float64)
+    pos = a[label == 1]
+    neg = a[label == 0]
     if len(pos) == 0 or len(neg) == 0:
         raise EvalAwarenessError("a condition has no prompts")
-    v = pos.mean(axis=0) - neg.mean(axis=0)
-    n = float(np.linalg.norm(v))
-    if n == 0.0:
-        raise EvalAwarenessError("the two conditions have identical means")
-    return (v / n).astype(np.float32)
+    try:
+        return unit(pos.mean(axis=0) - neg.mean(axis=0))
+    except DirectionError as exc:  # zero norm: the two means coincide
+        raise EvalAwarenessError(f"the two conditions have identical means ({exc})") from exc
 
 
 def _cohens_d(a: np.ndarray, b: np.ndarray) -> float:
-    """Pooled-SD standardised difference. NaN when it is undefined."""
-    if len(a) < 2 or len(b) < 2:
-        return float("nan")
-    va = float(np.var(a, ddof=1))
-    vb = float(np.var(b, ddof=1))
-    sd = float(np.sqrt(((len(a) - 1) * va + (len(b) - 1) * vb) / (len(a) + len(b) - 2)))
-    if sd == 0.0:
-        return float("nan")
-    return float((a.mean() - b.mean()) / sd)
+    """Pooled-SD standardised difference, from `directions.separation`.
+
+    One implementation of the statistic, so the number this module prints and
+    the number the axis rail prints cannot drift apart. NaN when undefined.
+    """
+    d = separation(a, b)["cohens_d"]
+    return float("nan") if d is None else float(d)
 
 
 def _overlap(a: np.ndarray, b: np.ndarray) -> float:
@@ -188,6 +224,35 @@ def _null(acts: np.ndarray, label: np.ndarray, n: int, seed: int) -> np.ndarray:
     return out
 
 
+def build_sweep(
+    model: Any,
+    *,
+    prompt_set_id: str = DEFAULT_PROMPT_SET,
+    layers: Sequence[int] | None = None,
+    batch_size: int = 16,
+    null_n: int = NULL_N,
+    null_seed: int = NULL_SEED,
+    progress: Any = None,
+) -> tuple[list[Direction], dict[int, np.ndarray]]:
+    """:func:`build_entries`, plus the activations each entry was fitted on.
+
+    The activations come back because `project_entries` needs them: a
+    `resid.L<k>` direction can only be projected onto points in `resid.L<k>`, and
+    recapturing them would be a second forward pass over the same 128 prompts.
+    """
+    entries = build_entries(
+        model,
+        prompt_set_id=prompt_set_id,
+        layers=layers,
+        batch_size=batch_size,
+        null_n=null_n,
+        null_seed=null_seed,
+        progress=progress,
+        _acts_out=(out := {}),
+    )
+    return entries, out
+
+
 def build_entries(
     model: Any,
     *,
@@ -197,7 +262,8 @@ def build_entries(
     null_n: int = NULL_N,
     null_seed: int = NULL_SEED,
     progress: Any = None,
-) -> list[dict[str, Any]]:
+    _acts_out: dict[int, np.ndarray] | None = None,
+) -> list[Direction]:
     """The whole recipe at every requested layer, one entry each.
 
     A SWEEP rather than a layer, and every layer of it is written. Picking the
@@ -220,6 +286,8 @@ def build_entries(
         if progress is not None:
             progress(min(start + step, len(p.texts)), len(p.texts))
 
+    if _acts_out is not None:
+        _acts_out.update(acts_by_layer)
     return [
         _entry_for(model, p, doc, sha, acts_by_layer[L], L, prompt_set_id, null_n, null_seed)
         for L in want
@@ -235,7 +303,7 @@ def build_entry(
     null_n: int = NULL_N,
     null_seed: int = NULL_SEED,
     progress: Any = None,
-) -> dict[str, Any]:
+) -> Direction:
     """One layer of :func:`build_entries`."""
     return build_entries(
         model,
@@ -258,36 +326,42 @@ def _entry_for(
     prompt_set_id: str,
     null_n: int,
     null_seed: int,
-) -> dict[str, Any]:
+) -> Direction:
+    """One layer's `Direction`, built by `directions.diff_of_means`.
+
+    The vector, the `contrast` block and the space tag all come from the
+    registry's own constructor. What is added here is the `eval_awareness`
+    sub-block: the label-permutation null and the unseen-framing split, which
+    are the two controls this recipe needs and `contrast` does not provide.
+    """
+    pos = acts[p.label == 1].astype(np.float64)
+    neg = acts[p.label == 0].astype(np.float64)
     v = fit_direction(acts, p.label)
     d_in, ov_in = _effect(acts, p.label, v)
     null = _null(acts, p.label, null_n, null_seed)
 
-    # held-out: the LAST k frame pairs, never seen by the fit
+    # held out over FRAMINGS: the last k frame pairs, never seen by the fit
     k = max(int(p.heldout_frames), 0)
-    held: dict[str, Any] = {}
-    if k > 0 and k < p.n_frames:
+    if 0 < k < p.n_frames:
         test = p.frame >= (p.n_frames - k)
-        train = ~test
-        v_tr = fit_direction(acts[train], p.label[train])
+        v_tr = fit_direction(acts[~test], p.label[~test])
         d_out, ov_out = _effect(acts[test], p.label[test], v_tr)
-        held = {
-            "heldout_cohens_d": round(d_out, 6),
-            "heldout_overlap": round(ov_out, 6),
-            "heldout_n_pos": int((p.label[test] == 1).sum()),
-            "heldout_n_neg": int((p.label[test] == 0).sum()),
-            "heldout_frames": k,
+        frame_heldout: dict[str, Any] = {
+            "cohens_d": round(d_out, 6),
+            "overlap": round(ov_out, 6),
+            "n_pos": int((p.label[test] == 1).sum()),
+            "n_neg": int((p.label[test] == 0).sum()),
+            "n_frames": k,
         }
     else:
-        # no split is possible; say so rather than shipping a blank field that
-        # reads as a failed generalisation test
-        held = {
-            "heldout_cohens_d": None,
-            "heldout_overlap": None,
-            "heldout_n_pos": 0,
-            "heldout_n_neg": 0,
-            "heldout_frames": 0,
-            "heldout_missing": "the prompt set asks for no held-out frames",
+        # say "no split was possible"; a blank field reads as a failed test
+        frame_heldout = {
+            "cohens_d": None,
+            "overlap": None,
+            "n_pos": 0,
+            "n_neg": 0,
+            "n_frames": 0,
+            "missing": "the prompt set asks for no held-out frames",
         }
 
     n_pos = int((p.label == 1).sum())
@@ -299,82 +373,130 @@ def _entry_for(
         f"space resid.L{L}, token position -1. Matched pairs: the user message is "
         f"byte-identical across the two conditions and only the framing sentence in the "
         f"system message differs, so this is not a topic direction. It may still be a "
-        f"direction for the framing WORDS, which is what heldout_cohens_d over "
-        f"{held.get('heldout_frames', 0)} unseen frame pairs tests. Fitted on a small "
-        f"instruct model with no evaluation-awareness training, it measures how this "
-        f"model's residual stream separates these {n_pos + n_neg} strings and nothing more. "
-        f"This entry is one layer of a sweep; every layer tried is in this file, so the "
-        f"largest effect among them is the maximum of that many comparisons and its null "
-        f"is the per-layer null printed here, not a sweep-wide one."
+        f"direction for the framing WORDS, which is what eval_awareness.frame_heldout over "
+        f"{frame_heldout['n_frames']} unseen frame pairs tests — contrast.heldout_* is a "
+        f"PAIRED half that shares framings with the fit, so it cannot. Two nulls travel with "
+        f"this entry and they ask different questions: contrast.null_cohens_d_* is "
+        f"{DEFAULT_NULL_N} random unit directions scored on the same two sets, and "
+        f"eval_awareness.label_permutation is {null_n} refits of this whole procedure on "
+        f"shuffled labels. Fitted on a small instruct model with no evaluation-awareness "
+        f"training, it measures how this model's residual stream separates these "
+        f"{n_pos + n_neg} strings and nothing more. This entry is one layer of a sweep; "
+        f"every layer tried is in this file, so the largest effect among them is the maximum "
+        f"of that many comparisons and its null is the per-layer null printed here, not a "
+        f"sweep-wide one."
     )
-    return {
-        "id": f"{prompt_set_id.replace('_', '-').replace('.', '-')}-L{L}",
-        "label": "test-framed prompts − use-framed prompts",
-        "space": f"resid.L{L}",
-        "method": "diff_of_means",
-        "d": int(model.d),
-        "vector": [round(float(x), 6) for x in v],
-        "source": {
-            "kind": "computed",
-            "protocol": protocol,
-            "n_pos": n_pos,
-            "n_neg": n_neg,
+    d = diff_of_means(
+        pos,
+        neg,
+        str(resid(L)),
+        # the set is crossed: pos[i] and neg[i] are the same task under the two
+        # framings, so the registry's held-out split must keep the pairing. With
+        # independent halves this number came out NEGATIVE at 20 of 30 layers,
+        # and the negative was the split, not the direction — see `_heldout`.
+        paired=True,
+        id=f"{prompt_set_id.replace('_', '-').replace('.', '-')}-L{L}",
+        label="test-framed prompts − use-framed prompts",
+        protocol=protocol,
+        source={
             "prompt_set": prompt_set_id,
             "prompt_set_sha": sha[:12],
             "layer": L,
             "token_position": -1,
             "axis": doc.get("axis", ""),
-            "contrast": {
+            "eval_awareness": {
                 "cohens_d": round(d_in, 6),
                 "overlap": round(ov_in, 6),
+                "overlap_definition": (
+                    "fraction of projections on the wrong side of the midpoint of the "
+                    "two means — a misclassification rate, NOT contrast.overlap, which "
+                    "is the overlapping area of two histograms"
+                ),
                 "in_sample": True,
-                "n_pos": n_pos,
-                "n_neg": n_neg,
-                "null_n": int(null_n),
-                "null_seed": int(null_seed),
-                "null_cohens_d_mean": round(float(np.nanmean(np.abs(null))), 6),
-                "null_cohens_d_p95": round(float(np.nanpercentile(np.abs(null), 95)), 6),
-                **held,
+                "label_permutation": {
+                    "n": int(null_n),
+                    "seed": int(null_seed),
+                    "cohens_d_mean": round(float(np.nanmean(np.abs(null))), 6),
+                    "cohens_d_p95": round(float(np.nanpercentile(np.abs(null), 95)), 6),
+                },
+                "frame_heldout": frame_heldout,
             },
         },
-    }
+    )
+    # diff_of_means normalises mean(pos) - mean(neg); this module's own
+    # `fit_direction` must agree with it to the last bit, or the statistics
+    # above describe a different vector from the one being written.
+    if not np.allclose(d.vector, v, rtol=0.0, atol=1e-7):
+        raise EvalAwarenessError(
+            f"L{L}: the registry's vector and this module's differ — the "
+            f"statistics would not describe the vector on disk"
+        )
+    return d
 
 
-def write_entry(entry: dict[str, Any], path: Path, *, model: str, revision: str) -> Path:
-    """Merge one entry into a `directions.json`, replacing by id.
+def write_entry(entry: Direction, path: Path, *, model: str, revision: str) -> Path:
+    """Merge one `Direction` into a `directions.json` through the registry.
 
-    Replacing rather than appending: two entries with one id would let a reader
-    pick the stale vector, and a rerun of the same recipe is a correction, not
-    a second measurement.
+    The registry's `write_directions` replaces by id and keeps the rest, which
+    is what a rerun of the same recipe should do — a correction, not a second
+    measurement. The one thing added here is the refusal below: `write_directions`
+    merges only when the file already describes the same model, and *silently
+    starts a new list* when it does not. For this writer that would mean one
+    command quietly discarding another model's directions, so a mismatch raises.
     """
+    return write_entries([entry], path, model=model, revision=revision)
+
+
+def write_entries(
+    entries: Sequence[Direction],
+    path: Path,
+    *,
+    model: str,
+    revision: str,
+) -> Path:
+    """Every layer of a sweep, in one write through the registry."""
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    doc: dict[str, Any]
-    if path.exists():
-        doc = json.loads(path.read_text())
-        if doc.get("meta", {}).get("model") not in (None, model):
-            raise EvalAwarenessError(
-                f"{path} holds directions for {doc['meta']['model']}, not {model}"
-            )
-    else:
-        doc = {"meta": {}, "directions": []}
-    doc["meta"] = {
-        "model": model,
-        "revision": revision,
-        "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
-    kept = [d for d in doc.get("directions", []) if d.get("id") != entry["id"]]
-    kept.append(entry)
-    doc["directions"] = kept
-    path.write_text(json.dumps(doc, indent=1))
-    return path
+    prev = read_directions(path)
+    if prev is not None:
+        had = (prev.get("meta") or {}).get("model")
+        if had not in (None, model):
+            raise EvalAwarenessError(f"{path} holds directions for {had}, not {model}")
+    return write_directions(path, model=model, revision=revision, directions=list(entries))
+
+
+def project_entries(
+    entries: Sequence[Direction],
+    acts_by_layer: dict[int, np.ndarray],
+    *,
+    n_null: int = 32,
+    seed: int = NULL_SEED,
+) -> list[Channel]:
+    """Make each entry renderable against its OWN layer's activations.
+
+    A `resid.L<k>` direction may only be projected onto points in `resid.L<k>`
+    (D2), and the points that exist in that space here are the prompt set's own
+    activations — so those are the cloud. `projection_channels` fills in each
+    direction's `projection` and `null` blocks in place, which is what
+    `directions.renderable()` then looks for.
+    """
+    chans: list[Channel] = []
+    for d in entries:
+        L = int(d.source["layer"])
+        acts = acts_by_layer.get(L)
+        if acts is None:
+            raise EvalAwarenessError(f"no activations captured for layer {L}")
+        chans.extend(
+            projection_channels(d, acts.astype(np.float64), n_null=n_null, seed=seed)
+        )
+    return chans
 
 
 def main(argv: list[str] | None = None) -> int:
     """Standalone entry point.
 
-    Not a `nebulai` subcommand: `cli.py`'s `direction` group belongs to another
-    agent's branch and reflowing it here would collide at the merge. Run with
+    Not a `nebulai` subcommand: the `direction` group is `cli.py`'s and this
+    recipe needs a pinned instruct model and a layer sweep, neither of which
+    that group's flags describe. Run with
     `python -m nebulai.backend.eval_awareness --local-dir …`.
     """
     ap = argparse.ArgumentParser(description="fit the eval-awareness direction")
@@ -388,7 +510,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--prompt-set", default=DEFAULT_PROMPT_SET)
     ap.add_argument("--batch-size", type=int, default=16)
-    ap.add_argument("--out", required=True, help="directions.json to write or merge into")
+    ap.add_argument(
+        "--out",
+        required=True,
+        help="directory to write directions.json and channels.json into",
+    )
     args = ap.parse_args(argv)
 
     from .interp.llama_numpy import LlamaNumpy
@@ -399,32 +525,67 @@ def main(argv: list[str] | None = None) -> int:
         if args.layers
         else list(range(model.n_layer))
     )
-    entries = build_entries(
+    entries, acts = build_sweep(
         model,
         prompt_set_id=args.prompt_set,
         layers=layers,
         batch_size=args.batch_size,
         progress=lambda i, n: print(f"  {i}/{n}", end="\r", flush=True),
     )
-    path = Path(args.out)
-    for entry in entries:
-        path = write_entry(
-            entry,
-            path,
-            model=model.model_id,
-            revision=getattr(model, "revision", "unknown"),
-        )
-    print(f"\nwrote {path}")
-    print(f"{'layer':>6} {'d':>9} {'overlap':>8} {'null p95':>9} {'held d':>8} {'clears':>7}")
-    for entry in entries:
-        c = entry["source"]["contrast"]
-        hd = c["heldout_cohens_d"]
-        clears = abs(c["cohens_d"]) > c["null_cohens_d_p95"]
+    revision = getattr(model, "revision", "unknown")
+    out_dir = Path(args.out)
+    # `--out` used to be the directions.json itself; accept that spelling so an
+    # old command line fails loudly in one place rather than writing a file named
+    # directions.json/directions.json.
+    if out_dir.suffix == ".json":
+        out_dir = out_dir.parent
+    dpath = out_dir / DIRECTIONS_FILENAME
+    cpath = out_dir / CHANNELS_FILENAME
+
+    chans = project_entries(entries, acts)
+    n_points = len(next(iter(acts.values())))
+    write_entries(entries, dpath, model=model.model_id, revision=revision)
+    write_channels(
+        cpath,
+        model=model.model_id,
+        revision=revision,
+        n_points=n_points,
+        channels=chans,
+        point_source=f"prompts:{args.prompt_set} (the {n_points} prompt activations, not a map)",
+    )
+    print(f"\nwrote {dpath}")
+    print(f"wrote {cpath}  ({len(chans)} channels over {n_points} prompt activations)")
+
+    ok, drops = renderable(read_directions(dpath), json.loads(cpath.read_text()))
+    print(f"renderable: {len(ok)}/{len(entries)}")
+    for did, why in drops:
+        print(f"  NOT renderable  {did}: {why}")
+
+    print(
+        f"\n{'layer':>6} {'d':>9} {'overlap':>8} {'perm p95':>9} {'frame d':>8} "
+        f"{'rand p95':>9} {'half d':>8} {'clears':>7}"
+    )
+    for d in entries:
+        ea = d.source["eval_awareness"]
+        c = d.source["contrast"]
+        fh = ea["frame_heldout"]["cohens_d"]
+        hd = c.get("heldout_cohens_d")
+        clears = abs(ea["cohens_d"]) > ea["label_permutation"]["cohens_d_p95"]
         print(
-            f"{c['layer'] if 'layer' in c else entry['source']['layer']:>6} "
-            f"{c['cohens_d']:>9.4f} {c['overlap']:>8.4f} {c['null_cohens_d_p95']:>9.4f} "
-            f"{'   —   ' if hd is None else format(hd, '>8.4f')} {str(clears):>7}"
+            f"{d.source['layer']:>6} {ea['cohens_d']:>9.4f} {ea['overlap']:>8.4f} "
+            f"{ea['label_permutation']['cohens_d_p95']:>9.4f} "
+            f"{'   —   ' if fh is None else format(fh, '>8.4f')} "
+            f"{c['null_cohens_d_p95']:>9.4f} "
+            f"{'  miss ' if not isinstance(hd, (int, float)) else format(hd, '>8.4f')} "
+            f"{str(clears):>7}"
         )
+    print(
+        "\n'clears' is the in-sample effect against the LABEL-PERMUTATION p95 — the "
+        "stricter of the two nulls. 'rand p95' is the registry's random-unit-direction "
+        "null and 'half d' its held-out half — PAIRED, because the set is crossed; with "
+        "independent halves it ran negative at 20 of 30 layers and the negative was the "
+        "split. Both are in the file too, under contrast.*."
+    )
     return 0
 
 

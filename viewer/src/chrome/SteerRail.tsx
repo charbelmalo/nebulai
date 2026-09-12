@@ -26,12 +26,25 @@
  *    restated here in stronger words, and never turned into a sentence about
  *    what the feature *is*.
  *
- *  What this panel does NOT do: slide the prompt's point along a phase-1 axis.
- *  That needs a projection of the intervened residual stream onto a direction,
- *  which only a direction-verb bundle (`add` / `ablate`) carries — the shipped
- *  sweep is a `clamp` on an SAE feature and has no direction to project onto.
- *  When a bundle names one in `meta.direction`, the rail shows its identity and
- *  space; it does not draw travel along an axis it has no measurement for.
+ *  **Travel along a phase-1 axis, and its two separate refusals.** A
+ *  direction-verb bundle (`add` / `ablate`) now carries, per α, where the
+ *  prompts sat ON the direction before and after the hook — `intervene.py`'s
+ *  `axis` block. The rail prints that pair and offers the link that engages the
+ *  same direction on the map. Both halves can fail, for different reasons, and
+ *  the panel keeps them apart:
+ *
+ *  · the bundle may have no axis at all — `clamp` pins an SAE feature and `cap`
+ *    clips a box, and neither names a direction to project onto. The shipped
+ *    Golden Gate sweep is a `clamp`, so on it this section shows the producer's
+ *    refusal sentence and no numbers.
+ *  · the MAP may be unable to lay out along the direction even when the
+ *    intervention measured it perfectly. `refusal-style-v1-L8` lives in
+ *    `resid.L8`; the gpt2 map's points are `W_E.centered` token embeddings, so
+ *    D2 refuses the projection and `data/directions.ts` says so in the same
+ *    words the CLI uses. The numbers still show; the link does not.
+ *
+ *  A link that looked live and did nothing would be worse than no link, and a
+ *  single "axis unavailable" would hide which of the two walls was hit.
  */
 
 import { useEffect } from "preact/hooks";
@@ -41,9 +54,74 @@ import {
   fmtAlpha,
   onSteer,
   selectSteer,
+  steerAxis,
   type SteerCell,
 } from "../scene/interp/steer";
 import type { InterveneBundle, InterveneRow, InterveneRun } from "../data/interp";
+import { appStore } from "../app/store";
+import { $channels } from "../data/channels";
+import { $directions } from "../data/directions";
+import { $datasetId } from "./state";
+
+/** The axis section: measured travel, then either the map link or the reason.
+ *
+ *  `t = 1` rather than a blend because the point of following the link is to see
+ *  the layout the axis implies; the rail's own slider is then there to come back.
+ */
+function AxisSection(props: { bundle: InterveneBundle; sel: SteerCell }) {
+  // both loader signals, because the map half of the gate reads directions AND
+  // channels — a section watching only one would sit on a stale refusal
+  void $directions.value;
+  void $channels.value;
+  const dsId = $datasetId.value;
+  const ax = steerAxis(props.bundle, dsId, props.sel);
+  if (!ax.ready) {
+    return (
+      <p class="steer-axis-refused is-section" data-testid="steer-axis-refused">
+        {ax.reason}
+      </p>
+    );
+  }
+  const st = appStore.getState();
+  const here = ax.here;
+  return (
+    <div class="steer-axis" data-testid="steer-axis">
+      <div class="steer-axis-head">
+        <span class="steer-axis-k">on the axis</span>
+        <span class="steer-axis-id">
+          {ax.directionId} · {ax.space} · hook L{ax.layer}
+        </span>
+      </div>
+      {here ? (
+        <p class="steer-axis-travel">
+          {here.projBaseline.toFixed(2)} → {here.projIntervened.toFixed(2)} (
+          {here.projDelta >= 0 ? "+" : ""}
+          {here.projDelta.toFixed(2)} along) · perpendicular{" "}
+          {here.orthDelta >= 0 ? "+" : ""}
+          {here.orthDelta.toFixed(2)}
+        </p>
+      ) : (
+        <p class="steer-axis-travel">this α has no axis row</p>
+      )}
+      {ax.mapLink ? (
+        <button
+          type="button"
+          class="steer-axis-link"
+          onClick={() => {
+            st.setAxisDirection(ax.mapLink!.directionId);
+            st.setAxisT(1);
+          }}
+        >
+          lay the map out along this axis
+        </button>
+      ) : (
+        <p class="steer-axis-refused" data-testid="steer-axis-map-refused">
+          {ax.mapRefusal}
+        </p>
+      )}
+    </div>
+  );
+}
 
 /** A token string as it should read in prose. GPT-2's byte-BPE writes a
  *  leading space into the token itself, and a column of `Ġ`-style artefacts
@@ -238,6 +316,8 @@ export function SteerRail() {
           </div>
         )}
       </dl>
+
+      <AxisSection bundle={b} sel={sel} />
 
       <p class={`steer-claim${broken ? " is-broken" : ""}`}>
         {broken

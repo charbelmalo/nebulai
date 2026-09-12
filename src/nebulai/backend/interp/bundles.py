@@ -2935,13 +2935,47 @@ def write_bundles(
         dump(f"trace_{slug}.json", compute_trace(m, prompt))
         traces_index.append({"slug": slug, "prompt": prompt})
 
-    # a tiny manifest so the viewer can discover what's available per model
+    # a tiny manifest so the viewer can discover what's available per model.
+    # Intervention sweeps are written by `nebulai intervene`, not here, and a
+    # manifest rebuilt only from what THIS run produced would silently delist
+    # them — so they are carried over from disk rather than dropped.
+    carried = sorted(
+        f.name
+        for f in out_dir.glob("intervene_*.json")
+        if f.name not in {q.name for q in written}
+    )
     dump(
         "index.json",
         {
             "meta": {"model": model_id, "created": _now()},
-            "bundles": [p.name for p in written],
+            "bundles": [p.name for p in written] + carried,
             "traces": traces_index,
         },
     )
     return written
+
+
+def register_bundle(out_dir: Path, name: str) -> bool:
+    """Add one bundle file name to an existing `interp/index.json`.
+
+    Returns whether the manifest changed. A missing or unreadable manifest is
+    not an error: the bundle is still on disk and the viewer can still be
+    pointed at it by name. What would be an error is writing a bundle the
+    manifest claims does not exist, because the one affordance that enumerates
+    what a model has is that list.
+    """
+    idx = Path(out_dir) / "index.json"
+    if not idx.is_file():
+        return False
+    try:
+        doc = json.loads(idx.read_text())
+        bundles = doc["bundles"]
+        if not isinstance(bundles, list):
+            return False
+    except (ValueError, KeyError, TypeError):
+        return False
+    if name in bundles:
+        return False
+    bundles.append(name)
+    idx.write_text(json.dumps(doc, ensure_ascii=False, indent=1) + "\n")
+    return True

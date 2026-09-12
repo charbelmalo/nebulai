@@ -12,7 +12,7 @@ Five constructors, matching §4.2 of the plan:
     diff_of_means(pos, neg, space)        two sets of activations
     pca_component(matrix, k, space)       the k-th principal component
     from_sae_decoder(repo, feature_id, …) one row of a trained dictionary
-    from_lora_rank1(path)                 phase 5 — raises, deliberately
+    from_lora_rank1(b, a, space)          the output-side factor of a rank-1 adapter
     from_two_selections(a_ids, b_ids, …)  the viewer's two-cluster gesture
 
 plus `project()` (the parallel/orthogonal split that becomes the axis layout)
@@ -100,6 +100,13 @@ def _unit(v: np.ndarray) -> np.ndarray:
             "mean in this space, so there is no direction between them"
         )
     return (v / n).astype(np.float32)
+
+
+#: Public name for the same normalisation. Other modules fit directions too
+#: (`backend/eval_awareness.py` fits one per layer and refits it 32 times for its
+#: label-permutation null) and they must refuse a zero-norm difference with the
+#: sentence above rather than each inventing their own tolerance.
+unit = _unit
 
 
 @dataclass
@@ -209,8 +216,12 @@ def diff_of_means(
     label: str,
     protocol: str,
     source: Mapping[str, Any] | None = None,
+    paired: bool = False,
 ) -> Direction:
     """mean(pos) − mean(neg), unit-normalised. The workhorse.
+
+    Pass `paired=True` when `pos[i]` and `neg[i]` are a matched pair, so the
+    held-out split inside `contrast` keeps the pairing — see `_heldout`.
 
     `protocol` is the frozen identity of the two sets — a prompt-set id, a pair
     of cluster ids, anything a reader can go and re-derive. It is not optional
@@ -236,7 +247,7 @@ def diff_of_means(
     }
     src.update(source or {})
     v = p.mean(axis=0) - n.mean(axis=0)
-    src["contrast"] = contrast(p, n, v)
+    src["contrast"] = contrast(p, n, v, paired=paired)
     return Direction(
         id=id,
         label=label,
@@ -344,20 +355,80 @@ def from_sae_decoder(
     )
 
 
-def from_lora_rank1(path: str | Path) -> Direction:
-    """A rank-1 LoRA update read as a single direction. **Phase 5.**
+def from_lora_rank1(
+    b: np.ndarray,
+    a: np.ndarray,
+    space: str,
+    *,
+    id: str,
+    label: str,
+    protocol: str,
+    scaling: float = 1.0,
+    source: Mapping[str, Any] | None = None,
+) -> Direction:
+    """A rank-1 LoRA update as one direction — the OUTPUT-side factor.
 
-    Deliberately not implemented here. The honest version needs the
-    fine-tuning-comparison machinery of phase 5 — a base model, an adapted
-    model, and the statement of what the adapter was trained on — and a
-    direction lifted out of a `.safetensors` file with none of that attached
-    would satisfy the type signature while carrying no protocol at all, which
-    is the one thing `Direction.__post_init__` refuses.
+    A rank-1 adapter on a weight `W : in -> out` adds `dW = scaling * b @ a.T`
+    with `b` of length `out` and `a` of length `in`. That matrix has exactly one
+    non-zero singular value, so every output the adapter is capable of adding is
+    a multiple of `b / ||b||`: there is a single direction and this is it. `a`
+    decides *how much* of it each input gets, which is a gate, not a direction.
+
+    So the vector returned is the unit `b`, and `space` must be the space the
+    adapted matrix WRITES INTO (`mlp_out.L<k>` for a `down_proj`, `resid.L<k>`
+    for a module whose output is added straight to the stream). `a` is not
+    returned as a second direction even though it is a perfectly good unit
+    vector, because it lives in the input space — 4,864-wide for a Qwen MLP —
+    and tagging it with the output space to make the arithmetic typecheck is
+    exactly the mistake the closed space set exists to prevent (D2). Its norm
+    and the update's Frobenius norm are recorded in `source` instead, so the
+    scale of what was learned is on the record without inviting a projection
+    that would mean nothing.
+
+    **There is no `path` argument, on purpose.** D6 says measure, never export:
+    no run in this project writes an adapter file, so there is no checkpoint of
+    ours to point this at. The factors arrive as arrays from the process that
+    trained them, still in memory, and `protocol` is mandatory, so a vector
+    cannot get in here without the statement of what it was trained on.
+    Importing somebody else's published adapter is a different operation with a
+    different `source.kind` and it belongs in `import_directions.py`, beside the
+    other upstream artefacts, not here.
     """
-    raise NotImplementedError(
-        "from_lora_rank1 lands in phase 5 (emergent misalignment), together "
-        f"with the base/adapted pair that gives it a protocol. {path!r} was not "
-        "read."
+    bv = np.asarray(b, dtype=np.float64).reshape(-1)
+    av = np.asarray(a, dtype=np.float64).reshape(-1)
+    if bv.size == 0 or av.size == 0:
+        raise DirectionError(
+            f"direction {id!r}: a rank-1 update needs both factors, got shapes "
+            f"{np.shape(b)} and {np.shape(a)}"
+        )
+    nb, na = float(np.linalg.norm(bv)), float(np.linalg.norm(av))
+    if nb <= 1e-12 or na <= 1e-12:
+        raise DirectionError(
+            f"direction {id!r}: the rank-1 update is zero "
+            f"(||b||={nb:.3g}, ||a||={na:.3g}) — an adapter that has not moved "
+            f"off its initialisation has no direction, and normalising the "
+            f"rounding error would invent one"
+        )
+    src: dict[str, Any] = {
+        "kind": "computed",
+        "protocol": protocol,
+        "lora": {
+            "rank": 1,
+            "scaling": round(float(scaling), 6),
+            # ||dW||_F = scaling * ||b|| * ||a|| exactly, for a rank-1 outer
+            # product; the three numbers are kept separately because only the
+            # product is invariant to how the trainer split the scale.
+            "b_norm": round(nb, 6),
+            "a_norm": round(na, 6),
+            "delta_w_fro": round(float(scaling) * nb * na, 6),
+            "b_dim": int(bv.size),
+            "a_dim": int(av.size),
+            "side": "output",
+        },
+    }
+    src.update(source or {})
+    return Direction(
+        id=id, label=label, space=space, method="lora_rank1", vector=bv, source=src
     )
 
 
@@ -525,6 +596,7 @@ def contrast(
     *,
     n_null: int = DEFAULT_NULL_N,
     seed: int = DEFAULT_NULL_SEED,
+    paired: bool = False,
 ) -> dict[str, float]:
     """How well this direction separates the two sets it was built from — and
     how well a random direction does on the same two sets.
@@ -563,11 +635,13 @@ def contrast(
         "null_cohens_d_mean": round(float(arr.mean()), 6) if arr.size else math.nan,
         "null_cohens_d_p95": round(float(np.percentile(arr, 95)), 6) if arr.size else math.nan,
     }
-    out.update(_heldout(a, b, seed=seed))
+    out.update(_heldout(a, b, seed=seed, paired=paired))
     return out
 
 
-def _heldout(a: np.ndarray, b: np.ndarray, *, seed: int) -> dict[str, float]:
+def _heldout(
+    a: np.ndarray, b: np.ndarray, *, seed: int, paired: bool = False
+) -> dict[str, float]:
     """Refit on half of each set, measure on the other half.
 
     The in-sample number above is the direction scored on the very points that
@@ -577,6 +651,21 @@ def _heldout(a: np.ndarray, b: np.ndarray, *, seed: int) -> dict[str, float]:
     as a measurement. When either set has fewer than four members there is no
     split to make and they come back `missing` rather than as an optimistic
     stand-in.
+
+    `paired=True` is for a MATCHED design, where `pos[i]` and `neg[i]` differ in
+    exactly one thing and splitting the two sides independently is wrong. It is
+    wrong in a specific, measured way: independent halves put different items on
+    the two sides, so the fitted difference picks up an (items-in-fit-pos minus
+    items-in-fit-neg) term, and the test halves are exactly the complements — so
+    that term comes back with the opposite sign. On the eval-awareness prompt set
+    (64 matched pairs, SmolLM2-135M-Instruct, 40 seeds) the mean held-out Cohen's
+    d at layers 4/12/19/25 was +0.13 / −0.28 / −0.38 / −0.40 with independent
+    splits and +0.52 / +0.89 / +0.32 / +0.31 with paired ones. The negative
+    numbers were an artefact of breaking the pairing, and anything reading them as
+    "the direction does not transfer" would have been reading the split.
+
+    Default stays `False`: a caller only knows its two sets are paired if its
+    design says so, and `heldout_split` records which was done either way.
     """
     if a.shape[0] < 4 or b.shape[0] < 4:
         return {
@@ -584,10 +673,18 @@ def _heldout(a: np.ndarray, b: np.ndarray, *, seed: int) -> dict[str, float]:
             "heldout_overlap": "missing",
             "heldout_n_pos": 0,
             "heldout_n_neg": 0,
+            "heldout_split": "missing",
         }
+    if paired and a.shape[0] != b.shape[0]:
+        raise DirectionError(
+            f"paired=True needs one neg per pos, got {a.shape[0]} and {b.shape[0]}"
+        )
     rng = np.random.default_rng(seed)
-    pa = rng.permutation(a.shape[0])
-    pb = rng.permutation(b.shape[0])
+    if paired:
+        pa = pb = rng.permutation(a.shape[0])
+    else:
+        pa = rng.permutation(a.shape[0])
+        pb = rng.permutation(b.shape[0])
     ha, hb = a.shape[0] // 2, b.shape[0] // 2
     fit_a, test_a = a[pa[:ha]], a[pa[ha:]]
     fit_b, test_b = b[pb[:hb]], b[pb[hb:]]
@@ -598,6 +695,7 @@ def _heldout(a: np.ndarray, b: np.ndarray, *, seed: int) -> dict[str, float]:
         "heldout_overlap": st["overlap"],
         "heldout_n_pos": int(test_a.shape[0]),
         "heldout_n_neg": int(test_b.shape[0]),
+        "heldout_split": "paired" if paired else "independent",
     }
 
 

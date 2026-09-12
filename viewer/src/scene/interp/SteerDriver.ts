@@ -44,7 +44,7 @@
 import type { GpuTier } from "@psychix/viz/capabilities";
 import { InterpTooltip, type TipRow } from "@psychix/viz/chart-tooltip";
 import type { StatTile } from "@psychix/viz/StatStrip";
-import { loadIntervene, type InterveneBundle, type InterveneRun } from "../../data/interp";
+import { loadSteerBundle, type InterveneBundle, type InterveneRun } from "../../data/interp";
 import { ChartStage, type BarData, type ChartStageLook } from "./chart-stage";
 import type { InterpDriver } from "./InterpDriver";
 import {
@@ -140,7 +140,7 @@ export class SteerDriver implements InterpDriver {
   }
 
   async setModel(model: string): Promise<void> {
-    const b = await loadIntervene(model);
+    const b = await loadSteerBundle(model);
     if (!b.rows?.length || !b.prompts?.length) {
       throw new Error("intervention sweep has no cells");
     }

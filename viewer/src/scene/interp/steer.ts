@@ -14,7 +14,14 @@
  *  drawn half cannot drift about which cell is which or what α = 0 means.
  */
 
-import type { InterveneBundle, InterveneRow, InterveneRun } from "../../data/interp";
+import type {
+  InterveneAxis,
+  InterveneBundle,
+  InterveneRow,
+  InterveneRowAxis,
+  InterveneRun,
+} from "../../data/interp";
+import { axisRefusal, directionById } from "../../data/directions";
 
 /* ── the selection channel ─────────────────────────────────────────────────
  *
@@ -217,4 +224,141 @@ export function commonPrefix(a: readonly string[], b: readonly string[]): number
 export function alphaLabel(row: InterveneRow | undefined): string {
   if (!row) return "";
   return row.is_identity ? `α ${fmtAlpha(row.alpha)} · control` : `α ${fmtAlpha(row.alpha)}`;
+}
+
+/* ── the phase-1 axis link ─────────────────────────────────────────────────── */
+
+/** What the rail may say about travel along the intervention's own direction.
+ *
+ *  `ready: false` carries the producer's own refusal sentence whenever there is
+ *  one, because the producer is the only thing that knows WHY — a `clamp` names
+ *  no direction, a `cap` names no direction, a `W_E.centered` direction names no
+ *  layer to observe at. A reader who sees "not available" learns nothing; a
+ *  reader who sees "the clamp verb carries no direction, so there is no axis to
+ *  project onto" learns the shape of the measurement.
+ */
+export type SteerAxis =
+  | { ready: false; reason: string }
+  | {
+      ready: true;
+      directionId: string;
+      space: string;
+      /** hook layer: the output of block L */
+      layer: number;
+      /** one measured stop per alpha, in the bundle's own order */
+      travel: {
+        alpha: number;
+        isIdentity: boolean;
+        projBaseline: number;
+        projIntervened: number;
+        projDelta: number;
+        orthDelta: number;
+      }[];
+      /** the selected row's stop, or null when the selection is out of range */
+      here: SteerAxisStop | null;
+      /** `null` when this map cannot lay out along the direction; otherwise the
+       *  reason-free go-ahead for `setAxisDirection` + `setAxisT`. */
+      mapLink: { directionId: string } | null;
+      /** why the map cannot, when it cannot. Never null together with mapLink. */
+      mapRefusal: string | null;
+    };
+
+export interface SteerAxisStop {
+  alpha: number;
+  isIdentity: boolean;
+  projBaseline: number;
+  projIntervened: number;
+  projDelta: number;
+  orthDelta: number;
+}
+
+function rowAxis(row: InterveneRow | undefined): InterveneRowAxis | null {
+  const a = row?.axis;
+  return a && typeof a.direction_id === "string" ? a : null;
+}
+
+/** The first refusal sentence the bundle carries, at either level. */
+function bundleRefusal(b: InterveneBundle): string | null {
+  for (const row of b.rows) {
+    if (typeof row.axis_refused === "string") return row.axis_refused;
+    for (const run of row.runs) {
+      const ax = run.axis as { refused?: string } | undefined;
+      if (ax && typeof ax.refused === "string") return ax.refused;
+    }
+  }
+  return null;
+}
+
+/** Travel along the intervention's direction, and whether THIS map may show it.
+ *
+ *  Two gates, and they are independent, which is the whole point. The first is
+ *  whether the intervention measured a projection at all: that is the producer's
+ *  business and it answers in its own words. The second is whether the loaded
+ *  map can be laid out along that same direction, which is `data/directions.ts`'s
+ *  D2 gate — a direction fitted in `resid.L8` cannot be projected onto a map of
+ *  `W_E.centered` token embeddings, and on the one direction-backed sweep this
+ *  repo can currently produce that is exactly what happens. So the rail can
+ *  truthfully show the numbers and truthfully refuse the map link in the same
+ *  breath, rather than offering a link that would silently do nothing.
+ */
+export function steerAxis(
+  b: InterveneBundle | null,
+  datasetId: string | null,
+  sel: SteerCell | null = null,
+): SteerAxis {
+  if (!b) return { ready: false, reason: "no intervention bundle is loaded" };
+  const stops: SteerAxisStop[] = [];
+  let id: string | null = null;
+  let space: string | null = null;
+  let layer: number | null = null;
+  for (const row of b.rows) {
+    const a = rowAxis(row);
+    if (!a) continue;
+    id ??= a.direction_id;
+    space ??= a.space;
+    layer ??= a.layer;
+    stops.push({
+      alpha: row.alpha,
+      isIdentity: row.is_identity,
+      projBaseline: a.proj_mean_baseline,
+      projIntervened: a.proj_mean_intervened,
+      projDelta: a.proj_mean_delta,
+      orthDelta: a.orth_mean_delta,
+    });
+  }
+  if (stops.length === 0 || id === null || space === null || layer === null) {
+    return {
+      ready: false,
+      reason:
+        bundleRefusal(b) ??
+        "this bundle carries no axis measurement — it was produced before the " +
+          "projection was added, so there is nothing to slide along",
+    };
+  }
+  const dir = directionById(datasetId, id);
+  const mapRefusal = dir
+    ? axisRefusal(datasetId, dir)
+    : `this map's directions.json has no “${id}”, so it cannot be laid out along it`;
+  const row = sel ? b.rows[sel.row] : undefined;
+  const here =
+    row && rowAxis(row)
+      ? (stops.find((s2) => s2.alpha === row.alpha) ?? null)
+      : null;
+  return {
+    ready: true,
+    directionId: id,
+    space,
+    layer,
+    travel: stops,
+    here,
+    mapLink: mapRefusal === null ? { directionId: id } : null,
+    mapRefusal,
+  };
+}
+
+/** The run-level block, when it is a measurement and not a refusal. */
+export function runAxis(run: InterveneRun | null | undefined): InterveneAxis | null {
+  const ax = run?.axis;
+  if (!ax || typeof (ax as { refused?: string }).refused === "string") return null;
+  return ax as InterveneAxis;
 }

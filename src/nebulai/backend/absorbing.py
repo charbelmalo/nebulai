@@ -313,6 +313,115 @@ class Conversation:
         return [int(t["violation"]) for t in self.turns if t["role"] == "assistant"]
 
 
+@dataclass(frozen=True)
+class Resume:
+    """An earlier run of the *same* study, to be continued rather than redone.
+
+    A continuation is only honest if the conversations it adds are exactly the
+    ones the original run would have produced at those indices. Two properties
+    of :func:`run_batch` make that possible: the opener is
+    ``OPENERS[index % len(OPENERS)]``, and every seed is ``seed_base + start``
+    plus a per-turn offset, where ``start`` is the batch's first index. So a
+    batch beginning at index 1632 draws the same seeds whether it is the 35th
+    batch of one long run or the 1st batch of a continuation — *provided* the
+    batch boundaries line up and every generation parameter is unchanged.
+    :func:`run_study` refuses the resume otherwise; see
+    :meth:`check_against`. What it cannot promise is bit-identity across a
+    different machine or numpy build, and the artifact says so rather than
+    implying the two halves are interchangeable.
+    """
+
+    start_index: int
+    sequences: list[list[int]]
+    transcripts: list[dict[str, Any]]
+    elapsed_s: float
+    study_id: str
+    model: str
+    revision: str
+    rule_id: str
+    config: dict[str, Any]
+
+    #: Generation parameters that must match for the continuation to be the
+    #: same experiment. `n_conversations_requested` is deliberately absent: the
+    #: whole point is to raise it.
+    MUST_MATCH = (
+        "n_turns",
+        "batch_size",
+        "max_new_assistant",
+        "max_new_user",
+        "temperature",
+        "top_p",
+        "seed_base",
+    )
+
+    def check_against(self, *, rule_id: str, model: Any, **kw: Any) -> None:
+        """Raise unless continuing is the same experiment as starting over."""
+        if self.rule_id != rule_id:
+            raise AbsorbingError(
+                f"the stored study measures rule {self.rule_id!r} and this run "
+                f"would measure {rule_id!r} — those are different experiments"
+            )
+        if len(self.sequences) != self.start_index:
+            raise AbsorbingError(
+                f"the stored study says it ran {self.start_index} conversations "
+                f"but carries {len(self.sequences)} violation sequences"
+            )
+        got = getattr(model, "model_id", None)
+        if got != self.model:
+            raise AbsorbingError(
+                f"the stored study ran {self.model!r} and this model is {got!r}"
+            )
+        rev = getattr(model, "revision", "unknown")
+        if rev != self.revision:
+            raise AbsorbingError(
+                f"the stored study ran revision {self.revision!r} and this one "
+                f"is {rev!r} — a continuation across weights is not a resume"
+            )
+        for key in self.MUST_MATCH:
+            want, have = self.config.get(key), kw.get(key)
+            if want != have:
+                raise AbsorbingError(
+                    f"{key} was {want!r} in the stored study and is {have!r} "
+                    f"now; the added conversations would not be the ones the "
+                    f"original run would have produced"
+                )
+        bs = int(kw["batch_size"])
+        if self.start_index % bs:
+            raise AbsorbingError(
+                f"resuming at {self.start_index} with batch_size {bs} would "
+                f"shift every later batch boundary, and the seed is the batch's "
+                f"first index — rerun from zero or resume at a multiple of {bs}"
+            )
+        n_turns = int(kw["n_turns"])
+        bad = [i for i, seq in enumerate(self.sequences) if len(seq) != n_turns]
+        if bad:
+            raise AbsorbingError(
+                f"{len(bad)} stored sequences are not {n_turns} turns long "
+                f"(first at index {bad[0]}, length {len(self.sequences[bad[0]])})"
+            )
+
+
+def resume_from(doc: dict[str, Any]) -> Resume:
+    """Read a stored `absorbing.json` as something to continue."""
+    try:
+        meta, cfg = doc["meta"], doc["meta"]["config"]
+        seqs = [[int(v) for v in seq] for seq in doc["sequences"]]
+    except (KeyError, TypeError) as exc:
+        raise AbsorbingError(f"not an absorbing study document: {exc}") from exc
+    n = int(cfg.get("n_conversations_run", len(seqs)))
+    return Resume(
+        start_index=n,
+        sequences=seqs,
+        transcripts=list(doc.get("transcripts") or []),
+        elapsed_s=float(meta.get("elapsed_s") or 0.0),
+        study_id=str(meta.get("study_id", "")),
+        model=str(meta.get("model", "")),
+        revision=str(meta.get("revision", "unknown")),
+        rule_id=str((doc.get("rule") or {}).get("id", "")),
+        config=dict(cfg),
+    )
+
+
 @dataclass
 class Study:
     """An in-memory `absorbing.json`."""
@@ -327,6 +436,11 @@ class Study:
     pilot: dict[str, Any] | None
     created: str
     elapsed_s: float
+    #: The conversations an earlier run already measured, if this is a
+    #: continuation. Their flags are data and ship; their transcripts ship too,
+    #: because dropping the first run's evidence to make room for the second's
+    #: would leave the earlier indices unauditable.
+    prior: Resume | None = None
 
     def to_dict(self, *, keep_transcripts: int = 12) -> dict[str, Any]:
         return {
@@ -354,8 +468,12 @@ class Study:
             "pilot": self.pilot,
             # the flags are the data; the transcripts are evidence that the
             # judge is judging what it claims to
-            "sequences": [c.flags for c in self.conversations],
-            "transcripts": [
+            "sequences": (
+                [list(seq) for seq in self.prior.sequences] if self.prior else []
+            )
+            + [c.flags for c in self.conversations],
+            "transcripts": (self.prior.transcripts if self.prior else [])
+            + [
                 {"index": c.index, "opener": c.opener, "turns": c.turns}
                 for c in self.conversations[:keep_transcripts]
             ],
@@ -495,19 +613,45 @@ def run_study(
     pilot: dict[str, Any] | None = None,
     progress: Any = None,
     deadline_s: float | None = None,
+    resume: Resume | None = None,
 ) -> Study:
     """Run the self-play study and analyse it.
 
     `deadline_s` stops starting new batches once the clock runs out and reports
     the N that was actually reached. A study that quietly ran fewer
     conversations than it says is worse than one that says 1,731.
+
+    `resume` continues a study that stopped early instead of recomputing its
+    conversations: the loop starts at the stored N and every generation
+    parameter must match, or :meth:`Resume.check_against` refuses. The analysis
+    then runs over both halves together — the transition matrix is counted from
+    the full `sequences`, never added up from two separate analyses.
     """
     if rule_id not in RULES:
         raise AbsorbingError(f"unknown rule {rule_id!r}; have {sorted(RULES)}")
     rule = RULES[rule_id]
+    start_index = 0
+    if resume is not None:
+        resume.check_against(
+            rule_id=rule_id,
+            model=model,
+            n_turns=n_turns,
+            batch_size=batch_size,
+            max_new_assistant=max_new_assistant,
+            max_new_user=max_new_user,
+            temperature=temperature,
+            top_p=top_p,
+            seed_base=seed_base,
+        )
+        start_index = resume.start_index
+        if n_conversations <= start_index:
+            raise AbsorbingError(
+                f"the stored study already ran {start_index} conversations, so "
+                f"asking for {n_conversations} adds nothing"
+            )
     t0 = time.perf_counter()
     convs: list[Conversation] = []
-    for start in range(0, n_conversations, batch_size):
+    for start in range(start_index, n_conversations, batch_size):
         idx = list(range(start, min(start + batch_size, n_conversations)))
         convs.extend(
             run_batch(
@@ -523,11 +667,15 @@ def run_study(
             )
         )
         if progress is not None:
-            progress(len(convs), n_conversations, time.perf_counter() - t0)
+            progress(start_index + len(convs), n_conversations,
+                     time.perf_counter() - t0)
         if deadline_s is not None and time.perf_counter() - t0 > deadline_s:
             break
     elapsed = time.perf_counter() - t0
-    stats = analyse([c.flags for c in convs], null_n=null_n)
+    seqs = ([list(x) for x in resume.sequences] if resume else []) + [
+        c.flags for c in convs
+    ]
+    stats = analyse(seqs, null_n=null_n)
     revision = getattr(model, "revision", "unknown")
     return Study(
         study_id=f"{model.model_id.split('/')[-1].lower()}@{revision[:12]}.{rule_id}",
@@ -536,7 +684,7 @@ def run_study(
         rule=rule,
         config={
             "n_conversations_requested": n_conversations,
-            "n_conversations_run": len(convs),
+            "n_conversations_run": start_index + len(convs),
             "n_turns": n_turns,
             "batch_size": batch_size,
             "max_new_assistant": max_new_assistant,
@@ -549,14 +697,38 @@ def run_study(
                 "batch from that generator, so a single conversation is "
                 "reproducible only together with its batch"
             ),
-            "stopped_early": deadline_s is not None and elapsed > deadline_s,
+            # what it means is "fewer conversations than were asked for", which
+            # is a fact about N and not about the clock. Comparing elapsed to
+            # the deadline instead would mark a run that reached its full N on
+            # the very batch that crossed the deadline as stopped early, and
+            # `write_index` now republishes this field, so a wrong label would
+            # travel.
+            "stopped_early": start_index + len(convs) < n_conversations,
             "deadline_s": deadline_s,
+            "resumed_from": (
+                None
+                if resume is None
+                else {
+                    "n": resume.start_index,
+                    "elapsed_s": round(resume.elapsed_s, 1),
+                    "deadline_s": resume.config.get("deadline_s"),
+                    "note": (
+                        f"conversations 0..{resume.start_index - 1} come from an "
+                        f"earlier run of this study and were not recomputed; "
+                        f"{resume.start_index} is a multiple of the batch size "
+                        f"and every generation parameter matched, so the added "
+                        f"batches draw the seeds the original run would have "
+                        f"drawn. Both halves are analysed together."
+                    ),
+                }
+            ),
         },
         conversations=convs,
         stats=stats,
         pilot=pilot,
         created=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        elapsed_s=elapsed,
+        elapsed_s=elapsed + (resume.elapsed_s if resume else 0.0),
+        prior=resume,
     )
 
 
@@ -574,35 +746,40 @@ def write_study(study: Study, root: Path | str = DEFAULT_OUT) -> Path:
 
 
 def write_index(root: Path | str = DEFAULT_OUT) -> Path:
-    """Rewrite `<root>/index.json` from the studies actually on disk.
+    """Rewrite `index.json` from the studies actually on disk.
 
-    The viewer's AbsorbingPanel discovers studies through this file and
-    nothing else (a static deploy cannot list a directory), so a study that
-    is written without it is invisible: the panel renders nothing, which is
-    also what it renders when no study exists. The first live study shipped
-    exactly that way — the file below is what makes the readout appear.
-    Regenerated from disk on every write rather than appended to, so a
-    deleted study directory drops out of the index too.
+    It is derived, never edited, and writing a study rewrites it. A study that
+    is continued to a larger N changes its own `n_conversations`, `verdict` and
+    `stopped_early` in place, and an index maintained by hand would keep
+    advertising the number the first run stopped at — which is the one failure
+    mode here that would show a reader a stale verdict without saying so.
     """
     root = Path(root)
-    root.mkdir(parents=True, exist_ok=True)
-    studies = []
-    for d in sorted(p for p in root.iterdir() if (p / "absorbing.json").exists()):
-        doc = json.loads((d / "absorbing.json").read_text())
-        meta, stats = doc.get("meta", {}), doc.get("stats", {})
-        studies.append(
+    rows: list[dict[str, Any]] = []
+    for sd in sorted(root.glob("*")):
+        f = sd / "absorbing.json"
+        if not f.is_file():
+            continue
+        try:
+            doc = json.loads(f.read_text())
+            meta, cfg, st = doc["meta"], doc["meta"]["config"], doc["stats"]
+        except (ValueError, KeyError, TypeError):
+            continue
+        rows.append(
             {
-                "study_id": meta.get("study_id", d.name),
+                "study_id": meta.get("study_id", sd.name),
                 "model": meta.get("model"),
                 "revision": meta.get("revision"),
                 "rule": (doc.get("rule") or {}).get("id"),
-                "n_conversations": stats.get("n_conversations"),
-                "verdict": stats.get("verdict"),
-                "stopped_early": bool((meta.get("config") or {}).get("stopped_early", False)),
+                "n_conversations": st.get("n_conversations"),
+                "verdict": st.get("verdict"),
+                "stopped_early": bool(cfg.get("stopped_early")),
+                "resumed_from": (cfg.get("resumed_from") or {}).get("n"),
             }
         )
+    root.mkdir(parents=True, exist_ok=True)
     path = root / "index.json"
-    path.write_text(json.dumps({"studies": studies}, indent=2) + "\n")
+    path.write_text(json.dumps({"studies": rows}, indent=2) + "\n")
     return path
 
 
@@ -621,6 +798,7 @@ __all__ = [
     "NULL_N",
     "OPENERS",
     "RULES",
+    "Resume",
     "Rule",
     "Study",
     "USER_SYSTEM",
@@ -628,6 +806,7 @@ __all__ = [
     "choose_rule",
     "pilot_rates",
     "read_study",
+    "resume_from",
     "run_batch",
     "run_study",
     "study_dir",

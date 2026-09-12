@@ -193,7 +193,8 @@ makes it readable and the statistics that make it checkable.
                   "contrast": { "cohens_d": …,            // IN SAMPLE — not evidence
                                 "heldout_cohens_d": …,    // refit on half, scored on the other half
                                 "null_cohens_d_mean": …, "null_cohens_d_p95": …,
-                                "n_pos": …, "n_neg": …, "heldout_n_pos": …, "heldout_n_neg": … } },
+                                "n_pos": …, "n_neg": …, "heldout_n_pos": …, "heldout_n_neg": …,
+                                "heldout_split": "paired" | "independent" | "missing" } },
       "projection": { "channel": "proj.<id>", "orth_channel": "proj.<id>.orth",
                       "stats": { "cohens_d": …, "overlap": …, "n": … } },
       "null": { "method": "random_unit", "seed": 0, "n": 32,
@@ -225,6 +226,39 @@ behind every import refusal. `prompts` fits a direction on a frozen prompt set
 from `backend/prompt_sets.py` via `gpt2_numpy` residuals, for the case where
 nothing published is the right width.
 
+**`heldout_split` says which split produced `heldout_cohens_d`.** The default is
+`independent` — pos and neg permuted separately, which is right when the two sets
+are unrelated collections. It is WRONG for a crossed design, and wrong in a
+direction that looks like a result: independent halves put different items on the
+two sides, so the fit picks up an (items-in-pos − items-in-neg) term and the test
+halves are its exact complement, so the term returns with the opposite sign. On
+the eval-awareness set (64 matched pairs, SmolLM2-135M-Instruct, 40 seeds) mean
+held-out d at L4/12/19/25 was **+0.13 / −0.28 / −0.38 / −0.40** independent and
+**+0.52 / +0.89 / +0.32 / +0.31** paired. A matched-pair caller passes
+`paired=True` to `diff_of_means`; the field records which was done either way, so
+a negative number can never again be read as "the direction does not transfer"
+when it was the split.
+
+**`backend/eval_awareness.py` is a caller of this registry, not a second one**
+(ATTRACTORS-PLAN §3.2). It owns the matched-pair prompt construction and two
+controls `contrast` does not have, and both live under `source.eval_awareness`,
+never merged into `source.contrast`: a **label-permutation** null (refit the whole
+procedure on shuffled labels, 32 draws — "would this FITTING PROCEDURE separate
+two arbitrary halves of these prompts this well", which the random-unit null does
+not ask) and a **held-out split over unseen framings** (a random half shares
+framing sentences with the fit, so it cannot catch a direction that only learned
+the words "grader" and "benchmark"). Its directions live in `resid.L<k>`, so under
+D2 the only legal point cloud is activations in `resid.L<k>` — it uses the prompt
+set's own 128 activations and `channels.json`'s `point_source` says so verbatim
+(`prompts:eval_awareness.v1 (the 128 prompt activations, not a map)`). Projecting
+them onto a token map would also produce numbers. `python -m
+nebulai.backend.eval_awareness --out <dir>` writes the pair and prints, per layer,
+in-sample d · overlap · permutation p95 · unseen-frame d · random-unit p95 ·
+paired half d. On SmolLM2-135M-Instruct, 6 of 30 layers clear the
+label-permutation p95 (L10–L13, L15, L16; the largest is **L12, d = 0.997 vs p95
+0.680**), and unseen-frame transfer peaks earlier, at L4–L9 (~0.70) — two
+different questions with two different answers, which is why both ship.
+
 ### `interp/intervene_<name>.json` (`backend/interp/intervene.py`)
 
 The third sidecar family, and the only one whose numbers come from a model that
@@ -241,9 +275,23 @@ inference-time hook, runs the same prompt twice, and exports the difference.
               "protocol": "<exactly what was done, at this strength>",
               "kl_bits_mean": 0.0, "kl_bits_max": 0.0,
               "identical_to_baseline": true,        // asserted PER ROW
+              // the row's mean of the same pair, or `axis_refused` instead
+              "axis": { "direction_id": …, "space": …, "layer": 8,
+                        "n_prompts": 2, "proj_mean_baseline": …,
+                        "proj_mean_intervened": …, "proj_mean_delta": …,
+                        "orth_mean_delta": … },
               "runs": [ { "prompt": "…", "kl_bits": 0.0,
                           "identical": true,
                           "resid_norm_baseline": …, "resid_norm_intervened": …,
+                          // add/ablate only; clamp/cap carry {"refused": "…"}
+                          "axis": { "direction_id": …, "space": "resid.L8",
+                                    "layer": 8, "resid_index": 9,
+                                    "observed_where": "…", "token": "last",
+                                    "proj_baseline": …, "proj_intervened": …,
+                                    "proj_delta": …,
+                                    "orth_norm_baseline": …,
+                                    "orth_norm_intervened": …,
+                                    "orth_norm_delta": …, "unit": "…" },
                           "baseline":    { "text": …, "tokens": […], "logprobs": […] },
                           "intervened":  { "text": …, "tokens": […], "logprobs": […] },
                           "targets": [ { "text": " the Golden Gate Bridge",
@@ -252,13 +300,13 @@ inference-time hook, runs the same prompt twice, and exports the difference.
   "claim": "Under this protocol — … — the intervention changed the next-token "
            "distribution by up to N bits of KL. That is a statement about what "
            "this intervention did, not about what the direction is.",
-  "notes": { "decoding": …, "control": …, "d6": … },
+  "notes": { "decoding": …, "control": …, "d6": …, "axis": … },
   "meta": { "revision": …, "digest": …, "hook_layer": 7,
             "sae_repo": …, "sae_hook": "blocks.8.hook_resid_pre",
             "sae_hook_layer": 8, "hook_layer_note": "…" } }
 ```
 
-Five rules, four of them refusals:
+Six rules, five of them refusals:
 
 1. **α = 0 is a control and the producer will not write the file without it.**
    At α = 0 NO hook is installed — not an identity hook, no hook at all — and
@@ -285,6 +333,33 @@ Five rules, four of them refusals:
    never restates it in stronger words, and never turns it into a sentence about
    what the feature or direction *is*.
 
+6. **The `axis` block is a measurement or a refusal sentence, never an
+   optional number.** For `add` / `ablate` the producer projects the last
+   token's residual stream at the intervention's hook layer onto the unit
+   direction, baseline and intervened, and reports the pair beside the norm of
+   the orthogonal remainder — the one thing the viewer needs to slide a placed
+   point along a phase-1 axis instead of only reporting that the logits moved.
+   The perpendicular number ships with it because a point that moved 1 along the
+   axis while its perpendicular part moved 40 did not travel along the axis in
+   any useful sense. For `clamp` and `cap` the block is `{"refused": "<why>"}`:
+   those verbs name no direction, and a projection would be onto whatever vector
+   happened to be in scope. `ablate` fires at every layer by construction, so
+   there is no single layer it *is* at; the projection is then taken at the layer
+   the DIRECTION's own space names and `observed_where` says so in words.
+   `intervene.py::axis_block` is the only place this is computed;
+   `viewer/src/scene/interp/steer.ts::steerAxis` is the only place it is read.
+
+   **Two independent gates, and the viewer must not merge them.** Whether the
+   intervention measured an axis is the producer's question, answered above.
+   Whether the loaded MAP can be laid out along that same direction is D2's
+   question, answered by `data/directions.ts::axisRefusal`. Both can fail for
+   unrelated reasons, and on the only direction-backed sweep this repo can
+   currently produce on gpt2 the second one does: `refusal-style-v1-L8` lives in
+   `resid.L8` while the gpt2 map's points are `W_E.centered` token embeddings, so
+   the numbers are real and the map link is refused in the same breath. A single
+   "axis unavailable" would hide which wall was hit.
+   `viewer/tests/unit/steer-axis.test.ts` pins that they never swap places.
+
 KL is `KL(baseline ‖ intervened)` in bits over all 50,257 logits at the final
 position, computed in 64-bit. It says how far the distribution moved and nothing
 about whether it moved where you wanted — that is what `targets` (teacher-forced
@@ -293,9 +368,101 @@ when it undercuts the headline. The shipped gpt2 sweep is exactly that case: SAE
 feature 17840 detects the Golden Gate Bridge cleanly and steers it not at all.
 
 Written to `out/<model>/interp/` beside the other bundles the viewer fetches,
-NOT to `out/<model>/`. Viewer: `loadIntervene()` in `data/interp.ts`,
+NOT to `out/<model>/`, and **listed in that directory's `index.json`** — a model
+may ship several sweeps (one per verb, one per experiment) and the manifest is
+the only thing that enumerates them. `nebulai intervene` adds its own file to
+the list, and `write_bundles` carries existing `intervene_*.json` entries over
+instead of rebuilding the list from what it alone just wrote. The viewer chooses
+between them on one property: `loadSteerBundle()` opens the first sweep whose
+rows carry an `axis` measurement, because that is what the rail's axis section
+reads, and falls back to the first that loads so an axis-less sweep still shows
+its own refusal rather than an empty panel. A manifest entry with no file behind
+it is skipped, not fatal.
+
+Viewer: `loadSteerBundle()` / `loadIntervene()` in `data/interp.ts`,
 `scene/interp/steer.ts` (all arithmetic, GPU-free and unit-tested),
 `SteerDriver.ts` (the stage) and `chrome/SteerRail.tsx` (the text half).
+
+## absorbing study (`out/absorbing/<study_id>/absorbing.json`)
+
+The Waluigi absorbing-state test (`backend/absorbing.py`). Self-play under a
+persona rule on a pinned instruct model, judged by a **stated regular
+expression** that ships in the artifact — no model judges these transcripts, not
+another model and not the model under test. `study_id` is
+`<model-slug>@<revision[:12]>.<rule_id>`, so a study can never be confused with
+the same rule measured on other weights.
+
+```jsonc
+{
+  "meta": {
+    "study_id": …, "model": …, "revision": …, "created": …,
+    "elapsed_s": …,                       // BOTH sittings when resumed
+    "config": {
+      "n_conversations_requested": 2400,  // what was asked for
+      "n_conversations_run": 2400,        // what was reached — never folded
+      "n_turns": 6, "batch_size": 48,
+      "max_new_assistant": 40, "max_new_user": 20,
+      "temperature": 1.0, "top_p": 0.95, "seed_base": 1234,
+      "seeding": "…",                     // per (batch, turn), and says so
+      "stopped_early": false, "deadline_s": …,
+      "resumed_from": { "n": 1632, "elapsed_s": …, "deadline_s": …,
+                        "note": "…" }    // or null
+    }
+  },
+  "rule": { "id": …, "statement": …, "pattern": "!", "flags": 0,
+            "persona": …, "user_system": …, "judge": "…no model judges…" },
+  "stats": { …, "verdict": "absorbing_above_null" },
+  "pilot": { "rates": {…}, "chosen": …, "target": 0.35, … },
+  "sequences": [[0,1,1,0,0,1], …],        // every conversation's flags
+  "transcripts": [{ "index": 0, "opener": …, "turns": […] }, …]
+}
+```
+
+Four rules, and the last two are about the resume:
+
+1. **The flags are the data and the transcripts are the evidence.** Every
+   conversation's violation sequence ships; only the first twelve transcripts
+   do. That is enough for a reader to re-judge the regex against real text
+   without the artifact carrying 2,400 conversations of prose.
+2. **The null is within-conversation, and it ships with the figure (R5).**
+   Conversations differ in how often they violate, and a mixture of high- and
+   low-rate conversations produces P(1|1) > base rate with no temporal dynamics
+   at all. The null permutes each conversation's own sequence, preserving its
+   rate exactly and destroying only the order. `verdict` therefore has three
+   non-trivial values and the middle one is a refusal:
+   `absorbing_above_null`, `above_base_rate_explained_by_heterogeneity`,
+   `not_absorbing`.
+3. **A continuation is a continuation or it is refused — never a splice.**
+   `run_study(..., resume=resume_from(doc))` starts the batch loop at the stored
+   N instead of recomputing it, which is sound only because `run_batch` derives
+   the opener from the conversation index and every seed from the batch's first
+   index. `Resume.check_against` refuses unless the rule, model id, revision,
+   turns, batch size, both token budgets, temperature, top-p and seed base all
+   match the stored study AND the stored N is a multiple of the batch size —
+   resuming off a boundary would shift every later batch's seed. The analysis
+   then runs over both halves' `sequences` together; the transition matrix is
+   counted once over the whole, never added up from two separate analyses. The
+   earlier run's transcripts are kept alongside the new ones so the earlier
+   indices stay auditable, and `resumed_from` says in the artifact which
+   conversations came from which sitting.
+4. **`index.json` is derived, never edited.** `write_study` rewrites
+   `out/absorbing/index.json` from the studies on disk. A study continued to a
+   larger N changes its own `n_conversations`, `verdict` and `stopped_early` in
+   place, and a hand-maintained index would go on advertising the number the
+   first run stopped at.
+
+The shipped study is `smollm2-135m-instruct@12fd25f77366.no_exclamation`:
+2,400 self-play conversations x 6 assistant turns = 14,400 judged turns and
+12,000 transitions, run in 3.4 h of wall clock across two sittings (1,632
+conversations in the first, continued with `--resume`). P(violate at t+1 |
+violated at t) = **0.5517** [0.5341, 0.5692] (1,691/3,065) against a base rate
+of 0.2593 [0.2516, 0.2673] over the turns that can be a t+1, and P(violate |
+in character) = 0.1590 [0.1516, 0.1668]. The within-conversation null's p95 is
+0.5325 (mean 0.5244, n=500, p=0.0020); the conditional is above that p95 and
+above the base rate, and the recorded verdict is `absorbing_above_null`.
+
+Viewer: `data/absorbing.ts` (`loadStudy`, `loadStudyIndex`, and the verdict
+prose) and `chrome/AbsorbingPanel.tsx`.
 
 ## persona space (`out/persona/<space_id>/`) — the placement contract
 
