@@ -279,6 +279,24 @@ def run_analyze(a: argparse.Namespace) -> None:
             if r.status == "confirmed":
                 r.status = "suggestive"
 
+    if not results:
+        # Every cue needs both arms. One arm recorded `not_run` (no credentials,
+        # a missing optional dependency) leaves a store full of real trials and
+        # nothing to compare, and the useful output is the reason, named per arm.
+        have = sorted({t.model_key for t in trials if t.cue != CANARY_CUE})
+        want = [x.key for x in m.models]
+        raise SystemExit(
+            "no cue has trials for both arms, so there is nothing to compare.\n"
+            f"  manifest arms: {want}\n"
+            f"  arms with discovery trials in the store: {have or 'none'}\n"
+            f"  missing: {[k for k in want if k not in have] or 'none'}\n"
+            "  This is not an analysis failure: `behavior run` records an "
+            "unreachable arm as not_run with its reason rather than dropping it "
+            "from the manifest, and an artifact with one arm would be a "
+            "comparison with itself. Collect the missing arm, or analyze a study "
+            "whose arms are both reachable."
+        )
+
     landscape = X.cue_landscape([r.cue for r in results], embedder)
     diagnostics = {
         "mmd_bandwidth": bw,

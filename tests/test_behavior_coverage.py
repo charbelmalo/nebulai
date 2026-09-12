@@ -327,3 +327,69 @@ def test_no_trials_argument_still_produces_a_reason(tmp_path):
     assert cov["cues_collected"] == 0
     assert cov["complete"] is False
     assert cov["reason"]
+
+# --- one arm present, the other recorded not_run ----------------------------
+#
+# This is the shape of every xAI arm in this environment: the manifest names two
+# models, the runner reaches one, and the store fills up with real trials that
+# cannot be compared to anything. `analyze` used to reach the landscape with an
+# empty cue list and die inside numpy's eigensolver ("0-dimensional array
+# given"), which tells a reader nothing about what went wrong or what to do.
+
+
+def test_analyze_refuses_a_single_arm_study_and_names_the_missing_arm(tmp_path):
+    from argparse import Namespace
+
+    from nebulai.behavior.cli import run_analyze, run_plan
+
+    out = tmp_path / "out"
+    run_plan(
+        Namespace(
+            study_id="onearm",
+            preset="fake",
+            cues="control",
+            trials=4,
+            blocks=2,
+            min_valid=1,
+            min_within_block=1,
+            seed=7,
+            pin_b=None,
+            exploratory=False,
+            max_cost_usd=0.0,
+            notes="",
+            out=str(out),
+        )
+    )
+    manifest = out / "onearm" / "manifest.json"
+    m = CLI.load_manifest(str(manifest))
+
+    # Collect arm A only, exactly as a run whose arm B was recorded not_run
+    # would leave the store.
+    store = TrialStore(out / "onearm" / "trials.sqlite")
+    store.bind_manifest(m.frozen_hash or "sha256:test", m.study_id)
+    store.record_many(
+        [
+            _trial(m.study_id, cue=m.cues[0].text, repeat=i, model="A")
+            for i in range(4)
+        ]
+    )
+    store.close()
+
+    with pytest.raises(SystemExit) as e:
+        run_analyze(
+            Namespace(
+                manifest=str(manifest),
+                embedder="hash",
+                permutations=50,
+                capability_reference=None,
+                out=str(out),
+            )
+        )
+    msg = str(e.value)
+    assert "nothing to compare" in msg
+    assert "'B'" in msg or '"B"' in msg, "the refusal has to name the missing arm"
+    assert "not_run" in msg, "and say why an arm can be absent"
+    assert not (out / "onearm" / "behavior.json").exists(), (
+        "a refused analysis must not leave an artifact behind"
+    )
+

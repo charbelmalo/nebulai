@@ -585,3 +585,56 @@ def test_every_cue_carries_the_reasons_it_is_in_the_state_it_is_in():
     for c in payload["cues"]:
         assert c["status"]
         assert c["reasons"], f"{c['cue']} has a status with no stated reason"
+
+# --------------------------------------------------------------------------
+# too few cues to project
+# --------------------------------------------------------------------------
+#
+# A single-arm study (the other arm recorded `not_run`) and a stage killed
+# before its first cue completed both reach the landscape with 0 or 1 cues.
+# The eigensolver used to raise LinAlgError on the empty matrix, which is the
+# one outcome that tells a reader nothing.
+
+
+def test_no_cues_is_a_missing_landscape_not_a_crash():
+    land = cue_landscape([], HashEmbedder(), 2)
+    assert land["status"] == "missing"
+    assert land["coords"] == []
+    assert land["reason"], "a missing landscape has to say why"
+    assert land["projection"]["quantity"] is None, "never 0.0 for unmeasured"
+
+
+def test_fewer_cues_than_axes_is_also_missing():
+    """Two points cannot support two axes, and a fitted-looking layout over
+    them would be an invention with coordinates."""
+    for n in (1, 2):
+        land = _landscape(CUE_WORDS[:n], dims=2)
+        assert land["status"] == "missing", f"{n} cues fitted a 2-axis landscape"
+        assert land["explained_variance_ratio"] == []
+        assert land["pca_axes_shape"] == [0, 0]
+
+
+def test_enough_cues_still_projects_and_says_measured():
+    land = _landscape(CUE_WORDS, dims=2)
+    assert land["status"] == "measured"
+    assert len(land["coords"]) == len(CUE_WORDS)
+    assert land["projection"]["quantity"] is not None
+
+
+def test_a_missing_landscape_keeps_the_position_warning():
+    """The caveat is about what a position MEANS; its absence is not a reason
+    to drop it, because the page renders the same caption either way."""
+    land = cue_landscape([], HashEmbedder(), 2)
+    assert "cue words" in land["projection"]["warning"]
+    assert land["projection"]["encoder"]
+
+
+def test_a_missing_landscape_survives_the_nan_guard(tmp_path):
+    payload = _export(landscape=cue_landscape([], HashEmbedder(), 2))
+    p = write_export(tmp_path / "behavior.json", payload)
+    import json as _json
+
+    back = _json.loads(p.read_text(encoding="utf-8"))
+    assert back["landscape"]["status"] == "missing"
+    assert back["landscape"]["projection"]["quantity"] is None
+

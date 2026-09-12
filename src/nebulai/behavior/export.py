@@ -44,6 +44,42 @@ def cue_landscape(cue_texts: list[str], embedder: Embedder, dims: int = 2) -> di
     (§7.1). Two cues are near each other here because the *words* are near each
     other in a pinned neutral encoder, and that is all the position means.
     """
+    # A landscape needs at least as many cues as axes, and a study can legally
+    # have fewer -- a single-arm run (the other arm recorded `not_run`), or a
+    # stage killed before its first cue completed. Refusing to project is the
+    # right answer there; crashing inside the eigensolver is not, and writing
+    # invented coordinates would be worse than either.
+    if len(cue_texts) <= dims:
+        return {
+            "method": "pca",
+            "dims": dims,
+            "coords": [],
+            "pca_mean": [],
+            "pca_axes": [],
+            "pca_axes_shape": [0, 0],
+            "explained_variance_ratio": [],
+            "status": "missing",
+            "reason": (
+                f"{len(cue_texts)} comparable cue(s): a {dims}-axis projection "
+                f"needs more than {dims}. No coordinates are emitted — the page "
+                f"shows the cue list without a landscape rather than a layout "
+                f"fitted to one point."
+            ),
+            "projection": {
+                "quantity": None,
+                "quantity_label": (
+                    "no projection: too few comparable cues to fit one"
+                ),
+                "total_variance": None,
+                "encoder": getattr(embedder, "id", "unknown"),
+                "encoder_revision": getattr(embedder, "revision", ""),
+                "warning": (
+                    "positions come from the cue words, not from any model's "
+                    "behaviour; distance here is lexical-semantic similarity of "
+                    "the cues themselves"
+                ),
+            },
+        }
     V = embedder.encode(cue_texts)
     fit = _pca_rows(np.asarray(V, dtype=np.float64), dims)
     total = float(fit.total_var) or 1.0
@@ -51,6 +87,7 @@ def cue_landscape(cue_texts: list[str], embedder: Embedder, dims: int = 2) -> di
     return {
         "method": "pca",
         "dims": dims,
+        "status": "measured",
         "coords": [[round(float(x), 5) for x in row] for row in fit.coords],
         # AXIS-MAJOR flat layout, matching `interp/bundles.py`: axis j is
         # axes[j*d:(j+1)*d]. Shipping the transform is what makes the landscape
