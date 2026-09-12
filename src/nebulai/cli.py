@@ -2046,12 +2046,20 @@ def _absorbing_model(args):
     return LlamaNumpy(args.model, revision=args.revision, local_dir=args.local_dir)
 
 
-def _absorbing_progress(quiet: bool):
+def _absorbing_progress(quiet: bool, start: int = 0):
+    """Progress lines for a study run.
+
+    `start` is the conversation the loop began at, which is non-zero on a
+    resume. Without it the rate would be computed from conversations an earlier
+    run paid for against this run's clock, and the ETA it printed would be an
+    encouraging lie.
+    """
     if quiet:
         return None
 
     def fn(done: int, total: int, secs: float) -> None:
-        rate = done / secs if secs > 0 else 0.0
+        made = done - start
+        rate = made / secs if secs > 0 else 0.0
         eta = (total - done) / rate if rate > 0 else float("nan")
         print(f"  conversations {done}/{total}  {rate*60:.1f}/min  "
               f"eta {eta/60:.0f} min", flush=True)
@@ -2107,10 +2115,29 @@ def _absorbing_report(doc: dict) -> None:
 
 
 def _run_absorbing_run(args) -> None:
-    from .backend.absorbing import RULES, choose_rule, pilot_rates, run_study, write_study
+    from .backend.absorbing import (
+        RULES,
+        choose_rule,
+        pilot_rates,
+        read_study,
+        resume_from,
+        run_study,
+        write_study,
+    )
 
     model = _absorbing_model(args)
     print(f"{model.model_id} @ {model.revision} — {model.n_layer} layers, d={model.d}")
+    resume = None
+    if args.resume:
+        resume = resume_from(read_study(args.resume, Path(args.out) / "absorbing"))
+        print(f"resuming {args.resume} at conversation {resume.start_index} "
+              f"({resume.elapsed_s/60:.0f} min already spent); its rule and every "
+              f"generation parameter must match or the run refuses")
+        if args.rule is None:
+            # the stored study already chose a rule by a pilot and recorded it;
+            # re-piloting would spend model time re-deriving that choice, and
+            # picking a different rule would not be a resume at all
+            args.rule = resume.rule_id
     pilot = None
     rule_id = args.rule
     if rule_id is None:
@@ -2139,9 +2166,18 @@ def _run_absorbing_run(args) -> None:
         seed_base=args.seed_base,
         null_n=args.null_n,
         pilot=pilot,
-        progress=_absorbing_progress(args.quiet),
+        progress=_absorbing_progress(
+            args.quiet, 0 if resume is None else resume.start_index
+        ),
         deadline_s=None if args.deadline_min is None else args.deadline_min * 60.0,
+        resume=resume,
     )
+    if resume is not None and study.pilot is None:
+        # carry the original pilot forward: the rule was chosen by it, and a
+        # study whose `pilot` went null on resume would look like a study whose
+        # rule was picked by hand
+        study.pilot = (read_study(args.resume, Path(args.out) / "absorbing")
+                       or {}).get("pilot")
     path = write_study(study, Path(args.out) / "absorbing")
     _absorbing_report(study.to_dict())
     print(f"\nwrote {path}")
@@ -3077,6 +3113,16 @@ def main() -> None:
         default=None,
         help="stop starting new batches after this many minutes and report the N "
         "actually reached, marked stopped_early",
+    )
+    ar.add_argument(
+        "--resume",
+        default=None,
+        metavar="STUDY_ID",
+        help="continue a study that stopped early instead of recomputing it. The "
+        "stored N must be a multiple of --batch-size and the rule, model, "
+        "revision, turns, batch size, token budgets, temperature, top-p and "
+        "seed base must all match, because the seed is the batch's first index; "
+        "otherwise the run refuses rather than stitching two experiments",
     )
     ar.add_argument("--quiet", action="store_true", help="no progress lines")
     ar.set_defaults(fn=_run_absorbing_run)

@@ -383,6 +383,87 @@ Viewer: `loadSteerBundle()` / `loadIntervene()` in `data/interp.ts`,
 `scene/interp/steer.ts` (all arithmetic, GPU-free and unit-tested),
 `SteerDriver.ts` (the stage) and `chrome/SteerRail.tsx` (the text half).
 
+## absorbing study (`out/absorbing/<study_id>/absorbing.json`)
+
+The Waluigi absorbing-state test (`backend/absorbing.py`). Self-play under a
+persona rule on a pinned instruct model, judged by a **stated regular
+expression** that ships in the artifact — no model judges these transcripts, not
+another model and not the model under test. `study_id` is
+`<model-slug>@<revision[:12]>.<rule_id>`, so a study can never be confused with
+the same rule measured on other weights.
+
+```jsonc
+{
+  "meta": {
+    "study_id": …, "model": …, "revision": …, "created": …,
+    "elapsed_s": …,                       // BOTH sittings when resumed
+    "config": {
+      "n_conversations_requested": 2400,  // what was asked for
+      "n_conversations_run": 2400,        // what was reached — never folded
+      "n_turns": 6, "batch_size": 48,
+      "max_new_assistant": 40, "max_new_user": 20,
+      "temperature": 1.0, "top_p": 0.95, "seed_base": 1234,
+      "seeding": "…",                     // per (batch, turn), and says so
+      "stopped_early": false, "deadline_s": …,
+      "resumed_from": { "n": 1632, "elapsed_s": …, "deadline_s": …,
+                        "note": "…" }    // or null
+    }
+  },
+  "rule": { "id": …, "statement": …, "pattern": "!", "flags": 0,
+            "persona": …, "user_system": …, "judge": "…no model judges…" },
+  "stats": { …, "verdict": "absorbing_above_null" },
+  "pilot": { "rates": {…}, "chosen": …, "target": 0.35, … },
+  "sequences": [[0,1,1,0,0,1], …],        // every conversation's flags
+  "transcripts": [{ "index": 0, "opener": …, "turns": […] }, …]
+}
+```
+
+Four rules, and the last two are about the resume:
+
+1. **The flags are the data and the transcripts are the evidence.** Every
+   conversation's violation sequence ships; only the first twelve transcripts
+   do. That is enough for a reader to re-judge the regex against real text
+   without the artifact carrying 2,400 conversations of prose.
+2. **The null is within-conversation, and it ships with the figure (R5).**
+   Conversations differ in how often they violate, and a mixture of high- and
+   low-rate conversations produces P(1|1) > base rate with no temporal dynamics
+   at all. The null permutes each conversation's own sequence, preserving its
+   rate exactly and destroying only the order. `verdict` therefore has three
+   non-trivial values and the middle one is a refusal:
+   `absorbing_above_null`, `above_base_rate_explained_by_heterogeneity`,
+   `not_absorbing`.
+3. **A continuation is a continuation or it is refused — never a splice.**
+   `run_study(..., resume=resume_from(doc))` starts the batch loop at the stored
+   N instead of recomputing it, which is sound only because `run_batch` derives
+   the opener from the conversation index and every seed from the batch's first
+   index. `Resume.check_against` refuses unless the rule, model id, revision,
+   turns, batch size, both token budgets, temperature, top-p and seed base all
+   match the stored study AND the stored N is a multiple of the batch size —
+   resuming off a boundary would shift every later batch's seed. The analysis
+   then runs over both halves' `sequences` together; the transition matrix is
+   counted once over the whole, never added up from two separate analyses. The
+   earlier run's transcripts are kept alongside the new ones so the earlier
+   indices stay auditable, and `resumed_from` says in the artifact which
+   conversations came from which sitting.
+4. **`index.json` is derived, never edited.** `write_study` rewrites
+   `out/absorbing/index.json` from the studies on disk. A study continued to a
+   larger N changes its own `n_conversations`, `verdict` and `stopped_early` in
+   place, and a hand-maintained index would go on advertising the number the
+   first run stopped at.
+
+The shipped study is `smollm2-135m-instruct@12fd25f77366.no_exclamation`:
+2,400 self-play conversations x 6 assistant turns = 14,400 judged turns and
+12,000 transitions, run in 3.4 h of wall clock across two sittings (1,632
+conversations in the first, continued with `--resume`). P(violate at t+1 |
+violated at t) = **0.5517** [0.5341, 0.5692] (1,691/3,065) against a base rate
+of 0.2593 [0.2516, 0.2673] over the turns that can be a t+1, and P(violate |
+in character) = 0.1590 [0.1516, 0.1668]. The within-conversation null's p95 is
+0.5325 (mean 0.5244, n=500, p=0.0020); the conditional is above that p95 and
+above the base rate, and the recorded verdict is `absorbing_above_null`.
+
+Viewer: `data/absorbing.ts` (`loadStudy`, `loadStudyIndex`, and the verdict
+prose) and `chrome/AbsorbingPanel.tsx`.
+
 ## persona space (`out/persona/<space_id>/`) — the placement contract
 
 A persona space is a fixed 2-D basis that arbitrary text can be projected into,

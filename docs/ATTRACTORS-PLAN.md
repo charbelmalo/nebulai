@@ -571,6 +571,16 @@ in the same frame with visibly different glyphs; the absorbing-state panel
 reports a transition matrix with intervals and an n; and a persona space whose
 control failed cannot be silently selected as the default.
 
+**Measured.** `smollm2-135m-instruct@12fd25f77366.no_exclamation` — 2,400
+self-play conversations x 6 assistant turns, 14,400 judged turns, 12,000
+transitions. P(violate at t+1 | violated at t) = **0.5517** [0.5341, 0.5692]
+(1,691/3,065) against a base rate of 0.2593 [0.2516, 0.2673] and a
+within-conversation shuffle null whose p95 is 0.5325 (mean 0.5244, n=500,
+p=0.0020). Verdict `absorbing_above_null`. The judge is the rule's own regular
+expression, stated in the artifact; no model judges these transcripts. Run in
+two sittings — 1,632 conversations, then continued with `--resume` to 2,400 —
+for 3.4 h of CPU wall clock in total.
+
 ---
 
 ### Phase 3 — P3 Ensemble (~2 weeks)
@@ -605,9 +615,11 @@ control failed cannot be silently selected as the default.
 - `viewer/src/app/slices/sessions.ts` — `ensembleId`, `showEnvelope`.
 
 **Episodes shipped.** 1 · **the Waluigi absorbing-state test, live** — persona
-prompt on SmolLM2-Instruct, ~2,000 self-play conversations, P(violate at t+1 |
+prompt on SmolLM2-Instruct, 2,400 self-play conversations, P(violate at t+1 |
 violated at t) against the base rate. Nobody has published this cleanly on open
-weights, and the whole apparatus for it exists once phase 3 lands.
+weights, and the whole apparatus for it exists once phase 3 lands. The statistic
+itself is already measured — see phase 2 — so what phase 4 adds is the fan over
+seeds, not the number.
 6 · Vending-Bench as a fan of runs.
 
 **Tests.** `tests/test_seer_budget.py` (run 1 is `MISSING`, not 0; approval
@@ -768,7 +780,11 @@ before phase 0's channel attribute and again before phase 1's axis.
 spare `.w` lane.
 
 **C · Numpy generation throughput.** Phase 3's ~2,000 self-play conversations
-are the heaviest compute in the plan, on a CPU forward pass.
+are the heaviest compute in the plan, on a CPU forward pass. *Measured:* 135M at
+6 turns and 48 conversations per batch ran 2,400 conversations in 3.4 h,
+5.1 s per conversation, with the KV cache on from the first commit.
+The risk is real — it is the reason the study ships a `--resume` that continues a
+deadline-stopped run at the batch boundary instead of recomputing it.
 *Mitigation:* KV cache from the first commit; batch across trials; if 360M
 lands under ~5 tok/s, run the ensemble at 135M and use 360M only for the
 steering rail, stating the model difference on the figure.
