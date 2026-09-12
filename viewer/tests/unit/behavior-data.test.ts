@@ -237,6 +237,84 @@ describe("the landscape transform is persisted so published cues never move", ()
     // plausible-looking and wrong, which is worse than an error.
     expect(() => projectIntoLandscape(l, [1, 2])).toThrow(/2 dims/);
   });
+
+  /*  A real artifact in this repo has this shape: `capability-control-...`
+   *  compared 2 cues across both arms, which is fewer than the 2 axes a
+   *  landscape needs, so the exporter emitted `status: "missing"` with no
+   *  coordinates at all. */
+  const missing: BehaviorLandscape = {
+    method: "pca",
+    dims: 2,
+    status: "missing",
+    reason: "2 comparable cue(s): a 2-axis projection needs more than 2.",
+    coords: [],
+    pca_mean: [],
+    pca_axes: [],
+    pca_axes_shape: [0, 0],
+    explained_variance_ratio: [],
+    projection: {
+      quantity: null,
+      quantity_label: "no projection: too few comparable cues to fit one",
+      total_variance: null,
+      encoder: "test",
+      encoder_revision: "",
+      warning: "positions come from the cue words",
+    },
+  };
+
+  it("refuses to project into a landscape that was never fitted", () => {
+    // [0, 0] would be a coordinate the cue never earned, at the origin of a
+    // plot that does not exist.
+    expect(() => projectIntoLandscape(missing, [1, 2, 3])).toThrow(/no fitted landscape/);
+  });
+
+  it("carries the refusal's reason into the error", () => {
+    expect(() => projectIntoLandscape(missing, [])).toThrow(/2 comparable cue/);
+  });
+
+  it("keeps the unmeasured projection quantity null rather than zero", () => {
+    expect(missing.projection.quantity).toBeNull();
+    expect(missing.projection.total_variance).toBeNull();
+  });
+});
+
+// ── the two different empty plots ──────────────────────────────────────────
+
+describe("a study with no landscape is not the same as a filter with no hits", () => {
+  /*  Comments in the page EXPLAIN this distinction and quote both branches, so
+   *  they are stripped before the source is searched. */
+  const page = readFileSync(
+    join(import.meta.dirname, "..", "..", "src", "chrome", "BehaviorPage.tsx"),
+    "utf8",
+  )
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
+  it("branches on the exporter's status before it looks at the points", () => {
+    // `coords: []` alone is ambiguous: it is both "nothing was fitted" and
+    // "your filter matched nothing". The page has to read the status.
+    const onStatus = page.indexOf('l.status === "missing"');
+    const onPoints = page.indexOf("pts.length === 0");
+    expect(onStatus).toBeGreaterThan(-1);
+    expect(onPoints).toBeGreaterThan(-1);
+    expect(onStatus).toBeLessThan(onPoints);
+  });
+
+  it("tells the reader no landscape was fitted, not that their filter is wrong", () => {
+    expect(page).toContain("No landscape was fitted for this study");
+  });
+
+  it("shows the exporter's own reason rather than inventing one", () => {
+    expect(page).toContain("l.reason");
+  });
+
+  it("points the reader at the views that do have every collected cue", () => {
+    expect(page).toMatch(/ranked and table views/);
+  });
+
+  it("keeps the filter-specific message for the filter case", () => {
+    expect(page).toContain("No cue in the current filter has a landscape position");
+  });
 });
 
 // ── partial studies ────────────────────────────────────────────────────────

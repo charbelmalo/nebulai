@@ -84,6 +84,13 @@ export interface BehaviorCue {
 export interface BehaviorLandscape {
   method: string;
   dims: number;
+  /** `"missing"` when the exporter refused to fit: a study with fewer
+   *  comparable cues than axes has no landscape, and an empty `coords` on its
+   *  own cannot be told apart from a filter that matched nothing. Older
+   *  artifacts predate the field, so absent reads as fitted. */
+  status?: "measured" | "missing";
+  /** why no landscape was fitted; present only with `status: "missing"` */
+  reason?: string;
   coords: number[][];
   pca_mean: number[];
   /** axis-major flat: axis j is pca_axes[j*d …]; shape is [n_axes, d] */
@@ -91,9 +98,10 @@ export interface BehaviorLandscape {
   pca_axes_shape: [number, number];
   explained_variance_ratio: number[];
   projection: {
-    quantity: number;
+    /** null when unmeasured — never 0, which would read as "no variance" */
+    quantity: number | null;
     quantity_label: string;
-    total_variance: number;
+    total_variance: number | null;
     encoder: string;
     encoder_revision: string;
     warning: string;
@@ -353,6 +361,14 @@ export function searchCues(cues: BehaviorCue[], query: string): BehaviorCue[] {
  *  every cue already permalinked. */
 export function projectIntoLandscape(l: BehaviorLandscape, vec: number[]): number[] {
   const [nAxes, d] = l.pca_axes_shape;
+  if (l.status === "missing" || nAxes === 0 || d === 0) {
+    //  There is no transform to project through. Returning [0, 0] would put the
+    //  new cue at a coordinate it never earned, and at the origin of a plot that
+    //  does not exist.
+    throw new Error(
+      `projectIntoLandscape: this study has no fitted landscape${l.reason ? ` (${l.reason})` : ""}`,
+    );
+  }
   if (vec.length !== d) {
     throw new Error(
       `projectIntoLandscape: vector has ${vec.length} dims, the landscape was fit on ${d}`,

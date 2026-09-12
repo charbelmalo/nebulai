@@ -410,6 +410,20 @@ function Landscape({
   const idx = data.cue_index;
   const maxEffect = maxMeasuredEffect(data.cues);
 
+  /*  Two different empty plots, and a reader has to be able to tell them
+   *  apart. `status: "missing"` is the STUDY having no landscape at all — too
+   *  few comparable cues to fit axes through — and no choice of filter will
+   *  produce one. An empty `pts` with a fitted landscape is the filter. */
+  if (l.status === "missing") {
+    return (
+      <p class="behavior-note">
+        <strong>No landscape was fitted for this study.</strong>{" "}
+        {l.reason ?? `A ${l.dims}-axis projection needs more than ${l.dims} comparable cues.`}{" "}
+        The ranked and table views show every cue that was collected.
+      </p>
+    );
+  }
+
   const pts = cues
     .map((c) => ({ c, xy: l.coords[idx[c.cue] ?? -1] }))
     .filter((p): p is { c: BehaviorCue; xy: number[] } => Array.isArray(p.xy));
