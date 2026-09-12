@@ -95,6 +95,98 @@ def test_truncation_is_a_subset_of_the_untruncated_run(tmp_path):
     assert set(part) <= set(full)
 
 
+# --- durability: how much work a kill can throw away ----------------------
+
+
+def test_the_buffer_flushes_on_the_clock_not_only_on_a_record_count(tmp_path, monkeypatch):
+    """A slow arm must not be able to lose an hour of work in a resumable runner.
+
+    The loop buffers records and writes them when 25 have accumulated. On the
+    fake adapter that is instant, so the record threshold is invisible; on fp32
+    GPT-2-XL it measured 3.9 min/trial, which makes 25 trials more than 90
+    minutes of unpersisted work -- and a `kill -9` at minute 89 leaves the
+    store with nothing to resume onto.
+
+    So the flush is also bounded by wall clock. The test does not sleep: it
+    advances a fake `time.monotonic` past FLUSH_EVERY_SECONDS on each group and
+    counts the writes, which is the behaviour that matters and costs no test
+    runtime.
+    """
+    m = _manifest(study_id="t_flush_clock", trials=40)
+    writes: list[int] = []
+
+    # The clock advances on every READ, not inside record_many: the loop only
+    # calls record_many on a flush, so a clock driven from there would be
+    # frozen exactly between the groups whose slowness is the thing under test.
+    clock = {"t": 1000.0}
+
+    def monotonic():
+        clock["t"] += R.FLUSH_EVERY_SECONDS + 1.0
+        return clock["t"]
+
+    monkeypatch.setattr(R.time, "monotonic", monotonic)
+
+    with TrialStore(tmp_path / "c.sqlite") as store:
+        real = store.record_many
+
+        def counting(recs):
+            if recs:
+                writes.append(len(recs))
+            return real(recs)
+
+        monkeypatch.setattr(store, "record_many", counting)
+        runner = R.Runner(m, store)
+        runner.batch_size = 1           # one trial per group, so the timer rules
+        res = runner.run("discovery", cue_limit=1)
+        rows = list(store.iter_trials("t_flush_clock"))
+
+    assert res.completed == len(rows) > 25, "need more than one record-threshold"
+    # Without the timer this is ceil(n/25) = 4 writes for 80 trials. With every
+    # group declared slow it is one write per group, i.e. one per trial here,
+    # which is the bound that matters: a kill loses the trial in flight, not 25.
+    assert len(writes) > (len(rows) + 24) // 25, (
+        f"only {len(writes)} flushes for {len(rows)} trials -- the wall-clock "
+        f"flush did not fire"
+    )
+    assert max(writes) < R.FLUSH_EVERY_RECORDS, (
+        "the timer should have flushed before the record threshold was reached"
+    )
+    assert sum(writes) == len(rows), "a record was written twice or not at all"
+    # and no empty write: an idle timer must not hit SQLite for nothing
+    assert all(n > 0 for n in writes)
+
+
+def test_a_fast_arm_still_batches_rather_than_writing_every_trial(tmp_path, monkeypatch):
+    """The timer must not turn into a per-trial write on a fast arm.
+
+    With the clock standing still, the only thing that can flush is the record
+    count -- so this pins that the timer is an *additional* condition and has
+    not replaced the batching that keeps SQLite off the hot path.
+    """
+    m = _manifest(study_id="t_flush_fast", trials=40)
+    writes: list[int] = []
+    monkeypatch.setattr(R.time, "monotonic", lambda: 5000.0)  # frozen
+
+    with TrialStore(tmp_path / "d.sqlite") as store:
+        real = store.record_many
+
+        def counting(recs):
+            if recs:
+                writes.append(len(recs))
+            return real(recs)
+
+        monkeypatch.setattr(store, "record_many", counting)
+        runner = R.Runner(m, store)
+        runner.batch_size = 1
+        res = runner.run("discovery", cue_limit=1)
+
+    assert res.completed > 25, "need to cross the record threshold at least once"
+    # ceil(n/25): every flush but the last is a full 25-record batch.
+    assert len(writes) == (res.completed + 24) // 25
+    assert max(writes) == R.FLUSH_EVERY_RECORDS, "the record threshold stopped batching"
+    assert sum(writes) == res.completed
+
+
 # --- the coverage block in the artifact ------------------------------------
 
 

@@ -78,6 +78,18 @@ class ScheduledTrial:
         return (self.arm, self.cue, self.frame_id, self.model_key, self.repeat)
 
 
+#: Flush the pending-record buffer once this many trials have accumulated.
+FLUSH_EVERY_RECORDS = 25
+
+#: ...or once this many seconds have passed since the last flush, whichever
+#: comes first. A record-count threshold alone measures durability in trials;
+#: on a slow local arm the user experiences it in minutes, and a resumable
+#: runner that can lose 90 minutes is resumable in name only. Kept small
+#: enough to bound the loss and large enough that SQLite is not the
+#: bottleneck on a fast arm.
+FLUSH_EVERY_SECONDS = 60.0
+
+
 def build_schedule(m: Manifest, arm: str) -> list[ScheduledTrial]:
     """The deterministic trial order for one arm.
 
@@ -399,6 +411,7 @@ class Runner:
         pending: list[TrialRecord] = []
         groups = batch_plan(todo, self.batch_size)
         issued = 0
+        last_flush = time.monotonic()
         for group in groups:
             model_key = group[0].model_key
             adapter = self.adapters.get(model_key)
@@ -430,9 +443,22 @@ class Runner:
             res.completed += len(recs)
             res.errors += sum(int(bool(r.error)) for r in recs)
             issued += len(group)
-            if len(pending) >= 25 or issued >= len(todo):
+            # Flush on records OR on wall clock, whichever comes first.
+            # Records alone is a resumability bug on any slow arm: fp32
+            # GPT-2-XL measured 3.9 min/trial on a 16 GB machine, so
+            # FLUSH_EVERY_RECORDS trials is over an hour and a half of work
+            # that a kill -9 throws away -- in a runner whose headline property
+            # is that it resumes. The timer bounds the loss in SECONDS instead
+            # of in trials, which is the unit the user actually loses. It also
+            # un-sticks the progress callback below, which only fires on a
+            # flush and so went silent for the same hour and a half.
+            stale = bool(pending) and (
+                time.monotonic() - last_flush >= FLUSH_EVERY_SECONDS
+            )
+            if len(pending) >= FLUSH_EVERY_RECORDS or issued >= len(todo) or stale:
                 self.store.record_many(pending)
                 pending = []
+                last_flush = time.monotonic()
                 if self.progress:
                     self.progress(
                         {"arm": arm, "done": res.completed, "total": len(todo),
