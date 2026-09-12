@@ -175,6 +175,23 @@ export interface BehaviorPublished {
   published_as: "study" | "example";
 }
 
+/** How much of the preregistered cue set this artifact actually covers.
+ *
+ *  The denominator is the load-bearing field. A reader looking at forty cues in
+ *  a hundred-cue study has no way to tell a deliberately shortened run from a
+ *  truncated database, and "complete" is the assumption they will make by
+ *  default — which is the wrong one for anything that can be interrupted.
+ *  Optional only because an artifact written before the field existed has to
+ *  keep loading; `coverageNote` treats its absence as "unknown", never as
+ *  "complete". */
+export interface BehaviorCoverage {
+  cues_planned: number;
+  cues_analyzed: number;
+  complete: boolean;
+  reason: string;
+  cue_limit?: number | null;
+}
+
 export interface BehaviorData {
   schema: string;
   generated: string;
@@ -184,6 +201,8 @@ export interface BehaviorData {
   landscape: BehaviorLandscape;
   cues: BehaviorCue[];
   cue_index: Record<string, number>;
+  /** absent in artifacts written before coverage was recorded */
+  coverage?: BehaviorCoverage;
   diagnostics: Record<string, unknown>;
   runs: BehaviorRun[];
   samples: Record<string, { cue: string; model_key: string; text: string }[]>;
@@ -199,6 +218,28 @@ export function isExampleOnly(d: BehaviorData | null): boolean {
   if (!d) return false;
   if (d.published?.published_as === "example") return true;
   return d.diagnostics?.strict_source === false;
+}
+
+/** The sentence the page owes a reader when the study did not cover its own
+ *  cue list, or `null` when it did.
+ *
+ *  Returns a note for an artifact with no `coverage` block too. Absence is not
+ *  evidence of completeness: the field was added after the first studies were
+ *  exported, and an old artifact is exactly the one whose coverage nobody can
+ *  reconstruct from the cue list alone. */
+export function coverageNote(d: BehaviorData | null): string | null {
+  if (!d) return null;
+  const c = d.coverage;
+  if (!c) {
+    return (
+      "This artifact does not record how much of its cue list it covered. It " +
+      "was exported before coverage was tracked, so the " +
+      `${d.cues.length} cues below cannot be read as the whole study.`
+    );
+  }
+  if (c.complete) return null;
+  const head = `${c.cues_analyzed} of ${c.cues_planned} preregistered cues are analyzed here.`;
+  return c.reason ? `${head} ${c.reason}` : head;
 }
 
 let cached: BehaviorData | null | undefined;

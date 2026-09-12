@@ -204,7 +204,12 @@ def run_run(a: argparse.Namespace) -> None:
         batch_size=batch,
         progress=_print_progress if a.verbose else None,
     )
-    res = runner.run(a.arm, limit=a.limit)
+    if a.cue_limit:
+        # Same reason as batch_size: the store has to carry the fact, because a
+        # reader counting 40 cues in a 100-cue manifest cannot otherwise tell a
+        # deliberate partial run from a lost database.
+        store.set_meta("cue_limit", str(int(a.cue_limit)))
+    res = runner.run(a.arm, limit=a.limit, cue_limit=a.cue_limit)
     print(
         f"arm {res.arm}: {res.completed} new, {res.skipped_existing} already "
         f"present, {res.errors} errored, ${res.spent_usd:.4f} spent"
@@ -292,14 +297,53 @@ def run_analyze(a: argparse.Namespace) -> None:
     }
     runs = [store.progress(m.study_id)]
     samples = _samples(trials, keys)
+    coverage = _coverage(m, store, results)
 
     payload = X.build_export(
-        m, results, landscape=landscape, diagnostics=diagnostics, runs=runs, samples=samples
+        m, results, landscape=landscape, diagnostics=diagnostics, runs=runs,
+        samples=samples, coverage=coverage,
     )
     out = X.write_export(d / "behavior.json", payload)
     print(f"wrote {out}  ({len(results)} cues, bandwidth {bw:.4f})")
     _print_top(results)
     store.close()
+
+
+def _coverage(m: Manifest, store: TrialStore, results: list[Any]) -> dict[str, Any]:
+    """What fraction of the preregistered cue set this artifact actually covers.
+
+    Read from the store rather than inferred from `len(results)` alone: a cue
+    can be missing because it was never collected (a `--cue-limit` run) or
+    because it was collected and every trial of it was invalid. Those are
+    different facts and the second one is already reported per cue, so the
+    reason comes from the run's own record.
+    """
+    limit = store.get_meta("cue_limit")
+    planned = len(m.cues)
+    analyzed = len(results)
+    complete = analyzed >= planned
+    if complete:
+        reason = ""
+    elif limit:
+        reason = (
+            f"run with --cue-limit {limit}: the first {limit} cues of the "
+            f"preregistered {planned} were collected at full repeats and full "
+            f"block balance. The cues that ran are not weakened by the ones "
+            f"that did not; the study's coverage is."
+        )
+    else:
+        reason = (
+            f"{planned - analyzed} of {planned} preregistered cues have no "
+            f"comparable pair of arms in the store — either not collected or "
+            f"with no valid trials for at least one model."
+        )
+    return {
+        "cues_planned": planned,
+        "cues_analyzed": analyzed,
+        "complete": complete,
+        "reason": reason,
+        "cue_limit": int(limit) if limit else None,
+    }
 
 
 def _samples(trials: list[Any], keys: list[str]) -> dict[str, list[dict[str, Any]]]:
@@ -587,6 +631,18 @@ def add_behavior_parser(sub: argparse._SubParsersAction) -> None:
     r.add_argument("--manifest", required=True)
     r.add_argument("--arm", default="discovery", help="discovery | R | G | canary")
     r.add_argument("--limit", type=int, default=None)
+    r.add_argument(
+        "--cue-limit",
+        type=int,
+        default=None,
+        help=(
+            "collect only the first N cues of the preregistered set, at FULL "
+            "repeats each. The supported way to run a local arm short: --limit cuts "
+            "the interleaved schedule and leaves every cue underpowered, while this "
+            "leaves the cues that ran exactly as preregistered and reports the "
+            "missing ones as coverage."
+        ),
+    )
     r.add_argument(
         "--batch",
         type=int,

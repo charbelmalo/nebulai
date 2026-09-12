@@ -151,9 +151,20 @@ def build_export(
     diagnostics: dict[str, Any],
     runs: list[dict[str, Any]],
     samples: dict[str, list[dict[str, Any]]] | None = None,
+    coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble the artifact. Pure — no I/O, so it is trivially testable."""
     order = {r.cue: i for i, r in enumerate(results)}
+    cov = dict(coverage or {})
+    # Coverage is always present and always states the denominator. A reader who
+    # sees 40 cues has no way to tell a 40-cue study from a 100-cue study that
+    # stopped, and "complete" is the one thing they cannot infer from the cue
+    # list itself. Absent the field they would assume complete, which is the
+    # wrong default for any run that can be interrupted.
+    cov.setdefault("cues_planned", len(m.cues))
+    cov.setdefault("cues_analyzed", len(results))
+    cov.setdefault("complete", cov["cues_analyzed"] >= cov["cues_planned"])
+    cov.setdefault("reason", "" if cov["complete"] else "not recorded")
     return {
         "schema": BEHAVIOR_SCHEMA_VERSION,
         "generated": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -210,6 +221,7 @@ def build_export(
             "artifact describes any model's internals, and no model is ranked."
         ),
         "landscape": landscape,
+        "coverage": cov,
         "cues": [_cue_dict(r) for r in results],
         "cue_index": order,
         "diagnostics": diagnostics,

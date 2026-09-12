@@ -34,6 +34,7 @@ import { useEffect, useState } from "preact/hooks";
 import { appStore, type BehaviorFilter, type BehaviorView } from "../app/store";
 import {
   cueMarkRadius,
+  coverageNote,
   cueSignificant,
   fmtMetric,
   loadBehavior,
@@ -158,6 +159,7 @@ function ErrorState({ message }: { message: string }) {
 function Study({ data, ui }: { data: BehaviorData; ui: ReturnType<typeof uiType> }) {
   const st = appStore.getState();
   const notRun = notRunArms(data);
+  const coverage = coverageNote(data);
   const searched = searchCues(data.cues, ui.query);
   const qThreshold = data.manifest.statistics.q_threshold;
 
@@ -180,6 +182,8 @@ function Study({ data, ui }: { data: BehaviorData; ui: ReturnType<typeof uiType>
         {isExampleOnly(data) && <ExampleBanner data={data} />}
 
         {notRun.length > 0 && <NotRunBanner arms={notRun} />}
+
+        {coverage !== null && <CoverageBanner note={coverage} />}
 
         <dl class="behavior-facts">
           <Fact k="Cues" v={`${data.cues.length}`} />
@@ -322,6 +326,24 @@ function ExampleBanner({ data }: { data: BehaviorData }) {
       anything about any model, including the ones named below: nothing in this
       artifact is a measurement of a deployment, and no status in it can reach{" "}
       <em>confirmed</em>.
+    </div>
+  );
+}
+
+/** Cues that were never collected are the other way a study can be partial,
+ *  and the less visible one: a missing ARM is named in the manifest and shows
+ *  up as an empty column, while a missing CUE leaves nothing behind at all. The
+ *  cue count in the facts list is the count that ran, so without this line it
+ *  reads as the study's full size. */
+function CoverageBanner({ note }: { note: string }) {
+  return (
+    <div class="behavior-banner" role="note">
+      <strong>This study does not cover its whole cue list.</strong> {note} The
+      cues that did run are not weakened by the ones that did not — each was
+      collected at its full repeat count and full block balance, so every per-cue
+      effect, permutation p and corrected q below is what it would have been in
+      the complete study. What is reduced is coverage, and the family-wise
+      correction spans only the cues listed here.
     </div>
   );
 }

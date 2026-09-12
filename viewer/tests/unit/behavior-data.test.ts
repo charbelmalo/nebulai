@@ -24,6 +24,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { appStore } from "../../src/app/store";
 import {
   cueMarkRadius,
+  coverageNote,
   cueSignificant,
   fmtMetric,
   isExampleOnly,
@@ -364,5 +365,67 @@ describe("the page's own copy obeys the claim contract", () => {
 
   it("sources the landscape caption from the fit rather than asserting it", () => {
     expect(page).toContain("quantity_label");
+  });
+});
+
+// ── coverage: the denominator a cue list cannot carry ──────────────────────
+
+describe("a study that did not cover its cue list says so", () => {
+  const mk = (over: Record<string, unknown>) => over as unknown as BehaviorData;
+
+  it("says nothing when the study covered everything", () => {
+    expect(
+      coverageNote(
+        mk({
+          cues: [cue()],
+          coverage: { cues_planned: 1, cues_analyzed: 1, complete: true, reason: "" },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("states both numbers, because the cue list only carries one of them", () => {
+    // 40 cues on screen is indistinguishable from a 40-cue study unless the
+    // denominator is printed next to it.
+    const note = coverageNote(
+      mk({
+        cues: [cue()],
+        coverage: {
+          cues_planned: 100,
+          cues_analyzed: 40,
+          complete: false,
+          reason: "run with --cue-limit 40",
+          cue_limit: 40,
+        },
+      }),
+    );
+    expect(note).toContain("40 of 100");
+    expect(note).toContain("--cue-limit 40");
+  });
+
+  it("an artifact with no coverage block is not assumed complete", () => {
+    // The field was added after the first studies were exported. Treating its
+    // absence as "complete" would silently relabel exactly the artifacts whose
+    // coverage nobody can reconstruct.
+    const note = coverageNote(mk({ cues: [cue(), cue({ cue: "b" })] }));
+    expect(note).not.toBeNull();
+    expect(note).toContain("does not record");
+    expect(note).toContain("2 cues");
+  });
+
+  it("no study at all produces no banner", () => {
+    expect(coverageNote(null)).toBeNull();
+  });
+
+  it("the banner does not let partial coverage discredit the cues that ran", () => {
+    // A partial study's per-cue numbers ARE the complete study's numbers for
+    // those cues — cue-level truncation keeps every repeat and every block. A
+    // banner that implied otherwise would throw away real measurements.
+    const src = readFileSync(
+      join(process.cwd(), "src/chrome/BehaviorPage.tsx"),
+      "utf8",
+    );
+    expect(src).toContain("not weakened by the ones that did not");
+    expect(src).toContain("spans only the cues listed here");
   });
 });

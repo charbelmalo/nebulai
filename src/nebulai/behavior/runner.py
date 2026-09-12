@@ -182,6 +182,44 @@ def batch_plan(
     return out
 
 
+def cue_prefix(m: Manifest, cue_limit: int | None) -> set[str] | None:
+    """The first `cue_limit` cues in MANIFEST order, as a set of cue texts.
+
+    A local arm can be too expensive to run to the end: GPT-2-XL in fp32 on a
+    machine that has to page it is minutes per trial, and the preregistered
+    4800-trial capability arm then does not finish in any wall clock worth
+    waiting for. There are two ways to stop early and they are not equally
+    honest:
+
+    - Truncating by **trial** (`--limit`) cuts the interleaved schedule, so every
+      cue ends up with a few repeats and none reaches `min_valid_trials` or the
+      per-block minimum. The result is a study where no single cue can be
+      tested — an answer to nothing.
+    - Truncating by **cue** keeps every cue that ran at its full repeat count and
+      its full block balance. The per-cue Δ̂, its within-block permutation p and
+      the BY correction over the cues that ran are all exactly what they would
+      have been; what is missing is cues, which is a *coverage* fact and is
+      reported as one.
+
+    So this is the supported way to run a local arm short. Manifest order, not
+    schedule order, because the preregistered cue list is the thing a reader
+    compares coverage against, and a seed-dependent prefix would make "the first
+    40 cues" mean something different on every machine.
+
+    `None` (and a limit at or above the cue count) means no truncation.
+    """
+    if cue_limit is None or cue_limit >= len(m.cues):
+        return None
+    if cue_limit <= 0:
+        raise RunnerError(
+            f"cue_limit={cue_limit} would collect no cue at all. Omit it to run "
+            f"the whole preregistered set of {len(m.cues)}."
+        )
+    keep = {c.text for c in m.cues[:cue_limit]}
+    keep.add(CANARY_CUE)  # the canary is a probe, not a cue; never truncated
+    return keep
+
+
 def canary_schedule(m: Manifest) -> list[ScheduledTrial]:
     """One canary trial per model per block (§5.5.1) — required either way."""
     return [
@@ -336,8 +374,17 @@ class Runner:
         store.bind_manifest(manifest.require_frozen(), manifest.study_id)
 
     # -- execution --------------------------------------------------------
-    def run(self, arm: str, *, limit: int | None = None) -> RunResult:
+    def run(
+        self,
+        arm: str,
+        *,
+        limit: int | None = None,
+        cue_limit: int | None = None,
+    ) -> RunResult:
         sched = canary_schedule(self.m) if arm == "canary" else build_schedule(self.m, arm)
+        keep = cue_prefix(self.m, cue_limit)
+        if keep is not None:
+            sched = [t for t in sched if t.cue in keep]
         done = self.store.completed(self.m.study_id)
         todo = [
             t

@@ -68,6 +68,8 @@ def study(tmp_path_factory) -> tuple[Path, str]:
             manifest=str(manifest),
             arm="discovery",
             limit=None,
+            cue_limit=None,
+            batch=1,
             approve=False,
             verbose=False,
             out=str(out),
