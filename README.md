@@ -308,14 +308,17 @@ uv run nebulai metrics gpt2 gpt2__neurons__h.8.mlp.c_proj   # picks up the resul
 These re-run UMAP, so they are a separate command rather than part of a build.
 Results land in `validation.json` next to `nebulai.json`.
 
-**What this currently shows**, across all sixteen **built and validated**
+**What this currently shows**, across all twenty-one **built and validated**
 maps. Every number here came from a run — a planned map earns a row once it is
 built and has cleared its null floor, not before. The four endpoint-era models
-([above](#reading-a-model-you-never-download)) now have rows; two of them have a
-second row for the `W_U` twin of their token map, and one a third for an
-`api_text_embedding` contrast drawn over the same curated vocabulary.
+([above](#reading-a-model-you-never-download)) now have rows; three of them
+have a second row for the `W_U` twin of their token map, built over the same
+curated vocabulary, and one a third for an `api_text_embedding` contrast drawn
+over that vocabulary too. A `down_proj` depth series on the same model —
+identical parameters at five depths — adds four more rows, with one still
+validating.
 
-**Eight maps in `out/` carry no `validation.json`, and the reason splits in
+**Seven maps in `out/` carry no `validation.json`, and the reason splits in
 three.** Six *cannot* be validated: three `api_text_embedding` contrast maps
 (`Xenova__claude-tokenizer__api-sentence-transformers__all-MiniLM-L6-v2`,
 `gpt2__api-mxbai-embed-large`,
@@ -337,10 +340,10 @@ better than the model's own weights do, it is what a 384-dimensional space
 produced by a model trained to make sentences cluster scores when you project it
 to two dimensions.
 
-The remaining two — `meta-models__Muse-Glimmer-30B__unembed` and
-`mistralai__Mistral-Nemo-Instruct-2407__neurons__model.layers.4.mlp.down_proj` —
-*can* be validated and simply have not been yet. They are builds in flight, not
-refusals, and they earn rows when they clear a floor and not before:
+The remaining one —
+`mistralai__Mistral-Nemo-Instruct-2407__neurons__model.layers.36.mlp.down_proj`
+— *can* be validated and simply has not been yet. It is a build in flight, not
+a refusal, and it earns a row when it clears a floor and not before:
 
 | map | points | silhouette | null floor | margin | trust | seed ARI |
 |---|---|---|---|---|---|---|
@@ -355,11 +358,16 @@ refusals, and they earn rows when they clear a floor and not before:
 | SmolLM2-135M · SAE features | 36864 | 0.4770 | 0.4097 | +0.067 ⚠ | 0.71 | 0.57 |
 | Gemma-4-26B · tokens | 50000 | 0.5270 | 0.3821 | +0.145 | 0.67 | 0.48 |
 | Ling-2.6-flash · tokens | 50000 | 0.4730 | 0.3864 | +0.087 | 0.67 | 0.49 |
-| Mistral-Nemo · tokens | 5000 | 0.4968 | 0.2033 | +0.294 | 0.75 | 0.50 |
+| Mistral-Nemo · tokens | 5000 | 0.4968 | 0.2033 | +0.293 | 0.75 | 0.50 |
 | Muse-Glimmer-30B · tokens | 50000 | 0.4899 | 0.4812 | **+0.009** | 0.84 | 0.48 |
 | Ling-2.6-flash · **W_U** | 50000 | 0.5629 | 0.3805 | +0.182 | 0.65 | 0.55 |
 | Mistral-Nemo · **W_U** | 5000 | 0.4741 | 0.2805 | +0.194 | 0.69 | 0.49 |
+| Muse-Glimmer-30B · **W_U** | 50000 | 0.5553 | 0.3749 | +0.180 | 0.76 | 0.45 |
 | Mistral-Nemo · **api text** | 5000 | 0.6050 | 0.2396 | +0.365 | 0.95 | 0.54 |
+| Mistral-Nemo · neurons **L4** | 4096 | 0.3816 | 0.2006 | +0.181 | 0.63 | 0.58 |
+| Mistral-Nemo · neurons **L12** | 4096 | 0.4053 | 0.2945 | +0.111 | 0.61 | 0.57 |
+| Mistral-Nemo · neurons **L20** | 4096 | 0.3786 | 0.2123 | +0.166 | 0.59 | 0.62 |
+| Mistral-Nemo · neurons **L28** | 4096 | 0.2466 | 0.1930 | +0.054 | 0.60 | 0.24 |
 
 ⚠ = the null resolved a cluster count far from the map's own (16 vs 69; 277 vs
 130). Silhouette rises as a partition coarsens, so those two rows compare
@@ -368,15 +376,16 @@ metrics` prints `null.k` next to the margin and flags this case with `?`.
 
 The four corpus rows are all comparable (each null landed within 0.5-2x of its
 map's own k), and they split. Gemma-4 posts the highest silhouette of any map
-here and a healthy +0.145. Nemo's +0.294 is the largest margin in the table, but
-it is scored on 5k points, where the null has less room to invent islands —
-read it as encouraging, not as a win over the 50k rows. **Muse-Glimmer-30B is
-the cautionary one: +0.009.** Its projection is faithful (trust 0.84, second
-only to pythia), so the *layout* is trustworthy; what is barely-better-than-null
-is the claim that its 121 clusters are separated. At 66% noise and 6656
-dimensions, HDBSCAN is describing the two-thirds it discarded more than the
-third it kept. Do not read Glimmer's territories as findings without a
-parameter sweep behind them.
+here and a healthy +0.145. Nemo's +0.293 is the largest margin of those four —
+though not of the whole table, where Mistral-Nemo · **api text** clears by
++0.365 — but it is scored on 5k points, where the null has less room to invent
+islands — read it as encouraging, not as a win over the 50k rows.
+**Muse-Glimmer-30B is the cautionary one: +0.009.** Its projection is faithful
+(trust 0.84, second only to pythia), so the *layout* is trustworthy; what is
+barely-better-than-null is the claim that its 121 clusters are separated. At
+66% noise and 6656 dimensions, HDBSCAN is describing the two-thirds it
+discarded more than the third it kept. Do not read Glimmer's territories as
+findings without a parameter sweep behind them.
 
 Three things to take from the seven older rows that *are* comparable:
 
@@ -385,12 +394,14 @@ Three things to take from the seven older rows that *are* comparable:
   here, and it is a modest fraction of what the layout looks like it has.
 - **Unit type does not sort the maps.** SmolLM2's raw-neuron map (+0.099) beats
   gpt2-medium's token map (+0.062). "Tokens carry structure, raw neurons don't"
-  is not what the numbers say. The weakest comparable row is gpt2's neuron map
+  is not what the numbers say. The weakest of those seven is gpt2's neuron map
   (+0.056), and that isn't a settings problem: sweeping leaf/eom × `mcs` ×
   `min_samples` tops out at 0.4858 silhouette, barely past its 0.4250 floor.
-- **Seed ARI is 0.46–0.62 everywhere.** Roughly half of each partition is
-  seed-dependent. Individual cluster boundaries are not stable findings; the
-  gross layout is.
+- **Seed ARI is 0.46–0.62 across all seven.** Roughly half of each partition
+  is seed-dependent. Individual cluster boundaries are not stable findings; the
+  gross layout is. Do not read that band as a property of the pipeline: the
+  depth series below reaches down to 0.24 at layer 28, so a low ARI is a thing
+  a map can have and these seven happen not to.
 
 One methodological note, because it changed these numbers substantially.
 HDBSCAN's `min_cluster_size` is an absolute point count, so a 4000-point null
@@ -487,17 +498,22 @@ uses: [`docs/OBSERVABILITY-SURFACE.md`](docs/OBSERVABILITY-SURFACE.md).
   behaviour its title claims? — is now Phase 4 of the attractors work rather
   than a loose roadmap line: [`docs/ATTRACTORS-PLAN.md`](docs/ATTRACTORS-PLAN.md).
 - W_E vs W_U on the untied corpus models — which token families a model reads
-  differently from how it writes them — **measured, not proposed.** Mean kNN
-  neighbourhood overlap (k=50, raw cosine, no UMAP in the path) is **0.342** on
-  Mistral-Nemo over 5k tokens and **0.525** on Ling-2.6-flash over 50k, against
-  chance baselines of 0.0100 and 0.0010 — so 34x and 525x chance, and still a
-  majority of each token's neighbours *changing* between the two matrices. The
-  tied control pins the other end: Gemma-4-26B, whose `W_U` **is** its `W_E`,
-  scores **1.0000** on every one of the three measures and in all seven token
-  families, which is what makes the untied numbers readable as a real gap rather
-  than as pipeline noise. Cluster agreement falls much further than
-  neighbourhood overlap (ARI 0.092 / 0.050; title Jaccard 0.282 / 0.132) — the
-  two spaces keep a token's rough company while disagreeing about what
-  neighbourhood it lives in. Full tables, per-family breakdown and the
-  validation of the new `W_U` maps: [`recommended-plan.md`](recommended-plan.md)
+  differently from how it writes them — **measured, not proposed, on all three
+  untied corpus models.** Mean kNN neighbourhood overlap (k=50, raw cosine, no
+  UMAP in the path) is **0.342** on Mistral-Nemo over 5k tokens, **0.525** on
+  Ling-2.6-flash over 50k and **0.299** on Muse-Glimmer-30B over 50k, against
+  chance baselines of 0.0100, 0.0010 and 0.0010 — so 34x, 525x and 299x chance,
+  and still a majority of each token's neighbours *changing* between the two
+  matrices in every case. The tied control pins the other end: Gemma-4-26B,
+  whose `W_U` **is** its `W_E`, scores **1.0000** on every one of the three
+  measures and in all seven token families, which is what makes the untied
+  numbers readable as a real gap rather than as pipeline noise. Cluster
+  agreement falls much further than neighbourhood overlap in all three (ARI
+  0.092 / 0.050 / 0.025; title Jaccard 0.282 / 0.132 / 0.136) — the two spaces
+  keep a token's rough company while disagreeing about what neighbourhood it
+  lives in. The per-family breakdown does **not** generalize across models:
+  punctuation has the highest overlap on Nemo and Ling, while on Glimmer it is
+  numerals (0.613) highest and Latin words (0.286) lowest, which inverts the
+  other two. Full tables, the per-family figures and the validation of the three
+  new `W_U` maps: [`recommended-plan.md`](recommended-plan.md)
   § "Track 2b — result".
