@@ -432,3 +432,35 @@ def test_two_runners_in_sequence_still_resume(tmp_path):
         assert a.completed == 10
         assert a.completed + b.completed == total
         assert b.skipped_existing == 10
+
+
+def test_inspect_says_a_study_is_still_collecting_before_there_is_an_analysis():
+    """The refusal path needs the lock line more than the success path does.
+
+    `behavior inspect` on a study with no `behavior.json` used to print only
+    "run `behavior analyze` first" — which is the correct instruction and the
+    wrong diagnosis when the reason there is no analysis is that a runner is
+    still filling the store. Measured on this repo: the positive-control study
+    was mid-collection and `inspect` said nothing about it, so the only way to
+    find the running process was `pgrep`. The three exits of `run_inspect` (no
+    artifact, one cue, whole study) all report the holder now.
+    """
+    import tempfile
+
+    from nebulai.behavior.cli import _writer_note
+
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td)
+        assert _writer_note(str(out), "nothing-here") is None, "no store, no line"
+        d = out / "s1"
+        d.mkdir()
+        with TrialStore(d / "trials.sqlite") as st:
+            assert _writer_note(str(out), "s1") is None, "no lock, no line"
+            st.claim_writer(note="behavior run --arm discovery")
+            line = _writer_note(str(out), "s1")
+            assert line is not None
+            assert str(os.getpid()) in line
+            assert "collecting now" in line
+            assert "--arm discovery" in line
+            st.release_writer()
+            assert _writer_note(str(out), "s1") is None

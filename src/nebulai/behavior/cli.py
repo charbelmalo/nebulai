@@ -670,16 +670,49 @@ def run_publish(a: argparse.Namespace) -> None:
         print("  published_as: example (not strict-source; the page labels it)")
 
 
+def _writer_note(out: str, study_id: str) -> str | None:
+    """One line naming whoever is writing this study's store, or None.
+
+    A study being written right now is a study whose numbers are about to
+    change, and the moment that matters most is *before* there is an analysis to
+    read: "no artifact yet" and "no artifact yet, because a runner is still
+    collecting" are different situations, and reading the second as the first
+    sends a person to re-plan a study that is already in flight.
+    """
+    sq = Path(out) / study_id / "trials.sqlite"
+    if not sq.exists():
+        return None
+    try:
+        with TrialStore(sq) as st:
+            lock = st.writer_lock()
+    except Exception:
+        return None
+    if not lock:
+        return None
+    state = "collecting now" if lock.get("live") else "stale (holder gone)"
+    return (
+        f"writer lock: pid {lock.get('pid')} on {lock.get('host')} - "
+        f"{state}: {lock.get('note') or '-'}"
+    )
+
+
 def run_inspect(a: argparse.Namespace) -> None:
     path = Path(a.out) / a.study_id / "behavior.json"
     if not path.exists():
-        raise SystemExit(f"no artifact at {path}; run `behavior analyze` first")
+        note = _writer_note(a.out, a.study_id)
+        tail = f"\n  {note}" if note else ""
+        raise SystemExit(
+            f"no artifact at {path}; run `behavior analyze` first{tail}"
+        )
     d = json.loads(path.read_text(encoding="utf-8"))
     if a.cue:
         row = next((c for c in d["cues"] if c["cue"] == a.cue), None)
         if row is None:
             raise SystemExit(f"cue {a.cue!r} is not in this study")
         print(json.dumps(row, indent=2, ensure_ascii=False))
+        note = _writer_note(a.out, a.study_id)
+        if note:
+            print(f"  {note}")
         return
     print(f"study {d['study_id']} — manifest {d['manifest']['hash']}")
     print(f"  {d['claim']}")
@@ -690,16 +723,9 @@ def run_inspect(a: argparse.Namespace) -> None:
         print(f"  {v:>5}  {k}")
     #  A study being written right now is a study whose numbers are about to
     #  change. Say so, rather than letting a reader quote a snapshot as final.
-    sq = Path(a.out) / a.study_id / "trials.sqlite"
-    if sq.exists():
-        with TrialStore(sq) as st:
-            lock = st.writer_lock()
-        if lock:
-            state = "collecting now" if lock.get("live") else "stale (holder gone)"
-            print(
-                f"  writer lock: pid {lock.get('pid')} on {lock.get('host')} — "
-                f"{state}: {lock.get('note') or '-'}"
-            )
+    note = _writer_note(a.out, a.study_id)
+    if note:
+        print(f"  {note}")
 
 
 def run_serve(a: argparse.Namespace) -> None:
