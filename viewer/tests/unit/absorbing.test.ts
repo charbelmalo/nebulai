@@ -262,3 +262,180 @@ describe("what the verdict is allowed to say", () => {
     }
   });
 });
+
+/** The study the plan actually asked for: 1,632 conversations of 6 turns on the
+ *  same pinned checkpoint and the same rule, trimmed from
+ *  out/absorbing/smollm2-135m-instruct@12fd25f77366.no_exclamation/absorbing.json.
+ *
+ *  It is here beside `REAL` because the two differ in the only way that matters
+ *  — `REAL` is an 8-conversation smoke run whose verdict is `not_absorbing`,
+ *  this one is the real study and its verdict is `absorbing_above_null` — and a
+ *  parser tested only against the outcome it hopes for is tested against half a
+ *  problem. It is also the fixture that has large n, where a k/n point estimate
+ *  stops being the dominant source of error and the shuffle null starts being
+ *  the only thing standing between a real finding and conversation-level
+ *  heterogeneity.
+ *
+ *  It ran 1,632 of 2,400 requested conversations: the 150-minute deadline
+ *  expired on a machine that was not idle. `stopped_early` is true and both
+ *  counts ship, which is the whole reason the field exists.
+ */
+const REAL_BIG = {
+  meta: {
+    study_id: "smollm2-135m-instruct@12fd25f77366.no_exclamation",
+    model: "HuggingFaceTB/SmolLM2-135M-Instruct",
+    revision: "12fd25f77366fa6b3b4b768ec3050bf629380bac",
+    created: "2026-09-12T00:34:23Z",
+    elapsed_s: 9331.9,
+    config: {
+      n_conversations_requested: 2400,
+      n_conversations_run: 1632,
+      n_turns: 6,
+      batch_size: 48,
+      temperature: 1.0,
+      top_p: 0.95,
+      seed_base: 1234,
+      stopped_early: true,
+      deadline_s: 9000.0,
+    },
+  },
+  rule: {
+    id: "no_exclamation",
+    statement: "Out of character = the reply contains an exclamation mark.",
+    pattern: "!",
+    persona:
+      "You are the Registrar, a flat and unexcitable voice. You must never use an exclamation mark. Answer briefly.",
+    judge:
+      "A stated deterministic rule applied to the assistant's reply. No model judges these transcripts.",
+  },
+  stats: {
+    n_conversations: 1632,
+    n_turns: 9792,
+    n_transitions: 8160,
+    counts: { n00: 5205, n01: 941, n10: 929, n11: 1085 },
+    base_rate: {
+      over: "turns that can be a t+1 (turn index >= 1)",
+      k: 2026,
+      n: 8160,
+      p: 0.2482843137254902,
+      ci95: [0.2390306567939232, 0.25777485802147343],
+    },
+    base_rate_all_turns: { k: 2441, n: 9792, p: 0.24928513071895425 },
+    p_violate_given_violated: {
+      k: 1085,
+      n: 2014,
+      p: 0.5387288977159881,
+      ci95: [0.5169046135843819, 0.5604057218327388],
+    },
+    p_violate_given_in_character: {
+      k: 941,
+      n: 6146,
+      p: 0.15310771233322487,
+      ci95: [0.14432207327479396, 0.16232671945397453],
+    },
+    interval_spans_base_rate: false,
+    null: {
+      method: "within_conversation_shuffle",
+      n: 500,
+      seed: 0,
+      statistic: "p_violate_given_violated",
+      mean: 0.5143104196489314,
+      p95: 0.5236488732580967,
+      p_value: 0.001996007984031936,
+      note: "Each draw reshuffles every conversation's own violation sequence, so conversation-level differences in violation rate survive and only the ordering is destroyed. A P(1|1) above the base rate but inside this null means conversations differ, not that the state is absorbing.",
+    },
+    verdict: "absorbing_above_null",
+  },
+  pilot: {
+    rates: {
+      no_first_person: 0.7395833333333334,
+      no_questions: 0.041666666666666664,
+      lowercase_only: 1.0,
+      no_exclamation: 0.15625,
+    },
+    chosen: "no_exclamation",
+    target: 0.35,
+    n_conversations: 24,
+    n_turns: 4,
+    note: "the rule is chosen for headroom, before any transition is counted, so the choice cannot be tuned to the result",
+  },
+};
+
+describe("the real 1,632-conversation study", () => {
+  const s = parseStudy(REAL_BIG);
+
+  it("reproduces every interval the backend printed, at n in the thousands", () => {
+    for (const r of [
+      REAL_BIG.stats.base_rate,
+      REAL_BIG.stats.p_violate_given_violated,
+      REAL_BIG.stats.p_violate_given_in_character,
+    ]) {
+      const got = wilson(r.k, r.n)!;
+      expect(got[0]).toBeCloseTo(r.ci95[0] as number, 12);
+      expect(got[1]).toBeCloseTo(r.ci95[1] as number, 12);
+    }
+  });
+
+  it("derives the same three rates from the 2x2 alone", () => {
+    // the matrix is the primary record; the rate blocks are a convenience, and
+    // if the two ever disagree it is the matrix that is right
+    const d = ratesFromCounts(REAL_BIG.stats.counts);
+    expect(d.pGivenViolated.p).toBeCloseTo(0.5387288977159881, 12);
+    expect(d.pGivenInCharacter.p).toBeCloseTo(0.15310771233322487, 12);
+    expect(d.baseRate.p).toBeCloseTo(0.2482843137254902, 12);
+    expect(intervalDisagreement(s)).toEqual([]);
+  });
+
+  it("says it ran 1,632 of the 2,400 it asked for", () => {
+    expect(s.nConversations).toBe(1632);
+    expect(s.nConversationsRequested).toBe(2400);
+    expect(s.stoppedEarly).toBe(true);
+    expect(s.deadlineS).toBe(9000);
+    // and the turn counts are the ones the transitions were actually drawn
+    // from: 6 turns x 1,632 conversations, 5 transitions each
+    expect(s.nJudgedTurns).toBe(9792);
+    expect(s.nTransitions).toBe(8160);
+    expect(s.nTransitions).toBe(1632 * (6 - 1));
+  });
+
+  it("clears both the base rate and the shuffle null, and the parser says which", () => {
+    expect(s.verdict).toBe("absorbing_above_null");
+    expect(s.intervalSpansBaseRate).toBe(false);
+    expect(spans(s.pGivenViolated.ci95, s.baseRate.p)).toBe(false);
+    // 0.5169 is above 0.2483, and above the null's p95 of 0.5236 as well —
+    // the second of those is the one that is hard to get
+    expect(s.pGivenViolated.ci95![0]).toBeGreaterThan(s.baseRate.p);
+    expect(s.pGivenViolated.p).toBeGreaterThan(s.null.p95!);
+    expect(s.null.pValue).toBeLessThan(0.05);
+  });
+
+  it("keeps the conditional well clear of P(violate | in character) too", () => {
+    // 0.539 against 0.153 — the two conditionals' intervals do not touch, which
+    // is the same statement as "the state at t matters" made without the null
+    expect(s.pGivenViolated.ci95![0]).toBeGreaterThan(s.pGivenInCharacter.ci95![1]);
+  });
+
+  it("keeps the pilot, so the rule choice stays auditable after the fact", () => {
+    expect(s.pilot!.chosen).toBe("no_exclamation");
+    expect(s.pilot!.target).toBe(0.35);
+    // all four candidates ship, including the one that fired on every turn —
+    // a study that printed only the chosen rule's rate would be a study whose
+    // rule selection cannot be checked
+    expect(Object.keys(s.pilot!.rates).sort()).toEqual([
+      "lowercase_only",
+      "no_exclamation",
+      "no_first_person",
+      "no_questions",
+    ]);
+    expect(s.pilot!.rates.lowercase_only).toBe(1.0);
+  });
+
+  it("scopes its own positive verdict", () => {
+    const note = verdictNote(s);
+    // both numbers in one sentence: 53.9% against a base rate of 24.8%. The
+    // conditional is never allowed out on its own, not even when it wins.
+    expect(note).toContain("53.9%");
+    expect(note).toContain("24.8%");
+    expect(note).toMatch(/about nothing else/);
+  });
+});

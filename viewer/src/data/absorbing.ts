@@ -26,7 +26,8 @@
  *     verdict (`above_base_rate_explained_by_heterogeneity`).
  *
  *  Nothing here recomputes the backend's verdict. The backend decided it with
- *  the full 2,000-draw null in hand; recomputing a second opinion in the viewer
+ *  the whole null in hand — 500 draws in the shipped study, and the count is in
+ *  the file rather than in this comment; recomputing a second opinion in the viewer
  *  would give two answers to one question. What IS recomputed is the interval
  *  arithmetic — as a CHECK: `intervalDisagreement()` reports it when the
  *  shipped interval and a freshly computed Wilson interval differ, because a
