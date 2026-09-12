@@ -15,12 +15,13 @@ import json
 import pytest
 
 from nebulai.behavior import analyze as A
+from nebulai.behavior import cli as CLI
 from nebulai.behavior import export as X
 from nebulai.behavior import runner as R
 from nebulai.behavior.contract import CANARY_CUE
 from nebulai.behavior.store import TrialStore
 
-from test_behavior_store import _manifest  # noqa: E402
+from test_behavior_store import _manifest, _trial  # noqa: E402
 
 
 # --- cue_prefix -------------------------------------------------------------
@@ -239,3 +240,90 @@ def test_the_coverage_block_survives_serialization(tmp_path):
     p = X.write_export(tmp_path / "behavior.json", payload)
     back = json.loads(p.read_text(encoding="utf-8"))
     assert back["coverage"]["cues_planned"] == len(m.cues)
+
+# --- the reason sentence vs the store --------------------------------------
+#
+# `--cue-limit N` is a REQUEST. The store records it the moment the stage
+# starts, so a stage that is still running -- or one that was killed -- has a
+# limit in `meta` that is larger than the number of cues on disk. The reason
+# sentence has to come from the cues, not from the request, or the artifact
+# claims "full repeats and full block balance" for cues that have neither.
+
+
+def _store_with(tmp_path, m, *, cue_limit, cues):
+    """A store holding `cues` -> trial count, plus the canary rows."""
+    store = TrialStore(tmp_path / f"{m.study_id}.sqlite")
+    store.bind_manifest(m.frozen_hash or 'sha256:test', m.study_id)
+    store.set_meta("cue_limit", str(cue_limit))
+    recs = []
+    for cue, n in cues.items():
+        for i in range(n):
+            recs.append(_trial(m.study_id, cue=cue, repeat=i, model="A" if i % 2 else "B"))
+    for i in range(2):
+        recs.append(_trial(m.study_id, cue=CANARY_CUE, repeat=i))
+    store.record_many(recs)
+    return store
+
+
+def test_the_reason_counts_cues_on_disk_not_the_limit_requested(tmp_path):
+    """A stage still in flight must not be described as finished."""
+    m = _manifest(study_id="t_cov_inflight", n_cues=10, trials=8)
+    full = m.trials_per_cue * len(m.models)  # 16 here
+    # --cue-limit 4 was requested; two cues are complete and nothing else ran.
+    store = _store_with(
+        tmp_path, m, cue_limit=4, cues={"cue0": full, "cue1": full}
+    )
+    trials = [t for t in store.iter_trials(m.study_id)]
+    results = [A.CueResult(cue="cue0", stratum="s"), A.CueResult(cue="cue1", stratum="s")]
+    cov = CLI._coverage(m, store, results, trials)
+    store.close()
+
+    assert cov["cues_collected"] == 2
+    assert cov["cues_at_full_depth"] == 2
+    assert cov["cue_limit"] == 4, "the request is still recorded, as intent"
+    assert "4" in cov["reason"] and "2 of the preregistered 10" in cov["reason"]
+    # The old sentence said "the first 4 cues ... were collected at full
+    # repeats": it must not be possible to read that out of this artifact.
+    assert "the first 4 cues" not in cov["reason"]
+
+
+def test_a_half_collected_cue_is_counted_as_partial_not_as_full(tmp_path):
+    m = _manifest(study_id="t_cov_partial_depth", n_cues=10, trials=8)
+    full = m.trials_per_cue * len(m.models)
+    store = _store_with(
+        tmp_path, m, cue_limit=4, cues={"cue0": full, "cue1": full // 4}
+    )
+    trials = [t for t in store.iter_trials(m.study_id)]
+    cov = CLI._coverage(
+        m, store, [A.CueResult(cue="cue0", stratum="s")], trials
+    )
+    store.close()
+
+    assert cov["cues_collected"] == 2
+    assert cov["cues_at_full_depth"] == 1
+    assert "1 partially collected" in cov["reason"]
+    assert cov["cues_analyzed"] == 1
+
+
+def test_the_canary_is_not_a_cue_in_the_coverage_count(tmp_path):
+    """The canary is a probe. Counting it would inflate coverage by one."""
+    m = _manifest(study_id="t_cov_canary", n_cues=10, trials=8)
+    full = m.trials_per_cue * len(m.models)
+    store = _store_with(tmp_path, m, cue_limit=2, cues={"cue0": full})
+    trials = [t for t in store.iter_trials(m.study_id)]
+    assert any(t.cue == CANARY_CUE for t in trials), "the fixture must hold canary rows"
+    cov = CLI._coverage(m, store, [A.CueResult(cue="cue0", stratum="s")], trials)
+    store.close()
+    assert cov["cues_collected"] == 1
+
+
+def test_no_trials_argument_still_produces_a_reason(tmp_path):
+    """Callers that have no trial list get counts of zero, never a crash and
+    never a silently-complete study."""
+    m = _manifest(study_id="t_cov_notrials", n_cues=10, trials=8)
+    store = _store_with(tmp_path, m, cue_limit=4, cues={})
+    cov = CLI._coverage(m, store, [])
+    store.close()
+    assert cov["cues_collected"] == 0
+    assert cov["complete"] is False
+    assert cov["reason"]

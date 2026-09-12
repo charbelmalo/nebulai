@@ -297,7 +297,7 @@ def run_analyze(a: argparse.Namespace) -> None:
     }
     runs = [store.progress(m.study_id)]
     samples = _samples(trials, keys)
-    coverage = _coverage(m, store, results)
+    coverage = _coverage(m, store, results, trials)
 
     payload = X.build_export(
         m, results, landscape=landscape, diagnostics=diagnostics, runs=runs,
@@ -309,7 +309,12 @@ def run_analyze(a: argparse.Namespace) -> None:
     store.close()
 
 
-def _coverage(m: Manifest, store: TrialStore, results: list[Any]) -> dict[str, Any]:
+def _coverage(
+    m: Manifest,
+    store: TrialStore,
+    results: list[Any],
+    trials: list[Any] | None = None,
+) -> dict[str, Any]:
     """What fraction of the preregistered cue set this artifact actually covers.
 
     Read from the store rather than inferred from `len(results)` alone: a cue
@@ -317,19 +322,41 @@ def _coverage(m: Manifest, store: TrialStore, results: list[Any]) -> dict[str, A
     because it was collected and every trial of it was invalid. Those are
     different facts and the second one is already reported per cue, so the
     reason comes from the run's own record.
+
+    The `--cue-limit` branch counts the cues that are actually IN the store and
+    at their full planned depth, not the limit that was requested. A limit is a
+    request: a stage killed halfway through, or still running, has a higher
+    limit in `meta` than it has cues on disk, and a sentence that reported the
+    request would claim full repeats and full block balance for cues that have
+    neither. `cue_limit` is still recorded beside the counts, as the intent.
     """
     limit = store.get_meta("cue_limit")
     planned = len(m.cues)
     analyzed = len(results)
     complete = analyzed >= planned
+
+    # Per-cue depth, from the store: how many trials one cue gets when the
+    # schedule runs it to completion, and how many each cue actually has.
+    per_cue_full = max(1, m.trials_per_cue * len(m.models))
+    depth: dict[str, int] = {}
+    for t in trials or []:
+        if t.cue != CANARY_CUE:
+            depth[t.cue] = depth.get(t.cue, 0) + 1
+    collected = len(depth)
+    at_full_depth = sum(1 for n in depth.values() if n >= per_cue_full)
+    partial = collected - at_full_depth
+
     if complete:
         reason = ""
     elif limit:
         reason = (
-            f"run with --cue-limit {limit}: the first {limit} cues of the "
-            f"preregistered {planned} were collected at full repeats and full "
-            f"block balance. The cues that ran are not weakened by the ones "
-            f"that did not; the study's coverage is."
+            f"run with --cue-limit {limit}; {collected} of the preregistered "
+            f"{planned} cues are in the store, {at_full_depth} of them at full "
+            f"repeats and full block balance"
+            + (f" and {partial} partially collected" if partial else "")
+            + f", and {analyzed} could be compared across both arms. The cues "
+            f"that ran are not weakened by the ones that did not; the study's "
+            f"coverage is."
         )
     else:
         reason = (
@@ -340,6 +367,8 @@ def _coverage(m: Manifest, store: TrialStore, results: list[Any]) -> dict[str, A
     return {
         "cues_planned": planned,
         "cues_analyzed": analyzed,
+        "cues_collected": collected,
+        "cues_at_full_depth": at_full_depth,
         "complete": complete,
         "reason": reason,
         "cue_limit": int(limit) if limit else None,
