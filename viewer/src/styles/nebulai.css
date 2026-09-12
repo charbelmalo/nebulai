@@ -19,3 +19,17 @@
 @import "./nebulai.interp.css";
 @import "./nebulai.behavior.css";
 @import "./chrome.responsive.css";
+
+/* Compare — an unmeasured concept overlap. Dimmed and italic so it reads as an
+   absence rather than as a small number; see ComparePanel's note on why the
+   exporter sends null instead of 0 for placeholder-titled maps. */
+.compare-stat-unmeasured {
+  font-style: italic;
+  opacity: 0.62;
+  letter-spacing: 0.01em;
+}
+
+.compare-unnamed-note {
+  margin-top: 6px;
+  line-height: 1.45;
+}

@@ -17,6 +17,7 @@ between them:
 """
 
 import json
+import re
 from itertools import combinations
 from pathlib import Path
 
@@ -77,20 +78,48 @@ _PALETTE = [
 ]
 
 
+def _site_tag(unit: str) -> str:
+    """The layer a sited map was read at, short enough for a legend: `L36` from
+    `mlp_neuron(org/model, model.layers.36.mlp.down_proj)`, `L8` from gpt2's
+    `h.8.mlp.c_proj`, `L21` from `sae_decoder(repo, layers.21.mlp)`.
+
+    Without this, a depth series on one model derives the SAME label at every
+    depth and `_unique_labels` disambiguates it as "... #2", "... #3" -- unique
+    but meaningless, leaving the legend unable to tell layer 4 from layer 36.
+    Returns "" when the unit names no site, so token, API and probe labels are
+    untouched.
+    """
+    inner = ""
+    if "(" in unit and unit.rstrip().endswith(")"):
+        inner = unit[unit.index("(") + 1 : unit.rindex(")")]
+    site = inner.split(",")[-1].strip() if "," in inner else ""
+    if not site:
+        return ""
+    for part in site.split("."):
+        if part.isdigit():
+            return f"L{part}"
+    return site
+
+
 def _source_label(meta: dict) -> str:
     """A short, human-readable identity for one map, distinguishing front-ends
     of the SAME model (token vs SAE vs neuron) — which `meta.model` alone
-    cannot, so all three collapse into one cloud if keyed on the model id.
+    cannot, so all three collapse into one cloud if keyed on the model id —
+    and, for a front-end read at a site, distinguishing two *depths* of the
+    same front-end on the same model.
 
     Derived from the geometry origin (`meta.unit`): e.g. "SmolLM2-135M · SAE
-    features", "SmolLM2-135M · MLP neurons", "SmolLM2-135M · tokens"."""
+    features L21", "SmolLM2-135M · MLP neurons L21", "SmolLM2-135M · tokens"."""
     model = str(meta.get("model", "?"))
     short = model.split("/")[-1]
     unit = str(meta.get("unit", ""))
+    site = ""
     if unit.startswith("sae_decoder"):
         kind = "SAE features"
+        site = _site_tag(unit)
     elif unit.startswith("mlp_neuron"):
         kind = "MLP neurons"
+        site = _site_tag(unit)
     elif unit.startswith("api_text_embedding"):
         kind = "API embeddings"
     elif unit.startswith("probe_concept"):
@@ -99,7 +128,32 @@ def _source_label(meta: dict) -> str:
         kind = "tokens"
     else:
         kind = unit or "units"
-    return f"{short} · {kind}"
+    suffix = f" {site}" if site else ""
+    return f"{short} · {kind}{suffix}"
+
+
+_PLACEHOLDER_TITLE = re.compile(r"^unlabeled \w+ \(cluster \d+\)$")
+
+
+def _titles_are_placeholders(meta: dict, titles: list[str]) -> bool:
+    """True when a map's cluster titles carry no semantics to compare.
+
+    `--labels none` maps (raw neurons, SAE decoders without an auto-interp
+    pass) are titled by `name.placeholder_titles`, which emits the SAME string
+    shape for every cluster of every such map: "unlabeled neurons (cluster 7)".
+    The comparison's concept space is an embedding of those titles, so two
+    placeholder-titled maps land on top of each other and the Jaccard between
+    them comes out high — 0.5 to 0.6 was observed between five depths of one
+    model — purely because the strings match. That number measures the
+    placeholder generator, not the models.
+
+    Detected from the namer stamp first (`placeholder_titles` records
+    "none(all-placeholder-labels)") and from the title shape as a fallback, so
+    an older artifact built before the stamp existed is still caught.
+    """
+    if str(meta.get("namer", "")).startswith("none(all-placeholder"):
+        return True
+    return bool(titles) and all(_PLACEHOLDER_TITLE.match(t.strip()) for t in titles)
 
 
 def _unique_labels(labels: list[str]) -> list[str]:
@@ -136,6 +190,9 @@ def _load_model(json_path: Path) -> dict:
         "model": d["meta"]["model"],
         "label": _source_label(d["meta"]),
         "clusters": clusters,
+        "unnamed": _titles_are_placeholders(
+            d["meta"], [c["title"] for c in clusters]
+        ),
     }
 
 
@@ -260,7 +317,11 @@ def build_comparison(
     for cid in sorted(set(int(x) for x in meta_ids if x >= 0)):
         idx = np.where(meta_ids == cid)[0]
         contributing = sorted(set(int(src[i]) for i in idx))
-        is_shared = len(contributing) > 1
+        # "Shared" means two models reached the same CONCEPT. A map whose titles
+        # are placeholders has no concepts, so it cannot share one: counting it
+        # would turn the placeholder generator's own uniformity into a finding.
+        named_contributing = [k for k in contributing if not models[k]["unnamed"]]
+        is_shared = len(named_contributing) > 1
         shared_pt[idx] = is_shared
         rep = titles[idx[int(np.argmax(sizes[idx]))]]
         meta_clusters.append(
@@ -269,6 +330,7 @@ def build_comparison(
                 "title": rep,
                 "models": [model_ids[k] for k in contributing],
                 "n_models": len(contributing),
+                "n_models_named": len(named_contributing),
                 "shared": is_shared,
                 "size": int(len(idx)),
             }
@@ -279,11 +341,18 @@ def build_comparison(
         mi: set(int(meta_ids[i]) for i in np.where(src == mi)[0] if meta_ids[i] >= 0)
         for mi in range(len(models))
     }
-    jaccard = {}
+    unnamed = [i for i in range(len(models)) if models[i]["unnamed"]]
+    jaccard: dict[str, float | None] = {}
     for a, b in combinations(range(len(models)), 2):
+        key = f"{model_ids[a]} vs {model_ids[b]}"
+        if a in unnamed or b in unnamed:
+            # None, never 0.0: the overlap is unmeasurable here, which is a
+            # different statement from "these two share no concepts".
+            jaccard[key] = None
+            continue
         inter = len(reach[a] & reach[b])
         union = len(reach[a] | reach[b]) or 1
-        jaccard[f"{model_ids[a]} vs {model_ids[b]}"] = round(inter / union, 3)
+        jaccard[key] = round(inter / union, 3)
 
     n_shared = sum(1 for mc in meta_clusters if mc["shared"])
     unique = {
@@ -294,6 +363,13 @@ def build_comparison(
         )
         for mi in range(len(models))
     }
+    # An unnamed map's clusters all land in "unique" by the rule above, which is
+    # accurate but easy to misread as a finding about the model. Name the maps
+    # and the reason in the artifact so the viewer can say so too.
+    unnamed_note = (
+        "cluster titles are placeholders (--labels none), so this map has no "
+        "concept set to intersect: its concept overlap is not measured, not zero"
+    )
 
     points = []
     for i in range(len(src)):
@@ -332,6 +408,8 @@ def build_comparison(
             "n_shared_concepts": n_shared,
             "n_unique_per_model": unique,
             "jaccard": jaccard,
+            "unnamed_models": [model_ids[i] for i in unnamed],
+            "unnamed_reason": unnamed_note if unnamed else None,
         },
         "points": points,
         "meta_clusters": meta_clusters,

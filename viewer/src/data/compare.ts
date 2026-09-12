@@ -29,7 +29,17 @@ export interface CompareData {
   stats: {
     n_shared_concepts: number;
     n_unique_per_model: Record<string, number>;
-    jaccard: Record<string, number>;
+    /** `null` for any pair involving a map whose cluster titles are
+     *  placeholders (`--labels none`). Such a map has no concept set, so its
+     *  overlap is UNMEASURED — which is not the same claim as an overlap of 0,
+     *  and must not render as one. Older artifacts predate the field and carry
+     *  numbers everywhere. */
+    jaccard: Record<string, number | null>;
+    /** labels of the maps whose titles are placeholders; absent on older
+     *  artifacts, empty when every map is named. */
+    unnamed_models?: string[];
+    /** why those maps' overlaps are unmeasured, in the exporter's words. */
+    unnamed_reason?: string | null;
   };
   points: ComparePoint[];
 }

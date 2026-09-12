@@ -1139,7 +1139,16 @@ def _run_compare(args: argparse.Namespace) -> None:
     )
     print("\n  concept overlap (Jaccard):")
     for k, v in comp["stats"]["jaccard"].items():
-        print(f"    {k}: {v}")
+        print(f"    {k}: {'not measured' if v is None else v}")
+    unnamed = comp["stats"].get("unnamed_models") or []
+    if unnamed:
+        print(
+            f"\n  {len(unnamed)} of {len(comp['meta']['models'])} maps carry "
+            f"placeholder cluster titles, so every pair involving one reads\n"
+            f"  'not measured' above rather than a number: "
+            + ", ".join(unnamed)
+        )
+        print(f"  {comp['stats']['unnamed_reason']}.")
 
 
 def _add_llm_args(sp: argparse.ArgumentParser) -> None:
