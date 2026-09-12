@@ -911,6 +911,60 @@ partial failure is informative too: if GPT-2 fails the control where Grok passes
 that is the capability confound of §4.2.1 showing up in the most direct possible
 form, measured before a single expensive trial is spent.
 
+**Measured 2026-09-12 — both local arms FAIL the gate.** Study
+`positive-control-2026-09-12` (manifest
+`sha256:6878ecb9717b15339fae8ec0a54112e40885b118d09712bff23f13326092be26`), four control cues (`cat`, `hot`, `king`, `salt`)
+× four frames × two arms, run locally on CPU in fp32 with no API key involved.
+Report: `out/behavior/positive-control-2026-09-12/calibration.md`.
+
+| arm | model | valid control trials | attempted | pass rate | gate @ 0.50 |
+|---|---|---:|---:|---:|---|
+| `cap_small` | GPT-2 small (124M) | 16 | 48 | **0.0625** | **FAIL** |
+| `cap_xl` | GPT-2 XL (1.5B) | 41 | 60 | **0.2195** | **FAIL** |
+
+Per cue (`cap_small` / `cap_xl`): `cat` 0.000 / 0.286 · `hot` 0.250 / 0.250 ·
+`king` 0.000 / 0.111 · `salt` 0.000 / 0.200.
+
+Read the denominators, not just the rates. Of 108 trials collected, **51 were
+invalid for `too_few` alone** — fewer than three associates survived parsing
+(`cap_small` 32, `cap_xl` 19) — so the pass rate is computed over the minority of
+trials that produced parseable association lists at all. The collection was
+partial: the design is 20 cues × 24 trials × 4 blocks × 4 frames × 2 models and
+this run was capped with `--cue-limit 4` to 192 intended trials, of which 108
+landed before the run was stopped. A larger denominator could move the rates, but
+not across the threshold: `cap_xl` would need every one of the remaining trials
+to hit.
+
+Three consequences, recorded so they are not re-litigated:
+
+1. **No Δ̂ from these two arms is interpretable as a divergence in word
+   association.** The gate is not advisory. The capability study
+   (`capability-control-2026-09-12`) reached the same conclusion from the other
+   direction without being told this result: its two analysed cues read
+   `insufficient evidence` (`freedom`, Δ̂ 0.222, 10/14 valid — below the
+   20-valid-trial minimum, and the worst-case bound over unparsed trials spans
+   the effect floor) and `incomparable` (`water`, Δ̂ 0.130, parse rates 0.38 vs
+   0.79, differing by more than the 0.25 ceiling). The pipeline's own gates and
+   this control agree.
+2. **The §4.2.1 capability confound is real and is measured here, not
+   hypothesised.** A 12× parameter difference produced a 3.5× difference in
+   control recovery between two arms given identical prompts, identical frames,
+   identical parsing and identical seeds. Any two-arm comparison across a
+   capability gap inherits this.
+3. **The failure is predominantly a formatting/instruction-following failure,
+   not an absent association network.** `too_few` dominates the invalid reasons;
+   base GPT-2 checkpoints are not instruction-tuned and frequently continue the
+   prompt rather than answering it. That is a statement about what a base LM
+   emits under these frames, and it is exactly why the control exists: without
+   it, the resulting near-empty association sets would have been analysed as a
+   *small* divergence rather than as *no measurement*.
+
+A passing arm still has to be demonstrated. The honest status of the instrument
+today is: **validated as a gate** (it fired, on real outputs, before any paid
+trial), **not yet validated as an instrument** (no arm in this environment has
+cleared it). Clearing it needs either an instruction-tuned local model or the
+paid arm of §5.3, and neither is available here.
+
 ---
 
 ## 7. Visualization contract
