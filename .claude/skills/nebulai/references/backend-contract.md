@@ -193,7 +193,8 @@ makes it readable and the statistics that make it checkable.
                   "contrast": { "cohens_d": …,            // IN SAMPLE — not evidence
                                 "heldout_cohens_d": …,    // refit on half, scored on the other half
                                 "null_cohens_d_mean": …, "null_cohens_d_p95": …,
-                                "n_pos": …, "n_neg": …, "heldout_n_pos": …, "heldout_n_neg": … } },
+                                "n_pos": …, "n_neg": …, "heldout_n_pos": …, "heldout_n_neg": …,
+                                "heldout_split": "paired" | "independent" | "missing" } },
       "projection": { "channel": "proj.<id>", "orth_channel": "proj.<id>.orth",
                       "stats": { "cohens_d": …, "overlap": …, "n": … } },
       "null": { "method": "random_unit", "seed": 0, "n": 32,
@@ -224,6 +225,39 @@ CLI: `nebulai direction list | survey | add | make | prompts | project | drop`.
 behind every import refusal. `prompts` fits a direction on a frozen prompt set
 from `backend/prompt_sets.py` via `gpt2_numpy` residuals, for the case where
 nothing published is the right width.
+
+**`heldout_split` says which split produced `heldout_cohens_d`.** The default is
+`independent` — pos and neg permuted separately, which is right when the two sets
+are unrelated collections. It is WRONG for a crossed design, and wrong in a
+direction that looks like a result: independent halves put different items on the
+two sides, so the fit picks up an (items-in-pos − items-in-neg) term and the test
+halves are its exact complement, so the term returns with the opposite sign. On
+the eval-awareness set (64 matched pairs, SmolLM2-135M-Instruct, 40 seeds) mean
+held-out d at L4/12/19/25 was **+0.13 / −0.28 / −0.38 / −0.40** independent and
+**+0.52 / +0.89 / +0.32 / +0.31** paired. A matched-pair caller passes
+`paired=True` to `diff_of_means`; the field records which was done either way, so
+a negative number can never again be read as "the direction does not transfer"
+when it was the split.
+
+**`backend/eval_awareness.py` is a caller of this registry, not a second one**
+(ATTRACTORS-PLAN §3.2). It owns the matched-pair prompt construction and two
+controls `contrast` does not have, and both live under `source.eval_awareness`,
+never merged into `source.contrast`: a **label-permutation** null (refit the whole
+procedure on shuffled labels, 32 draws — "would this FITTING PROCEDURE separate
+two arbitrary halves of these prompts this well", which the random-unit null does
+not ask) and a **held-out split over unseen framings** (a random half shares
+framing sentences with the fit, so it cannot catch a direction that only learned
+the words "grader" and "benchmark"). Its directions live in `resid.L<k>`, so under
+D2 the only legal point cloud is activations in `resid.L<k>` — it uses the prompt
+set's own 128 activations and `channels.json`'s `point_source` says so verbatim
+(`prompts:eval_awareness.v1 (the 128 prompt activations, not a map)`). Projecting
+them onto a token map would also produce numbers. `python -m
+nebulai.backend.eval_awareness --out <dir>` writes the pair and prints, per layer,
+in-sample d · overlap · permutation p95 · unseen-frame d · random-unit p95 ·
+paired half d. On SmolLM2-135M-Instruct, 6 of 30 layers clear the
+label-permutation p95 (L10–L13, L15, L16; the largest is **L12, d = 0.997 vs p95
+0.680**), and unseen-frame transfer peaks earlier, at L4–L9 (~0.70) — two
+different questions with two different answers, which is why both ship.
 
 ### `interp/intervene_<name>.json` (`backend/interp/intervene.py`)
 

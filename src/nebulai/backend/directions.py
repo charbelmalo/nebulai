@@ -102,6 +102,13 @@ def _unit(v: np.ndarray) -> np.ndarray:
     return (v / n).astype(np.float32)
 
 
+#: Public name for the same normalisation. Other modules fit directions too
+#: (`backend/eval_awareness.py` fits one per layer and refits it 32 times for its
+#: label-permutation null) and they must refuse a zero-norm difference with the
+#: sentence above rather than each inventing their own tolerance.
+unit = _unit
+
+
 @dataclass
 class Direction:
     """One unit vector, its space, its provenance, its projections, its null."""
@@ -209,8 +216,12 @@ def diff_of_means(
     label: str,
     protocol: str,
     source: Mapping[str, Any] | None = None,
+    paired: bool = False,
 ) -> Direction:
     """mean(pos) − mean(neg), unit-normalised. The workhorse.
+
+    Pass `paired=True` when `pos[i]` and `neg[i]` are a matched pair, so the
+    held-out split inside `contrast` keeps the pairing — see `_heldout`.
 
     `protocol` is the frozen identity of the two sets — a prompt-set id, a pair
     of cluster ids, anything a reader can go and re-derive. It is not optional
@@ -236,7 +247,7 @@ def diff_of_means(
     }
     src.update(source or {})
     v = p.mean(axis=0) - n.mean(axis=0)
-    src["contrast"] = contrast(p, n, v)
+    src["contrast"] = contrast(p, n, v, paired=paired)
     return Direction(
         id=id,
         label=label,
@@ -525,6 +536,7 @@ def contrast(
     *,
     n_null: int = DEFAULT_NULL_N,
     seed: int = DEFAULT_NULL_SEED,
+    paired: bool = False,
 ) -> dict[str, float]:
     """How well this direction separates the two sets it was built from — and
     how well a random direction does on the same two sets.
@@ -563,11 +575,13 @@ def contrast(
         "null_cohens_d_mean": round(float(arr.mean()), 6) if arr.size else math.nan,
         "null_cohens_d_p95": round(float(np.percentile(arr, 95)), 6) if arr.size else math.nan,
     }
-    out.update(_heldout(a, b, seed=seed))
+    out.update(_heldout(a, b, seed=seed, paired=paired))
     return out
 
 
-def _heldout(a: np.ndarray, b: np.ndarray, *, seed: int) -> dict[str, float]:
+def _heldout(
+    a: np.ndarray, b: np.ndarray, *, seed: int, paired: bool = False
+) -> dict[str, float]:
     """Refit on half of each set, measure on the other half.
 
     The in-sample number above is the direction scored on the very points that
@@ -577,6 +591,21 @@ def _heldout(a: np.ndarray, b: np.ndarray, *, seed: int) -> dict[str, float]:
     as a measurement. When either set has fewer than four members there is no
     split to make and they come back `missing` rather than as an optimistic
     stand-in.
+
+    `paired=True` is for a MATCHED design, where `pos[i]` and `neg[i]` differ in
+    exactly one thing and splitting the two sides independently is wrong. It is
+    wrong in a specific, measured way: independent halves put different items on
+    the two sides, so the fitted difference picks up an (items-in-fit-pos minus
+    items-in-fit-neg) term, and the test halves are exactly the complements — so
+    that term comes back with the opposite sign. On the eval-awareness prompt set
+    (64 matched pairs, SmolLM2-135M-Instruct, 40 seeds) the mean held-out Cohen's
+    d at layers 4/12/19/25 was +0.13 / −0.28 / −0.38 / −0.40 with independent
+    splits and +0.52 / +0.89 / +0.32 / +0.31 with paired ones. The negative
+    numbers were an artefact of breaking the pairing, and anything reading them as
+    "the direction does not transfer" would have been reading the split.
+
+    Default stays `False`: a caller only knows its two sets are paired if its
+    design says so, and `heldout_split` records which was done either way.
     """
     if a.shape[0] < 4 or b.shape[0] < 4:
         return {
@@ -584,10 +613,18 @@ def _heldout(a: np.ndarray, b: np.ndarray, *, seed: int) -> dict[str, float]:
             "heldout_overlap": "missing",
             "heldout_n_pos": 0,
             "heldout_n_neg": 0,
+            "heldout_split": "missing",
         }
+    if paired and a.shape[0] != b.shape[0]:
+        raise DirectionError(
+            f"paired=True needs one neg per pos, got {a.shape[0]} and {b.shape[0]}"
+        )
     rng = np.random.default_rng(seed)
-    pa = rng.permutation(a.shape[0])
-    pb = rng.permutation(b.shape[0])
+    if paired:
+        pa = pb = rng.permutation(a.shape[0])
+    else:
+        pa = rng.permutation(a.shape[0])
+        pb = rng.permutation(b.shape[0])
     ha, hb = a.shape[0] // 2, b.shape[0] // 2
     fit_a, test_a = a[pa[:ha]], a[pa[ha:]]
     fit_b, test_b = b[pb[:hb]], b[pb[hb:]]
@@ -598,6 +635,7 @@ def _heldout(a: np.ndarray, b: np.ndarray, *, seed: int) -> dict[str, float]:
         "heldout_overlap": st["overlap"],
         "heldout_n_pos": int(test_a.shape[0]),
         "heldout_n_neg": int(test_b.shape[0]),
+        "heldout_split": "paired" if paired else "independent",
     }
 
 

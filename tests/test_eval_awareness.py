@@ -31,6 +31,8 @@ from nebulai.backend.eval_awareness import (
     fit_direction,
     write_entry,
 )
+from nebulai.backend.channels import read_channels, write_channels
+from nebulai.backend.directions import read_directions, renderable
 from nebulai.prompts import load_prompt_set
 
 EVAL_MARK = "EVALFRAME"
@@ -172,11 +174,17 @@ def test_overlap_is_the_misclassification_rate_under_the_implied_threshold() -> 
 def test_a_real_effect_clears_its_null_and_transfers_to_unseen_frames(monkeypatch) -> None:
     monkeypatch.setattr(ea, "load_prompt_set", lambda _id: (_doc(), "f" * 64))
     entry = build_entries(_Stub(6.0), layers=[1], batch_size=8, null_n=24)[0]
-    c = entry["source"]["contrast"]
+    ea_block = entry.source["eval_awareness"]
+    # the strict null: refit the whole procedure on shuffled labels
+    assert ea_block["cohens_d"] > ea_block["label_permutation"]["cohens_d_p95"]
+    # and it transfers to framings the fit never saw
+    assert ea_block["frame_heldout"]["cohens_d"] > 1.0
+    assert ea_block["overlap"] < 0.05
+    assert ea_block["in_sample"] is True
+    # the registry's own two controls are there as well, and are NOT these
+    c = entry.source["contrast"]
     assert c["cohens_d"] > c["null_cohens_d_p95"]
     assert c["heldout_cohens_d"] > 1.0
-    assert c["overlap"] < 0.05
-    assert c["in_sample"] is True
 
 
 def test_noise_does_not_clear_its_null_and_does_not_transfer(monkeypatch) -> None:
@@ -185,10 +193,13 @@ def test_noise_does_not_clear_its_null_and_does_not_transfer(monkeypatch) -> Non
     does every shuffle of the same labels."""
     monkeypatch.setattr(ea, "load_prompt_set", lambda _id: (_doc(), "f" * 64))
     entry = build_entries(_Stub(0.0), layers=[1], batch_size=8, null_n=24)[0]
-    c = entry["source"]["contrast"]
-    assert c["cohens_d"] > 0.0  # a diff of means always separates its own rows
-    assert c["cohens_d"] <= c["null_cohens_d_p95"]
-    assert abs(c["heldout_cohens_d"]) < 1.0
+    ea_block = entry.source["eval_awareness"]
+    assert ea_block["cohens_d"] > 0.0  # a diff of means always separates its own rows
+    assert ea_block["cohens_d"] <= ea_block["label_permutation"]["cohens_d_p95"]
+    assert abs(ea_block["frame_heldout"]["cohens_d"]) < 1.0
+    # the random-DIRECTION null is the weaker one and is allowed to be cleared
+    # here; it is kept in the file precisely so the two can be compared
+    assert entry.source["contrast"]["null_cohens_d_p95"] > 0.0
 
 
 def test_the_heldout_split_is_over_frames_the_fit_never_saw() -> None:
@@ -201,19 +212,21 @@ def test_the_heldout_split_is_over_frames_the_fit_never_saw() -> None:
 
 def test_no_split_is_said_rather_than_shown_as_a_failed_one(monkeypatch) -> None:
     monkeypatch.setattr(ea, "load_prompt_set", lambda _id: (_doc(heldout=0), "d" * 64))
-    c = build_entries(_Stub(6.0), layers=[1], batch_size=8, null_n=8)[0]["source"]["contrast"]
-    assert c["heldout_cohens_d"] is None  # NOT 0.0, which reads as "did not transfer"
-    assert c["heldout_n_pos"] == 0
-    assert "heldout_missing" in c
+    fh = build_entries(_Stub(6.0), layers=[1], batch_size=8, null_n=8)[0].source[
+        "eval_awareness"
+    ]["frame_heldout"]
+    assert fh["cohens_d"] is None  # NOT 0.0, which reads as "did not transfer"
+    assert fh["n_pos"] == 0
+    assert "missing" in fh
 
 
 def test_the_sweep_writes_every_layer_it_tried(monkeypatch) -> None:
     monkeypatch.setattr(ea, "load_prompt_set", lambda _id: (_doc(), "e" * 64))
     entries = build_entries(_Stub(3.0), layers=[0, 1, 2, 3], batch_size=8, null_n=8)
-    assert [e["source"]["layer"] for e in entries] == [0, 1, 2, 3]
-    assert [e["space"] for e in entries] == ["resid.L0", "resid.L1", "resid.L2", "resid.L3"]
-    assert len({e["id"] for e in entries}) == 4
-    assert all("one layer of a sweep" in e["source"]["protocol"] for e in entries)
+    assert [e.source["layer"] for e in entries] == [0, 1, 2, 3]
+    assert [e.space for e in entries] == ["resid.L0", "resid.L1", "resid.L2", "resid.L3"]
+    assert len({e.id for e in entries}) == 4
+    assert all("one layer of a sweep" in e.source["protocol"] for e in entries)
 
 
 # ── provenance ───────────────────────────────────────────────────────────────
@@ -222,8 +235,8 @@ def test_the_sweep_writes_every_layer_it_tried(monkeypatch) -> None:
 def test_the_entry_carries_the_prompt_set_sha_and_the_resolved_revision(monkeypatch, tmp_path):
     monkeypatch.setattr(ea, "load_prompt_set", lambda _id: (_doc(), "ab" * 32))
     e = build_entries(_Stub(2.0), layers=[1], batch_size=8, null_n=8)[0]
-    assert e["source"]["prompt_set_sha"] == "abababababab"
-    assert "stub/eval-awareness" in e["source"]["protocol"]
+    assert e.source["prompt_set_sha"] == "abababababab"
+    assert "stub/eval-awareness" in e.source["protocol"]
     p = write_entry(e, tmp_path / "directions.json", model="stub/eval-awareness", revision="deadbeef")
     doc = json.loads(p.read_text())
     assert doc["meta"]["revision"] == "deadbeef"
@@ -239,7 +252,7 @@ def test_writing_the_same_id_twice_replaces_it(monkeypatch, tmp_path) -> None:
     write_entry(b, path, model="stub/eval-awareness", revision="x")
     doc = json.loads(path.read_text())
     assert len(doc["directions"]) == 1  # a rerun is a correction, not a second reading
-    assert doc["directions"][0]["vector"] == b["vector"]
+    assert doc["directions"][0]["vector"] == b.to_json()["vector"]
 
 
 def test_a_file_for_another_model_is_refused(monkeypatch, tmp_path) -> None:
@@ -249,3 +262,63 @@ def test_a_file_for_another_model_is_refused(monkeypatch, tmp_path) -> None:
     e = build_entries(_Stub(2.0), layers=[1], batch_size=8, null_n=8)[0]
     with pytest.raises(EvalAwarenessError, match="someone/else"):
         write_entry(e, path, model="stub/eval-awareness", revision="x")
+
+# ── the registry ─────────────────────────────────────────────────────────────
+
+
+def test_the_written_entry_passes_renderable(monkeypatch, tmp_path) -> None:
+    """The point of the collapse: these entries are real registry entries.
+
+    `directions.renderable()` is the gate the viewer applies — a null block, a
+    projection channel that exists in `channels.json`, and the same space tag on
+    both. Before the collapse this module hand-built a dict that looked like a
+    direction and could never have passed, because nothing gave it a projection.
+    """
+    monkeypatch.setattr(ea, "load_prompt_set", lambda _id: (_doc(), "f" * 64))
+    entries, acts = ea.build_sweep(_Stub(6.0), layers=[1, 2], batch_size=8, null_n=8)
+    chans = ea.project_entries(entries, acts, n_null=8)
+
+    dpath = tmp_path / "directions.json"
+    cpath = tmp_path / "channels.json"
+    ea.write_entries(entries, dpath, model="stub/eval-awareness", revision="x")
+    write_channels(
+        cpath,
+        model="stub/eval-awareness",
+        revision="x",
+        n_points=len(acts[1]),
+        channels=chans,
+        point_source="prompts:eval_awareness.test",
+    )
+
+    ok, drops = renderable(read_directions(dpath), read_channels(cpath))
+    assert drops == []
+    assert {d["id"] for d in ok} == {e.id for e in entries}
+    assert all(e.renderable for e in entries)
+
+
+def test_each_layer_is_projected_onto_its_own_layer_not_another(monkeypatch) -> None:
+    """D2 in the one place it could quietly go wrong here.
+
+    Every entry in the sweep has the same dimensionality, so projecting L1's
+    direction onto L2's activations would raise nothing and produce numbers. The
+    channels have to carry the direction's own space tag, and the projection has
+    to have been computed from that layer's rows.
+    """
+    monkeypatch.setattr(ea, "load_prompt_set", lambda _id: (_doc(), "f" * 64))
+    entries, acts = ea.build_sweep(_Stub(6.0), layers=[1, 2], batch_size=8, null_n=8)
+    chans = ea.project_entries(entries, acts, n_null=8)
+    by_id = {c.id: c for c in chans}
+    for e in entries:
+        L = e.source["layer"]
+        assert e.space == f"resid.L{L}"
+        ch = by_id[e.projection["channel"]]
+        assert ch.space == e.space
+        # the parallel channel IS acts[L] @ v, which pins which rows were used
+        assert np.allclose(ch.values, acts[L].astype(np.float64) @ e.vector, atol=1e-5)
+
+
+def test_an_entry_with_no_activations_for_its_layer_is_refused(monkeypatch) -> None:
+    monkeypatch.setattr(ea, "load_prompt_set", lambda _id: (_doc(), "f" * 64))
+    entries, acts = ea.build_sweep(_Stub(6.0), layers=[1], batch_size=8, null_n=8)
+    with pytest.raises(EvalAwarenessError, match="no activations"):
+        ea.project_entries(entries, {}, n_null=8)
