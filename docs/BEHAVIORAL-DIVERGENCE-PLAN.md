@@ -1624,6 +1624,20 @@ Deliver:
 Gate:
 
 - interruption/resume produces no duplicate completed trials;
+- **a second runner on one store is refused, not tolerated.** Added
+  2026-09-12 after measuring the failure: four `behavior run` processes were
+  alive on `out/behavior/positive-control-2026-09-12/trials.sqlite` at the same
+  time, each at ~40% of a core, and the row count did not move for half an hour.
+  Resumption was working exactly as specified — each process re-derived the same
+  remaining schedule, generated the same trials, and lost the `INSERT OR IGNORE`
+  race for each one — so nothing was corrupted, nothing was double-billed, and
+  nothing progressed. The gate above is silent about this because it only asks
+  about *sequential* interruption and resume, which is why the gap survived a
+  test suite that tests resumption with a real `SIGKILL`. `TrialStore.claim_writer`
+  now takes a single-writer lock (pid + host + heartbeat, claimed under
+  `BEGIN IMMEDIATE`) and `Runner.run` holds it for the duration of an arm,
+  releasing on every exit path including a raise; `--force-unlock` exists for a
+  holder a human has confirmed is dead and is never inferred;
 - requested/served identities are present on every API trial;
   `system_fingerprint` is captured **when the provider populates it** and its
   availability is recorded once in the manifest — an absent field never fails a

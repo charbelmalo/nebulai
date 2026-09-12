@@ -210,7 +210,12 @@ def run_run(a: argparse.Namespace) -> None:
         # reader counting 40 cues in a 100-cue manifest cannot otherwise tell a
         # deliberate partial run from a lost database.
         store.set_meta("cue_limit", str(int(a.cue_limit)))
-    res = runner.run(a.arm, limit=a.limit, cue_limit=a.cue_limit)
+    res = runner.run(
+        a.arm,
+        limit=a.limit,
+        cue_limit=a.cue_limit,
+        force_unlock=getattr(a, "force_unlock", False),
+    )
     print(
         f"arm {res.arm}: {res.completed} new, {res.skipped_existing} already "
         f"present, {res.errors} errored, ${res.spent_usd:.4f} spent"
@@ -728,6 +733,16 @@ def add_behavior_parser(sub: argparse._SubParsersAction) -> None:
     r.add_argument("--manifest", required=True)
     r.add_argument("--arm", default="discovery", help="discovery | R | G | canary")
     r.add_argument("--limit", type=int, default=None)
+    r.add_argument(
+        "--force-unlock",
+        action="store_true",
+        help=(
+            "take the store even though another process holds its writer lock. "
+            "Only for a holder you have confirmed is dead: the lock exists "
+            "because two runners on one store do the same work twice and finish "
+            "no sooner, which looks like health from both sides."
+        ),
+    )
     r.add_argument(
         "--cue-limit",
         type=int,

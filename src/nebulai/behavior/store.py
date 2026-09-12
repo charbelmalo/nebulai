@@ -21,12 +21,25 @@ policy nobody tested.
 The DB is opened in WAL mode with `synchronous=FULL` for the same reason: a
 power loss in the middle of a paid run must lose at most the in-flight request,
 not the preceding hour.
+
+**One writer at a time.** Resumability makes relaunching cheap, which makes
+relaunching twice easy. Measured 2026-09-12 on this repo: four `behavior run`
+processes were alive on one store at once, each at ~40% CPU, and the row count
+did not move for half an hour — every process re-derived the same remaining
+schedule, generated the same trials, and lost the `INSERT OR IGNORE` race for
+each one. Nothing was corrupted and nothing was double-billed (that is what the
+UNIQUE index is for), but nothing progressed either, and the failure is silent:
+each process looks healthy. `claim_writer` makes the second one refuse instead,
+naming the pid that holds the store.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import socket
 import sqlite3
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Iterator
@@ -34,6 +47,16 @@ from typing import Any, Iterator
 from .contract import TrialRecord
 
 SCHEMA_VERSION = 1
+
+
+class StoreLockedError(RuntimeError):
+    """Another process is writing this store. Raised by `claim_writer`.
+
+    Its own type rather than ValueError because the caller's response is
+    specific: wait, or confirm the holder is dead and force. A generic error
+    here gets swallowed by a retry loop, which is the behaviour the lock exists
+    to prevent.
+    """
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -119,6 +142,126 @@ class TrialStore:
             )
         self.set_meta("manifest_hash", manifest_hash)
         self.set_meta("study_id", study_id)
+
+    # -- the single-writer lock -------------------------------------------
+    #: a heartbeat older than this is treated as abandoned. Generous on purpose:
+    #: a local arm's forward pass over GPT-2-XL took ~43 s per trial on the
+    #: machine this was measured on, and a lock that expires inside one trial
+    #: would hand the store to a second writer while the first is still working.
+    LOCK_STALE_S = 900.0
+
+    def claim_writer(self, *, force: bool = False, note: str = "") -> None:
+        """Take the store's single writer slot, or refuse and say who holds it.
+
+        The check is `BEGIN IMMEDIATE`, so two processes racing to claim cannot
+        both win. A held lock is honoured when EITHER the holder's pid is alive
+        on this host, OR its heartbeat is younger than `LOCK_STALE_S` (the pid
+        test cannot cross hosts, so the heartbeat is the fallback, not the
+        primary). `force=True` is for a holder a human has confirmed is dead —
+        it is never inferred.
+        """
+        now = time.time()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            raw = self.get_meta("writer_lock")
+            #  Re-claiming a lock THIS store object already holds is fine (it is
+            #  the same writer saying so again). A lock held by our own pid
+            #  through a DIFFERENT store object is not: something else in this
+            #  process is mid-run, and two threads racing one store is the same
+            #  wasted work as two processes racing it.
+            mine = getattr(self, "_owns_lock", False)
+            if raw and not force and not mine:
+                try:
+                    cur = json.loads(raw)
+                except ValueError:
+                    cur = {}
+                if cur and self._holder_is_live(cur, now):
+                    self.db.execute("ROLLBACK")
+                    age = now - float(cur.get("heartbeat") or 0.0)
+                    raise StoreLockedError(
+                        f"{self.path} is already being written by pid "
+                        f"{cur.get('pid')} on {cur.get('host')} "
+                        f"(last heartbeat {age:.0f}s ago: {cur.get('note') or '-'}). "
+                        f"Two runners on one store re-derive the same remaining "
+                        f"schedule and race each other for every row, which "
+                        f"costs twice the compute for no extra trials. Wait for "
+                        f"it, or stop it and pass --force-unlock."
+                    )
+            self.set_meta(
+                "writer_lock",
+                json.dumps(
+                    {
+                        "pid": os.getpid(),
+                        "host": socket.gethostname(),
+                        "started": now,
+                        "heartbeat": now,
+                        "note": note,
+                    }
+                ),
+            )
+            self.db.execute("COMMIT")
+        except StoreLockedError:
+            raise
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+        self._owns_lock = True
+
+    def _holder_is_live(self, cur: dict[str, Any], now: float) -> bool:
+        host = str(cur.get("host") or "")
+        pid = int(cur.get("pid") or 0)
+        if host == socket.gethostname() and pid > 0:
+            try:
+                os.kill(pid, 0)
+                return True
+            except ProcessLookupError:
+                return False
+            except PermissionError:
+                # alive, owned by someone else
+                return True
+        return (now - float(cur.get("heartbeat") or 0.0)) < self.LOCK_STALE_S
+
+    def beat(self) -> None:
+        """Refresh the heartbeat. Cheap; call it once per persisted batch."""
+        if not getattr(self, "_owns_lock", False):
+            return
+        raw = self.get_meta("writer_lock")
+        if not raw:
+            return
+        try:
+            cur = json.loads(raw)
+        except ValueError:
+            return
+        cur["heartbeat"] = time.time()
+        self.set_meta("writer_lock", json.dumps(cur))
+
+    def release_writer(self) -> None:
+        """Drop the lock if this process holds it. Never steals someone else's."""
+        if not getattr(self, "_owns_lock", False):
+            return
+        raw = self.get_meta("writer_lock")
+        self._owns_lock = False
+        if not raw:
+            return
+        try:
+            cur = json.loads(raw)
+        except ValueError:
+            cur = {}
+        if int(cur.get("pid") or 0) != os.getpid():
+            return
+        self.db.execute("DELETE FROM meta WHERE key='writer_lock'")
+
+    def writer_lock(self) -> dict[str, Any] | None:
+        """Who holds the store, for `inspect` and for the server's /health."""
+        raw = self.get_meta("writer_lock")
+        if not raw:
+            return None
+        try:
+            d = json.loads(raw)
+        except ValueError:
+            return None
+        d["live"] = self._holder_is_live(d, time.time())
+        return d
 
     # -- writes -----------------------------------------------------------
     def record(self, t: TrialRecord) -> bool:

@@ -30,7 +30,7 @@ import pytest
 from nebulai.behavior.contract import Cue, Manifest, ModelRef, TrialRecord
 from nebulai.behavior.protocol import default_frames
 from nebulai.behavior.runner import Runner, build_schedule
-from nebulai.behavior.store import SCHEMA_VERSION, TrialStore
+from nebulai.behavior.store import SCHEMA_VERSION, StoreLockedError, TrialStore
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -293,3 +293,142 @@ def test_progress_reports_what_the_store_holds(tmp_path):
         assert p["total"] == 30
         assert p["by_arm"]["discovery"]["trials"] == 30
         assert json.dumps(p)  # serializable for the loopback server
+
+
+# --- one writer at a time -------------------------------------------------
+# Measured 2026-09-12: four `behavior run` processes were alive on one store at
+# once. Nothing was corrupted and nothing was double-billed — that is what the
+# UNIQUE identity index is for — but the row count did not move for half an hour
+# while each process burned ~40% of a core re-deriving the same remaining
+# schedule and losing the INSERT race for every row. The failure is silent from
+# inside any one process, which is why it ran that long. These tests pin the
+# refusal, what counts as a dead holder, and that the lock cannot outlive a run.
+
+
+def test_a_second_writer_is_refused_and_told_who_holds_the_store():
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "t.sqlite"
+        with TrialStore(path) as a:
+            a.claim_writer(note="first")
+            with TrialStore(path) as b:
+                with pytest.raises(StoreLockedError) as exc:
+                    b.claim_writer()
+                msg = str(exc.value)
+                assert str(os.getpid()) in msg       # names the holder
+                assert "--force-unlock" in msg       # names the way out
+                assert "same work twice" in msg or "twice the compute" in msg
+
+
+def test_releasing_hands_the_store_to_the_next_writer(tmp_path):
+    path = tmp_path / "t.sqlite"
+    with TrialStore(path) as a:
+        a.claim_writer()
+        assert a.writer_lock()["live"] is True  # we are a live holder
+        a.release_writer()
+        with TrialStore(path) as b:
+            b.claim_writer()  # must not raise
+            assert b.writer_lock() is not None
+
+
+def test_a_dead_holders_lock_is_not_honoured(tmp_path):
+    """A pid that no longer exists never blocks a run. The alternative is a
+    machine that has to be hand-unlocked after every crash, which is how
+    --force-unlock stops being read and starts being pasted."""
+    import json as _json
+
+    path = tmp_path / "t.sqlite"
+    with TrialStore(path) as a:
+        a.claim_writer()
+        raw = _json.loads(a.get_meta("writer_lock"))
+        # a pid that is very unlikely to exist, on this host, with a fresh
+        # heartbeat: only the liveness check can rescue this case
+        raw["pid"] = 999_999_999
+        raw["heartbeat"] = time.time()
+        a.set_meta("writer_lock", _json.dumps(raw))
+        a._owns_lock = False
+        with TrialStore(path) as b:
+            b.claim_writer()
+            assert _json.loads(b.get_meta("writer_lock"))["pid"] == os.getpid()
+
+
+def test_a_stale_heartbeat_from_another_host_expires(tmp_path):
+    import json as _json
+
+    path = tmp_path / "t.sqlite"
+    with TrialStore(path) as a:
+        a.set_meta(
+            "writer_lock",
+            _json.dumps(
+                {
+                    "pid": 2,
+                    "host": "some-other-machine",
+                    "started": 0.0,
+                    # older than LOCK_STALE_S, and the pid test cannot cross hosts
+                    "heartbeat": time.time() - (TrialStore.LOCK_STALE_S + 60),
+                    "note": "",
+                }
+            ),
+        )
+        a.claim_writer()
+        assert _json.loads(a.get_meta("writer_lock"))["host"] != "some-other-machine"
+
+
+def test_a_fresh_heartbeat_from_another_host_is_honoured(tmp_path):
+    import json as _json
+
+    path = tmp_path / "t.sqlite"
+    with TrialStore(path) as a:
+        a.set_meta(
+            "writer_lock",
+            _json.dumps(
+                {
+                    "pid": 2,
+                    "host": "some-other-machine",
+                    "started": 0.0,
+                    "heartbeat": time.time(),
+                    "note": "",
+                }
+            ),
+        )
+        with pytest.raises(StoreLockedError):
+            a.claim_writer()
+        # and force takes it, because that is a decision a human made
+        a.claim_writer(force=True)
+
+
+def test_a_run_releases_the_lock_even_when_it_raises(tmp_path):
+    """`run` must not leave a lock behind on any exit path: a crashed run that
+    holds the store would make its own resume — the feature — impossible."""
+    m = _manifest(study_id="t_lock")
+    path = tmp_path / "t.sqlite"
+    with TrialStore(path) as s:
+        r = Runner(m, s)
+
+        boom = RuntimeError("collection blew up")
+
+        def explode(*_a, **_k):
+            raise boom
+
+        r._run = explode
+        with pytest.raises(RuntimeError):
+            r.run("discovery")
+        assert s.writer_lock() is None, "a failed run must not keep the store"
+        # and the normal path is clean too
+        r2 = Runner(m, s)
+        r2.run("discovery", limit=4)
+        assert s.writer_lock() is None
+
+
+def test_two_runners_in_sequence_still_resume(tmp_path):
+    """The lock must not break the property it protects: sequential runs on one
+    store still finish the schedule exactly once."""
+    m = _manifest(study_id="t_lock_seq")
+    with TrialStore(tmp_path / "t.sqlite") as s:
+        a = Runner(m, s).run("discovery", limit=10)
+        b = Runner(m, s).run("discovery")
+        total = len(build_schedule(m, "discovery"))
+        assert a.completed == 10
+        assert a.completed + b.completed == total
+        assert b.skipped_existing == 10

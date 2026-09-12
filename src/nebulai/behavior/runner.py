@@ -392,6 +392,28 @@ class Runner:
         *,
         limit: int | None = None,
         cue_limit: int | None = None,
+        force_unlock: bool = False,
+    ) -> RunResult:
+        # One writer per store. A second runner on the same file is not a
+        # correctness problem — the UNIQUE identity index makes it impossible to
+        # double-collect or double-bill — but it is a throughput problem that
+        # looks like health: both processes re-derive the same remaining
+        # schedule, both generate every trial, and each row is kept once. Four
+        # such processes were measured on this repo making zero net progress for
+        # half an hour at 40% CPU each. Claim the store or refuse, naming the
+        # holder.
+        self.store.claim_writer(force=force_unlock, note=f"behavior run --arm {arm}")
+        try:
+            return self._run(arm, limit=limit, cue_limit=cue_limit)
+        finally:
+            self.store.release_writer()
+
+    def _run(
+        self,
+        arm: str,
+        *,
+        limit: int | None = None,
+        cue_limit: int | None = None,
     ) -> RunResult:
         sched = canary_schedule(self.m) if arm == "canary" else build_schedule(self.m, arm)
         keep = cue_prefix(self.m, cue_limit)
@@ -457,6 +479,10 @@ class Runner:
             )
             if len(pending) >= FLUSH_EVERY_RECORDS or issued >= len(todo) or stale:
                 self.store.record_many(pending)
+                # Same moment as the flush: the heartbeat is what tells a later
+                # process whether a crashed holder's lock is abandoned, so it
+                # has to advance with the work, not with the clock.
+                self.store.beat()
                 pending = []
                 last_flush = time.monotonic()
                 if self.progress:
