@@ -303,3 +303,45 @@ def test_a_custom_rule_still_goes_through_the_same_judge():
              statement="Out of character = a digit.", pattern=r"\d")
     assert r.violates("there are 3 of them") is True
     assert r.violates("there are three of them") is False
+
+
+def test_write_study_also_writes_the_index_the_viewer_discovers_studies_through(tmp_path):
+    """The AbsorbingPanel reads `<root>/index.json` and nothing else; a study
+    written without it is invisible, indistinguishable from no study at all."""
+    import json
+
+    from nebulai.backend.absorbing import write_index
+
+    root = tmp_path / "absorbing"
+    (root / "s1").mkdir(parents=True)
+    (root / "s1" / "absorbing.json").write_text(
+        json.dumps(
+            {
+                "meta": {"study_id": "s1", "model": "m", "revision": "r",
+                         "config": {"stopped_early": True}},
+                "rule": {"id": "no_exclamation"},
+                "stats": {"n_conversations": 7, "verdict": "absorbing_above_null"},
+            }
+        )
+    )
+    (root / "not-a-study").mkdir()
+    path = write_index(root)
+    doc = json.loads(path.read_text())
+    assert doc == {
+        "studies": [
+            {
+                "study_id": "s1",
+                "model": "m",
+                "revision": "r",
+                "rule": "no_exclamation",
+                "n_conversations": 7,
+                "verdict": "absorbing_above_null",
+                "stopped_early": True,
+            }
+        ]
+    }
+    # regenerated from disk, not appended: a removed study drops out
+    import shutil
+
+    shutil.rmtree(root / "s1")
+    assert json.loads(write_index(root).read_text()) == {"studies": []}

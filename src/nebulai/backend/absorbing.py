@@ -569,6 +569,40 @@ def write_study(study: Study, root: Path | str = DEFAULT_OUT) -> Path:
     d.mkdir(parents=True, exist_ok=True)
     path = d / "absorbing.json"
     path.write_text(json.dumps(study.to_dict(), indent=2) + "\n")
+    write_index(root)
+    return path
+
+
+def write_index(root: Path | str = DEFAULT_OUT) -> Path:
+    """Rewrite `<root>/index.json` from the studies actually on disk.
+
+    The viewer's AbsorbingPanel discovers studies through this file and
+    nothing else (a static deploy cannot list a directory), so a study that
+    is written without it is invisible: the panel renders nothing, which is
+    also what it renders when no study exists. The first live study shipped
+    exactly that way — the file below is what makes the readout appear.
+    Regenerated from disk on every write rather than appended to, so a
+    deleted study directory drops out of the index too.
+    """
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    studies = []
+    for d in sorted(p for p in root.iterdir() if (p / "absorbing.json").exists()):
+        doc = json.loads((d / "absorbing.json").read_text())
+        meta, stats = doc.get("meta", {}), doc.get("stats", {})
+        studies.append(
+            {
+                "study_id": meta.get("study_id", d.name),
+                "model": meta.get("model"),
+                "revision": meta.get("revision"),
+                "rule": (doc.get("rule") or {}).get("id"),
+                "n_conversations": stats.get("n_conversations"),
+                "verdict": stats.get("verdict"),
+                "stopped_early": bool((meta.get("config") or {}).get("stopped_early", False)),
+            }
+        )
+    path = root / "index.json"
+    path.write_text(json.dumps({"studies": studies}, indent=2) + "\n")
     return path
 
 
@@ -600,5 +634,6 @@ __all__ = [
     "transition_counts",
     "wilson",
     "within_conversation_null",
+    "write_index",
     "write_study",
 ]
