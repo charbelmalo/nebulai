@@ -3,8 +3,9 @@
 The README's roadmap carries one line that this document exists to expand:
 
 > Held-out auto-interp scores and activation-based coherence — the two
-> validation layers `nebulai validate` does not yet cover (it measures geometry
-> and stability, not whether a cluster predicts behaviour).
+> validation layers `nebulai validate` does not yet cover. It measures
+> geometry and stability; it never reads a cluster title, so nothing in the
+> suite currently grades the naming.
 
 That sentence is accurate and it is also the whole of what has been written
 down, which is not enough to act on. What follows says exactly what each layer
@@ -14,9 +15,11 @@ and would not license anyone to claim, and the way each one fails when it is
 built naively.
 
 **This document specifies requirements. It implements nothing and proposes no
-code.** The second layer in particular depends on machinery that is gated and
-unbuilt, and the point of writing the requirements down before the gate is that
-a gate is easier to hold when everyone can see what is behind it.
+code.** The second layer depends on machinery that is partly built and still
+gated — the repo captures activations and ships one hashed corpus, but nothing
+aggregates either by cluster — and the point of writing the requirements down
+before the gate is that a gate is easier to hold when everyone can see what is
+behind it.
 
 ## What `nebulai validate` measures today
 
@@ -93,7 +96,7 @@ cluster, and nothing currently distinguishes the two cases.
 | Per-unit display labels | **Partly, and this is the binding constraint — see below.** |
 | The exact member set shown to the namer | **No, but reconstructible.** `_representatives()` is deterministic given the vectors and `k`, so the shown set can be recomputed — at the cost of a `reload_units()` call, inheriting its refusals for `api_text_embedding` and `probe_concept` maps. Recording the representatives at name time would remove that dependency and is the honest fix. |
 | A judge model distinct from the namer | Yes — the backend chain in `name.py` / `src/nebulai/llm.py` already reaches several, and `meta` stamps `namer_backend`, `namer_model` and `namer_identity`, so "is the judge the namer?" is a checkable question rather than a hope. |
-| Matched distractor pools | No. Nothing in the repo samples negatives. |
+| Matched distractor pools | No. Matched and stratified sampling do exist elsewhere — `behavior/cues.py` draws a stratum-balanced calibration subset, `backend/persona.py::probe_strata` carries the crossed design's strata into the permutation null, and `prompts/eval_awareness.v1.json` is a matched-pair set by construction — but nothing samples a **distractor pool for a title judge**. |
 | A shuffled-title null | No. |
 
 The label constraint decides where this layer can run at all, and it differs by
@@ -189,23 +192,88 @@ It does not license any of these, and the distance matters:
 
 ### Track 4 is not implemented, and this document does not implement it
 
-Activation-based coherence requires real activations: the units' responses to
-real text. This repository has none, anywhere, by design.
+Activation-based coherence requires real activations — the units' responses to
+real text — aggregated per unit over a declared corpus. Both halves of that now
+partly exist, so the statement this section used to make ("this repository has
+none, anywhere, by design") is no longer true and the honest version is
+narrower.
+
+The repository **does** capture activations over real text. `GPT2Numpy.forward()`
+returns a `Trace` whose `resid` is `(n_layer+1, T, d)` and whose `mlp_post` is
+`(n_layer, T, d_mlp)`, and `LlamaNumpy.capture_resid()` batches residual capture
+for the Llama-architecture instruct models — which is what `backend/persona.py`,
+`backend/eval_awareness.py` and `interp/live_server.py` run on. Interventions go
+through the same door: `interp/hooks.py` fixes one `resid_hooks` protocol that
+both runners implement and `interp/intervene.py` writes against.
+
+It also already has one fixed, declared, hashed corpus and one per-unit
+activation pass over it. `compute_cofire()` in `interp/bundles.py` runs the
+res-jb SAE encoder over every position of
+`src/nebulai/backend/interp/corpus_alice.txt` (Alice's Adventures in Wonderland,
+Project Gutenberg #11, public domain; sha256 `86bd0504…c563a234`, 44,527 tokens,
+348 windows of 128, 44,179 counted positions after each window's position 0 is
+dropped) and exports exact per-feature firing counts `n_i`, exact joint counts
+`c_ij` across all 24,576 features, the independence expectation `n_i·n_j/N`, and
+a seeded permutation yardstick that destroys pairing while keeping both
+marginals.
+
+So what is missing is not capture and not a corpus. It is:
+
+- **Aggregation by cluster.** `compute_cofire()` scores *pairs of features*,
+  selected by Dunning's G², and never reads `points[].cluster_id`. The quantity
+  this layer wants — within-cluster co-activation lift against matched
+  between-cluster pairs — is computed nowhere.
+- **Coverage of the mapped units.** The corpus pass covers one SAE
+  (`gpt2-small` / `blocks.8.hook_resid_pre`). Neuron maps have `mlp_post`
+  available per prompt but nothing aggregates it over a corpus, and no other
+  model has a corpus pass at all.
+- **A corpus chosen for this purpose.** One 44k-token novel is a *disclosed*
+  corpus, not a representative one, and "How it fails when built naively" below
+  is largely about that choice.
+
+The gate has not moved, and the four reasons it was drawn now stand differently:
 
 - `recommended-plan.md` §"Track 4 — Optional, gated: activations frontend" is
-  where activations live, and it is marked **"⚠️ Needs approval before any
-  work"**. Its own recommendation is "skip until Track 2 results argue for it",
-  and the sequencing table lists it last, "only if 4 justifies it".
-- Track 4 breaks the repo's deliberate no-torch rule. `pyproject.toml`'s base
-  dependencies are `numpy` and `safetensors`; torch sits in an optional group,
-  and `frontends/sae.py` explains in its header that it reads `W_dec` with
-  `huggingface_hub` + `safetensors.numpy` precisely to avoid "a multi-GB torch
-  dependency tree the repo deliberately excludes".
-- Track 4 also reintroduces the GPU host the current plan removed.
-- And it crosses the line the README's honesty notes draw: *"Weight geometry,
-  not activations. Every model-derived map here answers 'what can this layer
-  *write*', never 'what did it write for prompt X'."* An activation-based number
-  would be the first measurement in this project that is not about weights.
+  unchanged as of 2026-09-12 and still carries its marker verbatim: **"⚠️ Needs
+  approval before any work"**, with "**Recommendation: skip until Track 2
+  results argue for it**", and the sequencing table still lists it last, "only
+  if 4 justifies it". Note what Track 4 actually proposes: a separate
+  `nebulai[activations]` extra (torch + Transformers, GPU host) emitting
+  **Units** — an activations *front-end*, which is a much larger thing than
+  this layer needs.
+- The no-torch rule still holds, and it is enforced rather than asserted now.
+  `pyproject.toml`'s base dependencies stay torch-free, checked by
+  `tests/test_no_torch_in_base.py`, which imports the CLIs with `torch` made
+  unimportable; `frontends/sae.py` still reads `W_dec` with `huggingface_hub` +
+  `safetensors.numpy` to avoid "a multi-GB torch dependency tree the repo
+  deliberately excludes". Torch sits behind **two** separate opt-ins with
+  different purposes and different enforcing tests: the extra
+  `[project.optional-dependencies] organisms` (`torch, transformers, peft,
+  datasets`), used only by `src/nebulai/organisms/`, and the dependency group
+  `behavior-local` (pinned `torch==2.14.0`, `transformers==5.17.0`,
+  `sentence-transformers==6.0.1`), used only by the Behavior study's local arms
+  and enforced by `tests/test_behavior_optional_dep.py`. The `organisms` gate
+  has already been opened once, deliberately, to train the emergent-misalignment
+  rank-1 LoRA (`out/organisms/emergent_misalignment.json`, commit `f8d9819`) —
+  so "the base install stays torch-free" is a demonstrated property now rather
+  than an untested one.
+- Track 4 also reintroduces the GPU host the current plan removed. (A CPU numpy
+  forward pass is demonstrated at study scale — the absorbing-state study ran
+  2,400 self-play conversations in 12,301 s, ~5.1 s each — so the GPU
+  requirement is about the *activation matrix over a corpus*, not about running
+  the model at all.)
+- And an activation-based number is no longer "the first measurement in this
+  project that is not about weights". The persona PC1 and its permutation
+  control, the eval-awareness direction, `nebulai intervene`'s KL sweeps with
+  their α = 0 no-hook control, the absorbing-state statistic and the Behavior
+  study all ship, each under its own protocol and its own null, and the
+  README's honesty notes were amended to permit exactly that: *"Causal claims
+  only where an intervention was run, stated in the intervention's own terms —
+  never about what a direction is."* The note those measurements did **not**
+  repeal is the one about maps: *"Every model-derived map here answers 'what
+  can this layer write', never 'what did it write for prompt X'"* — which is
+  still true of every map `nebulai validate` grades, and is precisely why this
+  layer would say something new.
 
 **Nothing below is a proposal to open that gate.** It is the requirements list
 that whoever opens it should already have in hand.
@@ -214,10 +282,10 @@ that whoever opens it should already have in hand.
 
 | Needed | Exists today? |
 |---|---|
-| A fixed, declared token corpus | No. |
-| Per-unit activations over that corpus — the SAE encoder applied to the residual stream at the stamped hook for SAE maps, post-nonlinearity hidden activations at the stamped layer for neuron maps | **No.** Nothing in `src/nebulai/` captures activations; there is no forward pass over text anywhere in the package. |
-| A forward-pass runtime (torch / TransformerLens, or an equivalent) | Only as the optional, unbuilt Track 4 dependency group. |
-| Hardware to run it | No. Track 4's own text calls out the ~60 GB GPU host it reintroduces. |
+| A fixed, declared token corpus | **Partly.** One exists and is already in use: `src/nebulai/backend/interp/corpus_alice.txt`, sha256-stamped into `cofire.json` (44,527 tokens, 44,179 counted positions). It was chosen for one co-firing figure on one SAE, not for this layer, and no map declares a corpus of its own. |
+| Per-unit activations over that corpus — the SAE encoder applied to the residual stream at the stamped hook for SAE maps, post-nonlinearity hidden activations at the stamped layer for neuron maps | **Partly.** A forward pass over text ships (`interp/gpt2_numpy.py` for GPT-2, `interp/llama_numpy.py` for Llama-architecture instruct models) with residual capture and the shared hook protocol in `interp/hooks.py`, and `compute_cofire()` already runs the res-jb SAE encoder over a whole corpus and exports exact per-feature firing counts. What does not exist is that capture for a *given map's* mapped unit set — SAE encoder outputs at the map's stamped hook, MLP post-nonlinearity at the map's stamped layer — retained per unit and aggregated by cluster. |
+| A forward-pass runtime (torch / TransformerLens, or an equivalent) | Yes — the equivalent is pure numpy: `interp/gpt2_numpy.py` and `interp/llama_numpy.py`, both implementing `hooks.ForwardPass`. Torch stays optional and gated (two opt-ins, above); it is not needed to run a micro model. |
+| Hardware to run it | **Partly.** A laptop CPU is enough for the runners that ship — 2,400 self-play conversations at ~5.1 s each. Track 4's own text calls out the ~60 GB GPU host it reintroduces; that is about a torch front-end over four models and about the size of the activation matrix, not about running one micro model over text. |
 | Storage for the activation matrix | No. Note that `reduced.npz` already declines to cache the source vectors (50k × 768 float32 ≈ 150 MB per map) — an activation matrix over a corpus is larger again by orders of magnitude, and where it lives is a design decision, not a detail. |
 | Cluster assignments to aggregate over | Yes — `points[].cluster_id`. |
 
@@ -281,7 +349,10 @@ It does not license:
 - **Conflating coherence with a validated title.** A tight, highly coherent
   cluster with a wrong title scores well here and badly in Layer A. The two
   layers are not substitutes and neither is a summary of the other.
-- **Adding torch quietly.** The optional group makes it easy, and the base
-  install's torch-freedom is a load-bearing property of this repo, not an
-  accident of packaging. If Track 4 opens, it opens deliberately, with approval,
-  and the base install stays as it is.
+- **Adding torch quietly.** Two optional surfaces now make it easy — the
+  `organisms` extra and the `behavior-local` group — and the base install's
+  torch-freedom is a load-bearing property of this repo, not an accident of
+  packaging. Both are enforced by a test, and neither is a precedent for a
+  third: the numpy runners already do the forward pass this layer needs. If
+  Track 4 opens, it opens deliberately, with approval, and the base install
+  stays as it is.

@@ -14,15 +14,23 @@ modules under it call `require_torch()` at the top of their entry points, so a
 user without the extra gets the line above instead of a traceback about a
 missing module they never asked for.
 
-What is NOT here
-----------------
-`emergent_misalignment.py` — the rank-1 LoRA over the insecure-code set and its
-inoculation control — is not in this package. Phase 5 of docs/ATTRACTORS-PLAN.md
-is marked optional and it was not run, so nothing here claims it was: an
-untrained training script that has never produced a curve is a sketch wearing a
-module name, and this project's honesty rules apply to its own source tree too.
-The extra and this guard are the half that is real, and they are here because
-they are what the rest of that phase needs in place first.
+What is here
+------------
+`emergent_misalignment.py` — the rank-1 LoRA over the published insecure-code
+set and its one-sentence inoculation control (Phase 5 of
+docs/ATTRACTORS-PLAN.md). It was run once on 2026-09-12, on CPU under a 24-minute
+wall clock, so the shipped record (`out/organisms/emergent_misalignment.json`)
+is a truncated run: 7 and 6 optimiser steps, 6 held-out eval pairs, both arms
+stamped `stopped_early`. What it measured is the direction geometry (per-layer
+cosine between the two arms' learned rank-1 directions against a random-unit
+null) and the narrow held-out logprob margin; the broad misalignment rate is
+recorded as `not_measured`, with the reason, because no permitted judge exists
+here. The adapted weights were never written (D6).
+
+`gpt2_local.py` and `sentence_embedder.py` — the Behavior study's batched
+Transformers GPT-2 sampler and its pinned sentence encoder. They live here
+because they import torch; the `behavior/` package re-exports them through
+thin shims so its own modules stay importable from a torch-free venv.
 """
 
 from __future__ import annotations

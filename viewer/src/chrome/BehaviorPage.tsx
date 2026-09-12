@@ -125,9 +125,10 @@ function EmptyState() {
       <h1 class="behavior-title">No study is published here</h1>
       <p class="behavior-lede">
         This page reads <code>out/behavior/behavior.json</code>, produced by{" "}
-        <code>nebulai behavior run</code> followed by <code>nebulai behavior export</code>.
-        Nothing is fetched from a model when you open this page, and no study ships
-        with the viewer by default.
+        <code>nebulai behavior run</code>, then <code>nebulai behavior analyze</code>,
+        then <code>nebulai behavior publish &lt;study-id&gt;</code>. Nothing is fetched
+        from a model when you open this page, and no study ships with the viewer by
+        default.
       </p>
       <p class="behavior-note">
         The study compares the association distributions of specific pinned model

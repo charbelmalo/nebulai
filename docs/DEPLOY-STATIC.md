@@ -7,7 +7,7 @@ pre-baked instruments under `/psychiX/`, with **zero server-side computation**:
 | URL | What | Needs baked `out/` data? |
 |---|---|---|
 | `/psychiX/` | the separately built, branded **PsychiX shell** whose current instrument boundary enters Nebul.AI | no |
-| `/psychiX/nebulai-maps/` | **Nebul.AI** — "map what a model knows" — **ALREADY LIVE; do not rename this path** | **yes** (~385 MB) |
+| `/psychiX/nebulai-maps/` | **Nebul.AI** — "map what a model knows" — **ALREADY LIVE; do not rename this path** | **yes** (~484 MB) |
 | `/psychiX/seer/` | **Seer** — "map what an agent did" | no |
 
 Nebul.AI and Seer used to be two tabs of one document; they are now two
@@ -35,8 +35,9 @@ deployment workflow.
 ## 0. TL;DR
 
 All three public surfaces are static. Nebul.AI and Seer are SPAs; the branded
-shell is built in its own project. Nebul.AI's views (Atlas / Chord /
-Hierarchical / Compare and all 25 Internals panels) are each a plain `fetch()` of a
+shell is built in its own project. Nebul.AI's views (Map: Atlas / Chord /
+Hierarchical / Compare; the Behavior page; the Episodes page; and all **26**
+Internals panels) are each a plain `fetch()` of a
 **pre-computed JSON file** under `out/`. **Seer needs no such tree — it ships
 with zero baked artifacts and fetches nothing at boot**; it only ever talks to
 a Live capture server if a visitor points it at one. To deploy:
@@ -46,8 +47,9 @@ a Live capture server if a visitor points it at one. To deploy:
    `npm run build:deploy` — one command that runs `build:nebulai`,
    `build:seer` and `build:hub` in turn, each with its own sub-path base and
    its own `dist/<name>/` output (§3).
-2. **Copy the baked `out/` data tree** (~385 MB on disk; ~378 MB actually
-   shipped — see the exclusions in §4) next to the built Nebul.AI app only.
+2. **Copy the baked `out/` data tree** (~484 MB on disk; ~477 MB actually
+   shipped — see the exclusions in §4; re-measure with `du -sh out/` before
+   quoting either number) next to the built Nebul.AI app only.
    `out/` is **git-ignored — it is NOT in the repo** and must be transferred
    out-of-band. Seer and the hub need no equivalent step.
 3. Serve both instrument trees under `/psychiX/`, with the data tree at
@@ -66,24 +68,55 @@ This section is **specific to `/psychiX/nebulai-maps/`** — the dataset catalog
 below is a Nebul.AI concept and neither Seer nor the hub has an analogous
 manifest to verify.
 
-The dataset catalog is `out/index.json` (**18 datasets** as of 2026-08-12; this
-number grows as the pipeline is re-run — re-check rather than trusting it, and
-note the `out/` tree also holds non-catalog dirs such as `compare/` and
-`neuronpedia/`). Verified on the build
-machine: **every referenced artifact exists on disk — zero missing files**, so no
-selection can hit a "data not available" state as long as you ship the whole
-`out/` tree.
+The dataset catalog is `out/index.json` (**28 datasets** as of 2026-09-12; this
+number grows as the pipeline is re-run — re-check rather than trusting it).
+The `out/` tree also holds non-catalog dirs, and **three of them are fetched by
+the browser and must ship**: `behavior/`, `absorbing/`, `persona/`. `compare/`
+is fetched too. Two are build-only: `neuronpedia/` and `organisms/`. And two
+per-model dirs (`Qwen__Qwen2.5-0.5B-Instruct/`,
+`HuggingFaceTB__SmolLM2-135M-Instruct/`) hold **only** `channels.json` and
+`directions.json` — no `nebulai.json`, so they are in no catalog, and a
+selective ship that follows `index.json` would silently drop them.
 
 | Selection | File(s) fetched (relative to `<app>/out/`) |
 |---|---|
 | Boot / dataset list | `index.json` |
 | A dataset's Atlas/Chord/Hierarchy | `<dataset-id>/nebulai.json` (Chord & Hierarchy reuse the loaded columns — no extra fetch) |
-| Internals panels (#1–#25) | `<model>/interp/index.json` + the bundle for each panel (`weights.json`, `embed.json`, `neurons.json`, `sae.json`, `trace_<slug>.json`, … — 3 models have interp: `gpt2`, `distilgpt2`, `gpt2-medium`) |
-| Compare view | `compare/compare.json` |
+| Channel lens (colour-by-scalar) | `<dataset-id>/channels.json` — present for 7 datasets; absent = the lens is off, not an error |
+| Direction axis rail | `<dataset-id>/directions.json` — present for 3 datasets; absent = the rail is absent, not disabled |
+| Internals panels (#1–#26) | `<model>/interp/index.json` + the bundle for each panel (`weights.json`, `embed.json`, `neurons.json`, `sae.json`, `trace_<slug>.json`, … — 3 models have interp: `gpt2`, `distilgpt2`, `gpt2-medium`) |
+| Compare view | `compare/compare.json`, and `compare/metrics.json` for the validated-map columns |
+| Behavior page | `behavior/behavior.json` |
+| Absorbing-state panel | `absorbing/index.json`, then `absorbing/<study_id>/absorbing.json` |
+| Persona card | `persona/index.json`, then `persona/<space_id>/space.json` |
 
-Ship `out/` verbatim (the user chose "everything as-is"). `out/neuronpedia/` and
-the `*.npz` reduction caches are **build-time only** and never fetched by the
-browser — harmless to include, safe to omit if you want to trim ~90 MB.
+Ship `out/` verbatim (the user chose "everything as-is"). `out/neuronpedia/`,
+`out/organisms/` and the `*.npz` reduction caches are **build-time only** and
+never fetched by the browser — harmless to include, safe to omit if you want to
+trim (re-measure with `du -sh out/*/*.npz out/neuronpedia out/organisms` first).
+
+### 1.1 Blocking: `out/persona/index.json` does not exist
+
+**Write it by hand before shipping `out/`.** `nebulai absorbing` writes its own
+`index.json`; **`nebulai persona build` does not** — `backend/persona.py` has a
+`list_spaces()` directory scan and no index writer. `viewer/src/data/persona.ts`
+(`loadSpaceIndex`) treats a missing or non-OK `persona/index.json` as *no
+spaces*, not as an error, and returns `[]`. The consequence on a static deploy
+is silent: the persona-space picker shows **"This deploy ships no persona
+space"** and the two built spaces are invisible, with nothing in the console.
+
+The file the loader reads is:
+
+```json
+{"spaces": [{"space_id": "smollm2-135m-instruct@12fd25f77366.v1.L19"},
+            {"space_id": "smollm2-360m-instruct@a10cc1512eab.v1.L20"}]}
+```
+
+One entry per directory under `out/persona/`. (`loadSpaceIndex` also accepts a
+bare array and a `spaceId` spelling, but `{"spaces": [{"space_id": …}]}` is the
+shape to write.) The real fix is a writer in `backend/persona.py` mirroring
+`absorbing.py`'s — until that lands, this step is manual and it is easy to
+forget.
 
 Seer, by contrast, boots with `window.__store.getState().datasets` empty and
 `dataset` null and makes **zero** requests under `out/` — proved by
@@ -200,7 +233,7 @@ grep -o '/psychiX/assets/[^"]*'              dist/hub/index.html
 
 ---
 
-## 4. Getting the baked data (`out/`, ~385 MB) — Nebul.AI only; the one real logistics step
+## 4. Getting the baked data (`out/`, ~484 MB) — Nebul.AI only; the one real logistics step
 
 **Seer and the hub need nothing from this section.** Only Nebul.AI reads a
 baked artifact tree, and only its own sub-path needs one.
@@ -288,10 +321,40 @@ server you control.)
 > `…/digiCharbel/data/www/research/…` path above is live.
 
 > **Updating the maps later:** re-run the pipeline on the build machine
-> (`uv run nebulai tokens …` / `sae` / `neurons` / `interp` / `compare`), then
+> (`uv run nebulai tokens …` / `sae` / `neurons` / `interp` / `intervene` /
+> `compare` / `channels` / `direction project` / `persona build` /
+> `absorbing run` / `behavior analyze` + `behavior publish`), then
 > re-run the Option A rsync. No rebuild of the SPA is needed unless viewer code
 > changed. `nebulai.json` files compress ~4× (gpt2: 13.8 MB → 3.0 MB gzip), so
 > keep server compression on (§6).
+
+### 4.1 The hand-tracking assets — not under `out/`
+
+The hand rig ships two things that are **not** part of the `out/` data tree and
+are easy to miss because §4's rsync never touches them:
+
+- **`models/gesture_recognizer.task`** — 8,373,440 bytes, committed at
+  `viewer/public/models/gesture_recognizer.task` and copied by Vite into
+  `dist/nebulai/models/`. It is fetched relative to the app's own
+  `import.meta.env.BASE_URL`, i.e. from
+  `…/psychiX/nebulai-maps/models/gesture_recognizer.task`, **not** from `out/`.
+  The §5 app rsync carries it; a deploy that copies only `index.html` and
+  `assets/` does not.
+- **The MediaPipe WASM runtime** (`@mediapipe/tasks-vision`) — bundled by Vite
+  as content-hashed, **same-origin** assets under `assets/` (SIMD and no-SIMD
+  loaders plus their `.wasm` binaries, ~11 MB). It is deliberately not loaded
+  from a CDN, so no CDN allow-listing is needed, but it does mean `assets/`
+  must be shipped whole.
+
+Two server-side requirements follow:
+
+- **A secure origin.** The rig calls `navigator.mediaDevices.getUserMedia`,
+  which browsers expose only on HTTPS (or `localhost`). Over plain HTTP the
+  camera path is unavailable and the rig degrades rather than working.
+- **`'wasm-unsafe-eval'` in `script-src`, if a CSP is present at all.**
+  WebAssembly instantiation needs it. Without it the runtime is blocked and the
+  rig reports "The hand-tracking runtime was blocked. The page CSP must allow
+  wasm-unsafe-eval." If the server sets no CSP, nothing needs changing.
 
 ---
 
@@ -311,12 +374,19 @@ Nebul.AI's data tree nested inside its own subtree only:
     ├── nebulai-maps/                      <- ALREADY LIVE — do not rename this directory
     │   ├── index.html                     <- from dist/nebulai/
     │   ├── assets/                        <- from dist/nebulai/assets/
+    │   ├── models/gesture_recognizer.task <- from viewer/public/ (§4.1) — NOT under out/
     │   └── out/                           <- the baked data tree (§4)
     │       ├── index.json
     │       ├── gpt2/nebulai.json
-    │       ├── gpt2/interp/*.json
-    │       ├── compare/compare.json
-    │       └── … (every dataset in index.json)
+    │       ├── gpt2/channels.json
+    │       ├── gpt2/directions.json
+    │       ├── gpt2/interp/*.json         (26 bundles + index.json)
+    │       ├── compare/compare.json + metrics.json
+    │       ├── behavior/behavior.json
+    │       ├── absorbing/index.json + <study_id>/absorbing.json
+    │       ├── persona/index.json + <space_id>/space.json   (§1.1 — hand-written)
+    │       └── … (every dataset in index.json, plus the two
+    │              channels/directions-only model dirs)
     └── seer/
         ├── index.html                     <- from dist/seer/
         └── assets/                        <- from dist/seer/assets/ — no out/, ever
@@ -492,9 +562,20 @@ Then in a browser:
 **`…/psychiX/nebulai-maps/`** (Nebul.AI):
 - [ ] Semantic map renders; status bar shows `… pts · … clusters · gpu: webgpu`.
 - [ ] Dataset dropdown switches models (loads `<id>/nebulai.json`).
-- [ ] **Internals** tab on `gpt2` shows "25 of 25 live" and a panel renders
+- [ ] **Internals** tab on `gpt2` shows "26 live" in the rail counter and a panel renders
       (e.g. #21 Weight Spectrum draws curves).
 - [ ] View dropdown → **Compare** renders (loads `compare/compare.json`).
+- [ ] **Behavior** page loads a study (fetches `behavior/behavior.json`) and the
+      coverage banner renders.
+- [ ] **Episodes** page lists the 26 Internals features with their research
+      references.
+- [ ] On `gpt2`, the channel lens offers `we_norm` / `we_centroid_dist`
+      (fetches `gpt2/channels.json`).
+- [ ] On `gpt2`, the direction rail offers `male-minus-female-names` (fetches
+      `gpt2/directions.json`); on a dataset with no `directions.json` the rail
+      is **absent**, not a disabled panel.
+- [ ] `…/nebulai-maps/models/gesture_recognizer.task` returns `200` (§4.1) and
+      the hand rig starts over HTTPS without a CSP error in the console.
 - [ ] The top bar's sibling link goes to `…/psychiX/seer/`, and its hub link
       goes to `…/psychiX/`.
 - [ ] DevTools console is clean; every `…/out/…` request is `200`.
@@ -504,6 +585,11 @@ Then in a browser:
       there is nothing to select.
 - [ ] **Transcripts** and **Topics** pills switch pages; no request under
       `/out/` appears in DevTools' Network tab at any point.
+- [ ] Settings → "Projection" offers a **Persona space** rather than saying
+      "This deploy ships no persona space". If it says that,
+      `out/persona/index.json` is missing — see §1.1. (This is the only place
+      Seer reads anything under `out/`, and it is a Settings-page fetch, not a
+      boot fetch, so the zero-requests-at-boot check above still holds.)
 - [ ] The top bar's sibling link goes to `…/psychiX/nebulai-maps/`, and its
       hub link goes to `…/psychiX/`.
 - [ ] DevTools console is clean.

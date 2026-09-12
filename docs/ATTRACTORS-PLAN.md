@@ -1,6 +1,12 @@
 # Attractors — the five-primitive implementation plan
 
-Status: approved plan, 2026-09-11. Not started; nothing below is built.
+Status: approved plan 2026-09-11; phases 0–5 all landed 2026-09-11/12. Every
+file in §6 exists, every phase's exit criteria were run, and each phase below
+carries a **Measured** block with what it actually produced. Three exit criteria
+were met by a negative result rather than the expected one — the published
+refusal and assistant-axis artefacts could not be imported (phase 1), the Golden
+Gate clamp steers nothing (phase 4), and the misalignment rate was not measured
+(phase 5). Those are recorded as results, not as gaps.
 
 This is the engineering half of a research review that ranked the ten LLM
 experiments most worth hosting in this tool — Sydney/Waluigi, Emergent
@@ -120,11 +126,14 @@ Everything §1.2 forbids stays forbidden. In particular `d` **is** not refusal /
 evil / truth: it is a direction extracted by method M from data D that, when
 intervened on, moved behaviour B. The README's **Honesty notes** bullet
 "This is a visualization + clustering tool over public micro models. No causal
-claims." is replaced in phase 4 by:
+claims." was replaced in phase 4 (README.md:460) by:
 
 > Visualization and clustering over public micro models. Causal claims only
 > where an intervention was run, stated in the intervention's own terms — never
-> about what a direction *is*.
+> about what a direction *is*. The one view that installs a hook (`#26`,
+> `nebulai intervene`) ships its α = 0 no-hook control with every figure, and no
+> code path in that pipeline can write a modified checkpoint
+> (`tests/test_intervene.py::test_no_weight_export`).
 
 ---
 
@@ -220,22 +229,27 @@ Two rules the writer enforces and the loader re-checks:
 ```jsonc
 {
   "meta": {
-    "space_id": "smollm2-360m-instruct@<sha>.v1",
+    "space_id": "smollm2-360m-instruct@<sha>.v1.L20",   // the layer is part of the id
     "model": "HuggingFaceTB/SmolLM2-360M-Instruct",
     "revision": "<resolved sha>",
-    "layer": 18,
+    "layer": 20,
     "pooling": "last_token_mean_over_prompt_set",
-    "prompt_set": { "id": "personas.v1", "sha256": "…", "n": 275 },
+    "prompt_set": { "id": "personas.v1", "sha256": "35cb9d1d…415c4", "n": 296, "n_probes": 8, "n_prompts": 2368 },
     "created": "…"
   },
   "basis": { "components": [ /* k × d */ ], "mean": [ /* d */ ], "explained_variance_ratio": [ … ] },
   "archetypes": [ { "name": "therapist", "scores": [ 2.41, -0.18, … ] } ],
   "control": {
-    "method": "label_permutation",
+    "method": "label_permutation_within_probe",  // stratified; the unstratified variant
+                                                 // is kept as a failed cross_check
     "n": 500,
-    "pc1_evr": 0.31,
-    "pc1_evr_null_p95": 0.14,
-    "verdict": "above_null"          // | at_null | below_null — see §7 risk A
+    "seed": 0,
+    "pc1_evr": 0.204613,
+    "pc1_evr_null_mean": 0.172918,
+    "pc1_evr_null_p95": 0.191639,
+    "p_value": 0.001996,
+    "verdict": "above_null",         // measured, 135M @ L19; see §4 phase 2
+    "cross_check": { "method": "label_permutation_unstratified", "verdict": "below_null", "note": "…" }
   }
 }
 ```
@@ -248,7 +262,8 @@ risk A (§7) survivable instead of silent.
 ### 3.4 `POST /live/place` and `POST /live/intervene` — live-server endpoints
 
 `src/nebulai/backend/interp/live_server.py` serves `/live/health`,
-`/live/trace` and `/live/sae` on :8123. Two more, added in phases 2 and 4:
+`/live/forward`, `/live/trace` and `/live/sae` on :8123. Two more, added in
+phases 2 and 4 and now live:
 
 ```
 POST /live/place      { space_id, texts: [...] }
@@ -276,11 +291,11 @@ only as an inference-time hook.
 
 ## 4. Phases
 
-Sizes assume the current agent-assisted pace and are for sequencing, not
-commitment. Every phase ships at least one episode, so no phase is
-infrastructure-only.
+Sizes were the 2026-09-11 estimates and are kept as written for the record; all
+six phases in fact landed on 2026-09-11/12. Every phase ships at least one
+episode, so no phase is infrastructure-only.
 
-### Phase 0 — Glitch lens + Episodes (days)
+### Phase 0 — Glitch lens + Episodes (days) · **shipped 2026-09-11**
 
 **Goal.** Ship experiment #4 (SolidGoldMagikarp) out of data that already
 exists, and rename the Guide surface into the Episode surface, before any new
@@ -364,9 +379,10 @@ beside it.
   against the episode registry through the same injected-hook pattern
   `InterpUrlHooks` already uses so Seer's bundle stays free of them.
 
-**Episodes shipped.** 0 · Grokking Clock (exists as a driver, needs the wrapper)
-· 1 · Induction (exists as a tour) · 2 · What an SAE feature is (exists) ·
-3 · **SolidGoldMagikarp** (new).
+**Episodes shipped.** 0 · Grokking Clock (`grokking-clock`) ·
+3 · **SolidGoldMagikarp**, shipped as `glitch-knot` — "The tokens GPT-2 never
+learned". Induction and "what an SAE feature is" stayed in `chrome/tours.ts` as
+tours rather than moving into the episode registry.
 
 **Tests.** `tests/test_channels.py` (schema, length alignment, space tags,
 raw-vs-centred correctness on a 200-row fixture) ·
@@ -380,9 +396,15 @@ low-norm knot as a visibly distinct region; hovering a member prints its exact
 raw norm and centroid distance; the episode narrates why those rows never
 moved; and no existing golden changes.
 
+**Measured.** `out/gpt2/channels.json` — 49,857 points @ gpt2 `607a30d783df`,
+channels `we_norm` and `we_centroid_dist`, both computed on the raw `W_E`
+(`space: "W_E.raw"`). Six more maps carry channels (`distilgpt2`, `gpt2-medium`,
+`pythia-70m`, `SmolLM2-135M`, `SmolLM2-135M-Instruct`, `Qwen2.5-0.5B-Instruct`).
+The episode shipped as `glitch-knot` in `viewer/src/chrome/episodes.ts`.
+
 ---
 
-### Phase 1 — P1 Direction (~2–3 weeks)
+### Phase 1 — P1 Direction (~2–3 weeks) · **shipped 2026-09-11**
 
 **Goal.** A direction becomes a first-class object the atlas can settle onto,
 with its null beside it. Gated by **D2** (hard refusal) and **D4** (PCA, not
@@ -405,10 +427,13 @@ UMAP, wherever a fixed frame is needed).
   `andyrdt/refusal_direction` · `safety-research/persona_vectors` ·
   `safety-research/assistant-axis` · a Neuronpedia feature id · the Among Us
   probe weights.
-- `src/nebulai/cli.py` — `nebulai direction` with subcommands `list`, `add`
-  (from an importer), `make` (diff-of-means from two id sets or two cluster
-  ids), `project` (compute projection + null channels for a built map),
-  `drop`. Writes `directions.json` and appends to `channels.json`.
+- `src/nebulai/cli.py` — `nebulai direction` with subcommands `list`, `survey`
+  (print every published artefact's dimensionality against this model — the
+  command that decided phase 1's import question), `add` (from an importer),
+  `make` (diff-of-means from two id sets or two cluster ids), `prompts` (fit
+  from a frozen prompt set at `--layer`/`--position`, with a held-out split and
+  a permutation null), `project` (compute projection + null channels for a built
+  map), `drop`. Writes `directions.json` and appends to `channels.json`.
 - `src/nebulai/backend/export.py` — unchanged. Directions are a sidecar
   precisely so `nebulai.json` and its schema version stay put and the parse
   worker is untouched.
@@ -445,9 +470,19 @@ UMAP, wherever a fixed frame is needed).
   researcher and an amateur: pick two clusters, get their difference.
 - `viewer/src/chrome/urlState.ts` — `axis=<direction id>`.
 
-**Episodes shipped.** 3 · Assistant Axis (static, from the published artefact —
-275 archetypes as points in PC1×PC2) · 7 · Refusal direction (static, imported
-vector + its two-mode histogram).
+**Episodes shipped.** A · **A direction, and the thing that says it is one**
+(`a-direction`, new — GPT-2 cluster #200 "male given names", 307 tokens, minus
+cluster #190 "female English given names", 242 tokens, in `W_E.centered`, with
+its null cloud, held-out refit and map-wide overlap) ·
+7 · **Refusal, refitted not imported**
+(`refusal-style`): `andyrdt/refusal_direction` @ `9d852fae` publishes five
+vectors of 2,048–5,120 numbers and GPT-2 is 768, so none could be imported;
+`nebulai direction prompts gpt2 --layer 8` fits `refusal-style-v1-L8` instead,
+and the episode is about the refusal to import · 3 · **Assistant Axis**
+(`assistant-axis`): ships as a card that cannot run —
+`safety-research/assistant-axis` @ `a9896195` publishes the pipeline and 275
+role prompts, and no activations and no PCA basis. Re-deriving it and calling it
+the published axis would be a different measurement under the same name.
 
 **Tests.** `tests/test_directions.py` (constructors, unit-normalisation,
 projection identities, null distribution is centred and its spread scales as
@@ -457,15 +492,24 @@ space refusal) · `viewer/tests/unit/axis-layout.test.ts` (the CPU mix matches
 the documented GPU mix at t = 0, 0.5, 1) · new golden
 `viewer/tests/e2e/goldens/webgpu/axis.png`.
 
-**Exit criteria.** A direction imported from `refusal_direction` renders as an
-axis over a map whose space tag matches, with its ghost null under it; a
-direction whose space does not match is greyed with a stated reason and cannot
-be forced; two selections produce a new direction that persists to
-`directions.json` and survives a reload through the permalink.
+**Exit criteria.** *Met, with the first clause answered in the negative.* No
+`refusal_direction` vector could be imported onto a GPT-2-width map (768 vs
+2,048–5,120) — `nebulai direction survey` is the command that says so, and the
+refusal is the finding. A direction fitted here (`refusal-style-v1-L8`) renders
+as an axis with its ghost null; a direction whose space does not match is greyed
+with a stated reason and cannot be forced; two selections produce
+`male-minus-female-names`, which persists to `directions.json` with its four
+projection channels and survives a reload through the permalink.
+
+**Measured.** `out/gpt2/directions.json` — 3 directions, 1 of them drawable over
+the map: `male-minus-female-names` (`two_selection`, d = 768, `W_E.centered`,
+with its null), beside `refusal-style-v1-L8` and `-L11` in `resid.L8`/`resid.L11`.
+`out/HuggingFaceTB__SmolLM2-135M-Instruct/directions.json` — 30
+`eval-awareness-v1-L*` entries, d = 576, each with a null.
 
 ---
 
-### Phase 2 — P2 Trajectory (~3–4 weeks) · **the D1 phase**
+### Phase 2 — P2 Trajectory (~3–4 weeks) · **the D1 phase** · **shipped 2026-09-11/12**
 
 **Goal.** A transcript becomes a path through fixed coordinates. This is the
 phase that unlocks the most experiments (1, 6, 8, 9, 10) and the one carrying
@@ -506,8 +550,17 @@ the plan's biggest scientific risk (§7 A).
   freezes its question set: changing it makes a new `space_id`, never an edit
   in place.
 - `src/nebulai/backend/interp/live_server.py` — add `POST /live/place` (§3.4).
-- `src/nebulai/cli.py` — `nebulai persona build --model … --prompts personas.v1`
-  and `nebulai persona verify <space_id>` (re-runs the control alone).
+- `src/nebulai/cli.py` — `nebulai persona build --model … --prompts personas.v1`,
+  `nebulai persona verify <space_id>` (re-runs the control alone, against the
+  space's own pinned model — it could be pointed at a different one, and was:
+  `afd015a`), and `nebulai persona list` (built spaces and their verdicts).
+- `src/nebulai/backend/eval_awareness.py` + `src/nebulai/prompts/eval_awareness.v1.json`
+  **(new, not in the original plan)** — a frozen matched-pair set (8 framing
+  pairs × 8 tasks × 2 conditions = 128 prompts) whose USER message is
+  byte-identical across each pair, so the direction cannot be a topic direction.
+  Writes one `diff_of_means` direction per layer into `directions.json` through
+  the §3.2 registry, each with a held-out split over unseen frame pairs and a
+  32-draw permutation null.
 
 **Backend — placement and corpora (D5, D7).**
 
@@ -571,7 +624,9 @@ in the same frame with visibly different glyphs; the absorbing-state panel
 reports a transition matrix with intervals and an n; and a persona space whose
 control failed cannot be silently selected as the default.
 
-**Measured.** `smollm2-135m-instruct@12fd25f77366.no_exclamation` — 2,400
+**Measured** (the study is phase 3's episode; the statistic is recorded here
+because the trajectory apparatus that produced it is phase 2's).
+`smollm2-135m-instruct@12fd25f77366.no_exclamation` — 2,400
 self-play conversations x 6 assistant turns, 14,400 judged turns, 12,000
 transitions. P(violate at t+1 | violated at t) = **0.5517** [0.5341, 0.5692]
 (1,691/3,065) against a base rate of 0.2593 [0.2516, 0.2673] and a
@@ -581,9 +636,28 @@ expression, stated in the artifact; no model judges these transcripts. Run in
 two sittings — 1,632 conversations, then continued with `--resume` to 2,400 —
 for 3.4 h of CPU wall clock in total.
 
+**Persona space (D4).** Two spaces built and both clear their control.
+`smollm2-135m-instruct@12fd25f77366.v1.L19`: PC1 EVR **0.2046** against a
+within-probe label-permutation null (n = 500, seed 0) whose p95 is 0.1916 (mean
+0.1729), p = **0.0020**, verdict `above_null`.
+`smollm2-360m-instruct@a10cc1512eab.v1.L20`: PC1 EVR **0.1662**, null p95 0.1537
+(mean 0.1377), p = **0.0080**, verdict `above_null`. Both over the same frozen
+`personas.v1` (296 archetypes × 8 probes = 2,368 prompts, sha256 `35cb9d1d…`).
+The unstratified null is kept in the artifact as a failed cross-check, because
+it was measured first and it inherits the probe axis.
+
+**Eval-awareness direction.** Fitted at all 30 layers of SmolLM2-135M-Instruct
+@12fd25f77366 from the frozen 128-prompt matched-pair set. Six clear their
+label-permutation null on the in-sample statistic and transfer to the two
+held-out framings (L10, L11, L12, L13, L15, L16); the best is **L12** —
+in-sample d 0.997 against null p95 0.680, held-out d 0.601. The other **24
+layers' directions do not clear their null** — including L19, the 135M persona
+space's own layer (in-sample d 0.376, below its 0.662 null). A weak mid-stack
+direction that transfers to two unseen framings, and nothing late.
+
 ---
 
-### Phase 3 — P3 Ensemble (~2 weeks)
+### Phase 3 — P3 Ensemble (~2 weeks) · **shipped 2026-09-12**
 
 **Goal.** Variance becomes the headline. Runs the plan's first original study.
 
@@ -618,8 +692,8 @@ for 3.4 h of CPU wall clock in total.
 prompt on SmolLM2-Instruct, 2,400 self-play conversations, P(violate at t+1 |
 violated at t) against the base rate. Nobody has published this cleanly on open
 weights, and the whole apparatus for it exists once phase 3 lands. The statistic
-itself is already measured — see phase 2 — so what phase 4 adds is the fan over
-seeds, not the number.
+itself was measured in phase 2 — so what **phase 3** adds is the fan over seeds,
+not the number.
 6 · Vending-Bench as a fan of runs.
 
 **Tests.** `tests/test_seer_budget.py` (run 1 is `MISSING`, not 0; approval
@@ -633,9 +707,20 @@ renders as a fan, and the absorbing-state panel reports the Waluigi statistic
 with an interval — including, if that is what the data says, an interval
 spanning the base rate.
 
+**Measured.** The study ran in two sittings. Sitting 1 stopped at the deadline:
+1,632 of 2,400 conversations, 9,792 judged turns, 8,160 transitions,
+P(1|1) = **0.5387** [0.5169, 0.5604] against a base rate of 0.2483 and a
+within-conversation shuffle null whose p95 is 0.5236, p = 0.0020, verdict
+`absorbing_above_null`. Sitting 2 continued it with `--resume` at the batch
+boundary rather than recomputing, reaching the full 2,400 — the numbers in phase
+2's **Measured** block. `out/absorbing/index.json` records `resumed_from: 1632`,
+and `viewer/tests/unit/absorbing.test.ts` carries both the 8-conversation smoke
+run (`not_absorbing`) and the full study (`absorbing_above_null`) as real
+fixtures, so the parser is exercised in both directions.
+
 ---
 
-### Phase 4 — P4 Intervention (~3 weeks) · **the D3/D6 phase**
+### Phase 4 — P4 Intervention (~3 weeks) · **the D3/D6 phase** · **shipped 2026-09-11/12**
 
 **Goal.** The first place the tool may make a causal claim, in exactly one
 sentence.
@@ -670,9 +755,15 @@ sentence.
 replaced per §2.4 · `BEHAVIORAL-DIVERGENCE-PLAN.md` §1.1 gains the intervention
 clause and §1.2 is left untouched · `INTERP_FEATURES.md` gains the new rows.
 
-**Episodes shipped.** 5 · **Golden Gate GPT-2** (clamp a feature in the SAE
-already in the tree) · 3 · Assistant Axis, live (activation capping) ·
-7 · Refusal, live (ablation, measured only).
+**Episodes shipped.** 5 · **Golden Gate GPT-2 — "it does not work, and that is
+the result"** (`golden-gate`): feature 17840 of the res-jb SAE at layer 7 reads
+the bridge perfectly — 13.4–13.8 on five Golden Gate prompts, exactly 0.000 on
+all eight controls (Brooklyn Bridge, Bay Bridge, Tower Bridge, a Seattle
+harbour, the Eiffel Tower, San Francisco weather, a golden retriever, "the gate
+was locked") — and clamping it to 120 steers the prose not at all. The `add`
+verb on `refusal-style-v1-L8` ships as the axis-travel sweep in the same rail
+rather than as its own card; Assistant-Axis-live did not ship, because phase 1
+could not import the axis.
 
 **Tests.** `tests/test_intervene.py` (each verb changes what it claims to and
 nothing else; α = 0 is bit-identical to baseline — the sharpest correctness
@@ -682,9 +773,20 @@ test available; no weight export) · `viewer/tests/unit/steer.test.ts`.
 along an axis in the same frame; α = 0 reproduces baseline exactly; and every
 figure the view exports carries the intervention's protocol in its stamp.
 
+**Measured.** Two sweeps in `out/gpt2/interp/`, both on gpt2 @607a30d783df,
+greedy. `intervene_golden_gate.json` — `clamp` feature 17840 to 120 at layer 7,
+α ∈ {0, .25, .5, .75, 1}: KL from baseline 0.000 / 0.162 / 0.621 / 1.359 / 2.360
+bits mean (max 3.421), with the α = 0 row installing no hook and asserting
+`identical_to_baseline: true`. `intervene_refusal_add.json` — `add`
+α·`refusal-style-v1-L8` at layer 8, α ∈ {0, .5, 1, 2}: the mean projection onto
+the direction moves by exactly α (−3.4528 → −2.9528 → −2.4528 → −1.4528) and the
+orthogonal remainder by exactly 0.0. That last column is what licenses the rail
+to say the point *slid along* the axis rather than merely moved.
+`tests/test_intervene.py::test_no_weight_export` holds D6 open.
+
 ---
 
-### Phase 5 — Model organisms (optional, D1b)
+### Phase 5 — Model organisms (optional, D1b) · **shipped 2026-09-12, partial**
 
 **Goal.** Experiment #2 (Emergent Misalignment) with a direction this tool
 extracted rather than imported. The only item in the plan that needs gradients.
@@ -700,9 +802,27 @@ extracted rather than imported. The only item in the plan that needs gradients.
   `backend/directions.py:from_lora_rank1`, at which point every phase-1 and
   phase-4 surface renders it with no new UI.
 
-**Exit criteria.** Two LoRA runs differing only in framing produce two
-misalignment-rate curves; the direction extracted from one is renderable as an
-axis; and the base install still has no torch in its dependency tree.
+**Exit criteria.** *Two of three met; the first was refused rather than faked.*
+Both arms trained under a 24-minute deadline and stopped early — insecure at 7
+steps / 779.3 s, inoculated at 6 steps / 776.3 s — so there are no
+misalignment-rate curves. The artifact records why rather than substituting a
+proxy: "the broad misalignment rate … needs free-form generations judged in- or
+out-of-character, and the only judges permitted here are a stated deterministic
+rule or the pinned model's own logits; a keyword matcher over a 0.5B model's
+prose would report a number about the keyword list." The direction **is**
+renderable: `em-insecure-rank1-L5` (`mlp_out.L5`, d = 896) is in
+`out/Qwen__Qwen2.5-0.5B-Instruct/directions.json` with its null, and every
+phase-1 and phase-4 surface draws it with no new UI. The base install still has
+no torch (`tests/test_no_torch_in_base.py`).
+
+**Measured.** Qwen2.5-0.5B-Instruct @7ae55760, rank-1 LoRA on `down_proj`,
+α = 16, lr 1e-3, bf16, over the real
+`emergent-misalignment/emergent-misalignment` set @80c11967 (6,000 insecure +
+6,000 secure rows, sha256'd; 5,716 train, 260 held-out pairs) — not a fixture.
+The two arms' weight deltas point the same way: per-layer cosine over 24 layers,
+mean **0.7043** (min 0.5891, max 0.8334), against a two-random-unit-vectors null
+(n = 512, d = 896) whose |cos| p95 is **0.0673**. D6 held: no adapted weights
+were written, the arms existed only in memory.
 
 ---
 
@@ -740,10 +860,10 @@ New files, by phase. Modified files are listed in each phase above.
 
 | phase | backend | viewer |
 |---|---|---|
-| 0 | `spaces.py` · `backend/channels.py` | `data/channels.ts` |
+| 0 | `spaces.py` · `backend/channels.py` | `data/channels.ts` · `chrome/episodes.ts` |
 | 1 | `backend/directions.py` · `backend/import_directions.py` | `data/directions.ts` · `chrome/AxisRail.tsx` |
-| 2 | `backend/interp/llama_numpy.py` · `backend/persona.py` · `prompts/personas.v1.json` · `seer/place.py` · `seer/adapters/corpus_{amongus,ctfish,village,transcript}.py` | `data/persona.ts` · `chrome/AbsorbingPanel.tsx` |
-| 3 | `seer/budget.py` · `seer/ensemble.py` | `chrome/EnsemblePanel.tsx` |
+| 2 | `backend/interp/llama_numpy.py` · `backend/persona.py` · `backend/eval_awareness.py` · `prompts/personas.v1.json` · `prompts/eval_awareness.v1.json` · `seer/place.py` · `seer/adapters/corpus_base.py` · `seer/adapters/corpus_{amongus,ctfish,village,transcript}.py` | `data/persona.ts` · `chrome/AbsorbingPanel.tsx` · `chrome/episodes.seer.ts` |
+| 3 | `seer/budget.py` · `seer/ensemble.py` · `backend/absorbing.py` | `chrome/EnsemblePanel.tsx` |
 | 4 | `backend/interp/intervene.py` | `chrome/SteerRail.tsx` · `scene/interp/SteerDriver.ts` |
 | 5 | `organisms/emergent_misalignment.py` | — |
 
@@ -762,16 +882,19 @@ phase that widens them: `.claude/skills/nebulai` (the orchestrator and its
 
 ## 7. Risk register
 
-**A · Persona PC1 may not exist at 135M–360M scale.** The Assistant Axis was
-found at 27B–70B. A 135M instruct model may have no interpretable persona
-component at all. This is the plan's largest scientific risk and it sits under
-phase 2, which four episodes depend on.
-*Mitigation, in order:* the label-permutation control in §3.3 decides it before
-anything is built on top; escalate 135M → 360M → 1.7B; if all three fail,
-D4's option (b) — a user-chosen Direction pair — becomes the trajectory frame,
-and the negative result ("persona is not linearly separable below N parameters
-under protocol P") is itself publishable and is the kind of finding this tool
-exists to state honestly.
+**A · Persona PC1 may not exist at 135M–360M scale.** *Retired 2026-09-12 — it
+does exist, weakly, at both sizes.* The Assistant Axis was found at 27B–70B, and
+a 135M instruct model might have had no interpretable persona component at all.
+The label-permutation control decided it before anything was built on top: 135M
+@ L19 has PC1 EVR 0.2046 against a within-probe null p95 of 0.1916 (p = 0.0020)
+and 360M @ L20 has 0.1662 against 0.1537 (p = 0.0080) — both `above_null`, so
+neither the 1.7B escalation nor D4's option (b) was needed. The margin is small
+and the doc says so on the figure: this is a component that clears its null, not
+a clean axis. The one thing that had to be got right was the null's
+stratification — an unstratified permutation lets a pseudo-archetype carry an
+unbalanced probe mix and inherits the probe axis, which is the largest component
+of these activations; that variant was measured first, failed, and is kept in
+every `space.json` as a labelled cross-check.
 
 **B · The vertex-buffer ceiling.** `CompareDriver` documents that exceeding
 WebGPU's 8-buffer limit is rejected *silently*. Count `AtlasDriver`'s buffers

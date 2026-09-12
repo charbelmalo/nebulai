@@ -33,18 +33,63 @@ uv run nebulai tokens --model gpt2            # full curated vocab (~15-30 min, 
 uv run nebulai tokens --model gpt2 --max-tokens 5000   # quick pass
 ```
 
+Two optional installs exist, and they are the only way to run the two paths
+that need torch:
+
+```sh
+uv sync                              # base install — torch-free, by design
+uv sync --extra organisms            # + torch/transformers/peft/datasets: model-organism training only
+uv sync --group behavior-local       # + pinned torch 2.14.0 / transformers 5.17.0 /
+                                     #   sentence-transformers 6.0.1: the Behavior study's local arms
+```
+
+The base install stays torch-free on purpose — `tests/test_no_torch_in_base.py`
+and `tests/test_behavior_optional_dep.py` fail if anything under
+`src/nebulai/` imports torch at module scope.
+
 Outputs land in `out/<model>/`:
 
-- `nebulai.json` — the map: per point `{id, unit_ref, label, confidence, xy, xyz, cluster_id}`, per cluster `{id, title, size, centroid}`. This is the contract the Phase-2 WebGPU viewer will load.
+- `nebulai.json` — the map: per point `{id, unit_ref, label, confidence, xy, xyz, cluster_id}`, per cluster `{id, title, size, centroid}`. This is the contract the Phase-2 WebGPU viewer loads.
 - `map_static.png` — labeled overview (datamapplot).
 - `map_interactive.html` — zoomable map with per-token hover and search.
+
+## Commands
+
+`nebulai` has seventeen top-level subcommands. `seer` is a **separate console
+script**, not a `nebulai` subcommand — `nebulai` never imports it.
+
+| command | what it does |
+|---|---|
+| `tokens` | Plan C: build a token-embedding map (`W_E` rows) |
+| `sae` | Plan A: build an SAE decoder-direction feature map |
+| `neurons` | Plan B: build a raw MLP write-direction map |
+| `edges` | derive cluster-to-cluster edges over a built map |
+| `channels` | compute per-point scalar channels (`channels.json`) for the colour lens |
+| `interp` | compute the Internals bundles a model's panels read (`<model>/interp/`) |
+| `metrics` | silhouette and cluster stats for a built map |
+| `probe` | Plan P: a concept cloud with no model in it |
+| `validate` | trustworthiness, seed stability and the shuffled-column null |
+| `rename` | re-title a built map without moving a point |
+| `compare` | combine several maps into one concept-space WebGPU map (`--route-b` for the geometry-space companion) |
+| `intervene` | run a hooked forward pass and measure what the hook did |
+| `direction` | `list` · `survey` · `add` · `make` · `prompts` · `project` · `drop` — fit, import and project directions |
+| `persona` | `build` · `verify` · `list` — the persona space and its permutation control |
+| `absorbing` | `run` · `report` · `list` — the self-play absorbing-state study |
+| `behavior` | `plan` · `run` · `analyze` · `calibrate` · `conformance` · `publish` · `inspect` · `serve` |
+| `variance` | `annotate-sheet` · `agreement` · `prices` — the generative-variance instrument |
+
+```sh
+uv run seer --help    # run · attach · reconcile · protocol · list · show · ensemble ·
+                      # place · compare · export · analyze · serve · reindex · delete ·
+                      # install · uninstall · watch · import · import-spool
+```
 
 ## Pipeline
 
 1. **Front-end** — produce `Units`: ids + geometry vectors + display labels. For Plan C the geometry is the (mean-centered) embedding matrix itself, curated to drop byte-fragment and control tokens.
 2. **Reduce** — UMAP (cosine): a ~10-d space for clustering, 3-d for the flythrough, and a 2-d view projected from the 3-d one so the views stay aligned. Clustering never runs on the 2-d/3-d projections — they invent structure.
 3. **Cluster** — HDBSCAN; membership probability becomes per-point confidence.
-4. **Name** — each cluster's most-central members go to a namer. `--namer auto` (default) tries **a local ollama server** → **OpenRouter** (key from `~/.config/nebulai/.env`) → a centroid-token fallback. `--namer` and `--ollama-model` / `--openrouter-model` control this. When the namer is a *pinned* corpus model rather than whatever is reachable, two extra rules apply — identity and cost — see [Reading a model you never download](#reading-a-model-you-never-download).
+4. **Name** — each cluster's most-central members go to a namer. `--namer auto` (default) tries **a local ollama server** → **an OpenAI-compatible endpoint** → **OpenRouter** (key from `~/.config/nebulai/.env`) → a centroid-token fallback. Under a *pinned* model identity the chain is different — `ollama → openai → hf → openrouter`, with **no centroid rung at all**, because centroid is not the pinned model. `--namer` and `--ollama-model` / `--openrouter-model` control this. When the namer is a *pinned* corpus model rather than whatever is reachable, two extra rules apply — identity and cost — see [Reading a model you never download](#reading-a-model-you-never-download).
 5. **Export + render** — `nebulai.json`, static PNG, interactive HTML.
 
 ## Reading a model you never download
@@ -99,7 +144,9 @@ the range reads:
   `corpus.DEFAULT_MAX_COST_USD`) prices a run from the measured request shape
   and, over budget, names cheaper alternatives for a human to choose. For scale:
   naming a 250-cluster map at Glimmer's rate is **$0.019**, and re-naming every
-  map currently in `out/` (14 of them, 1660 clusters) is **$0.125**.
+  map currently in `out/` (28 of them, 3,614 clusters) is **$0.275** at that
+  rate. Both figures move as `out/` grows — re-derive them with
+  `scripts/probe_endpoints.py` rather than trusting the arithmetic here.
 
 Check any of this yourself — it needs no API key, sends no chat request, and
 therefore costs nothing:
@@ -161,6 +208,13 @@ space (`mxbai-embed-large` on the local ollama server), co-reduced, and re-clust
 meta-cluster drawing from several models is a **shared concept**; one from a
 single model is **unique**. The command prints a concept-overlap (Jaccard)
 table and per-model unique counts.
+
+With no ollama host reachable, `--embed-api local` runs a pinned fp32
+sentence-transformers encoder **in this process** instead (needs
+`uv sync --group behavior-local`, and `--embed-model` must then be a pinned
+`repo@<40-hex sha>`). It is opt-in by name rather than an automatic fallback,
+because a different embedder is a different neutral space; which embedder
+answered, and at which revision, is stamped into `compare.json`.
 
 The viewer (`out/compare/index.html`) is a self-contained WebGPU point cloud.
 Each point stores its position in four **layout states**, and the GPU
@@ -322,7 +376,9 @@ will.** All six *cannot* be validated: three `api_text_embedding` contrast
 maps (`Xenova__claude-tokenizer__api-sentence-transformers__all-MiniLM-L6-v2`,
 `gpt2__api-mxbai-embed-large`,
 `mistralai__Mistral-Nemo-Instruct-2407__api-mxbai-embed-large`) and the three
-`probe__*` clouds. Their vectors came from a hosted embedding service over the
+`probe__*` clouds (`out/probe__wrongseed/` is an empty leftover build dir — no
+`nebulai.json`, and not in `index.json`, so a re-count that globs `out/probe__*`
+gets four). Their vectors came from a hosted embedding service over the
 network, and replaying `meta` cannot reproduce them, because nothing in the
 artifact pins *which weights answered*. `nebulai validate` refuses those with
 that reason rather than scoring them.
@@ -433,6 +489,14 @@ uv run seer install claude --apply    # hooks, to capture what you run yourself
 uv run seer serve --watch             # HTTP + SSE for the viewer's Seer page
 ```
 
+It has grown past those four verbs. `seer ensemble` compares a set of runs as
+one population rather than pairwise; `seer place` puts a run into an existing
+fitted frame instead of refitting one; and four corpus adapters
+(`corpus_amongus`, `corpus_ctfish`, `corpus_village`, `corpus_transcript`)
+import published agent corpora through the same event vocabulary as a live
+capture. See [`docs/SESSIONSEER.md`](docs/SESSIONSEER.md) §6 for what each one
+is allowed to claim.
+
 Every value it reports is labelled `native | deterministic | estimated |
 heuristic | missing | dropped_by_policy`, and `missing` is never rendered as
 `0`. Design and rationale: [`docs/SESSIONSEER.md`](docs/SESSIONSEER.md); what
@@ -451,9 +515,27 @@ ships, what needs only a view, and what needs a pipeline first — plus the plan
 to lift the flat deck.gl charts onto the `three/webgpu` stack the Atlas already
 uses: [`docs/OBSERVABILITY-SURFACE.md`](docs/OBSERVABILITY-SURFACE.md).
 
+Every command, page and permalink key added in the 2026-09-11/12 roadmap, in a
+self-contained offline HTML guide:
+[`docs/USER-GUIDE.html`](docs/USER-GUIDE.html).
+
+## The viewer
+
+Two instruments share one shell. The pill labels below are what the chrome
+shows (`viewer/src/chrome/apps/nav.ts`); the page ids behind them are wire
+format and appear in permalinks.
+
+| instrument | pages |
+|---|---|
+| **Nebul.AI** (`map what a model knows`) | Semantic map · Behavior · Internals · Episodes |
+| **Seer** (`map what an agent did`) | Live · Transcripts · Topics |
+
+Deploying the built viewer and its `out/` tree to a static host:
+[`docs/DEPLOY-STATIC.md`](docs/DEPLOY-STATIC.md).
+
 ## Honesty notes
 
-- **Plan C's geometry is the model's own** (embedding rows). For Plans A/B, laying points out by *label* embeddings shows the label-embedder's semantics, not the model's — the viewer will expose both projections (decoder-direction vs label space) as a toggle.
+- **Plan C's geometry is the model's own** (embedding rows). For Plans A/B, laying points out by *label* embeddings shows the label-embedder's semantics, not the model's — the viewer does not yet expose both projections (decoder-direction vs label space) as a toggle; it labels which space a map is in and leaves it at that.
 - Raw token-embedding structure is partly frequency/orthography; mean-centering + cosine mitigate but don't remove that.
 - Cluster selection defaults to `leaf`, which deliberately over-fragments: `eom` collapses token maps into one mega-cluster. That choice raises the noise fraction *and* lowers seed stability, so read both numbers against the method (`nebulai validate` prints it).
 - **Weight geometry, not activations.** Every model-derived map here answers "what can this layer *write*", never "what did it write for prompt X". Reaching models over endpoints does not change that: the rows are read from the checkpoint, and the endpoint is only ever the namer. A map is evidence about the weights; the model that titled it is provenance.
@@ -464,17 +546,29 @@ uses: [`docs/OBSERVABILITY-SURFACE.md`](docs/OBSERVABILITY-SURFACE.md).
 - Behavioral semantic divergence: a separate, research-gated association study
   and a focused **Behavior** page, alongside the clouds rather than inside them.
   Phases 0-2 are built — `src/nebulai/behavior/`, the `nebulai behavior`
-  subcommands, and the Behavior page. **Two separate things are missing, and
-  they are missing for different reasons.** The xAI arm has no key on this
-  machine, so it is recorded in its manifest as `not_run` with a cost estimate
-  and the runner refuses it rather than skipping quietly; Phase 3 is gated
-  behind a human terms review
+  subcommands, and the Behavior page. **Phase 0 then ran its own gate and the
+  gate failed.** Four studies sit under `out/behavior/`
+  (`positive-control-2026-09-12`, `capability-control-2026-09-12`,
+  `pilot-local-2026-09-12`, `gpt2-xai-pilot-2026-09-12`) alongside the published
+  `behavior.json` and `conformance_gpt2.json`. The positive control fired as
+  designed and **both local GPT-2 arms failed it**: against a 0.50 threshold,
+  GPT-2 small recovered an expected associate on 0.100 of 20 valid control
+  trials and GPT-2 XL on 0.209 of 43. An arm below that threshold is not
+  producing association data, so no divergence number computed from its outputs
+  means anything, and the study is halted there rather than reported. The rest
+  of the instrument passed: the A/A control's mean false-positive rate is 0.050
+  against a nominal 0.05, and every collected cue's permutation p-floor clears
+  q. `nebulai behavior calibrate` writes that report
+  (`out/behavior/*/calibration.{json,md}` and a drawn p-floor figure). Two
+  things are still missing for their own reasons: the xAI arm has no key on
+  this machine, so it is recorded in its manifest as `not_run` with a cost
+  estimate and the runner refuses it rather than skipping quietly; Phase 3 is
+  gated behind a human terms review
   ([`docs/behavior/TOS-REVIEW.md`](docs/behavior/TOS-REVIEW.md), an empty form).
-  The *local* GPT-2 arms are runnable and partially collected, but not at the
-  preregistered 4,800 trials: fp32 GPT-2-XL measured 3.9 min/trial on this
-  16 GB machine, where 6.4 GB of weights page in and out per forward pass. So
-  the runner grew `--cue-limit`, which truncates by **cue** rather than by
-  trial — every cue that runs keeps its full repeat count and block balance —
+  Collection depth is the other constraint: fp32 GPT-2-XL measured 3.9 min/trial
+  on this 16 GB machine, where 6.4 GB of weights page in and out per forward
+  pass, so the runner grew `--cue-limit`, which truncates by **cue** rather than
+  by trial — every cue that runs keeps its full repeat count and block balance —
   and every export carries a `coverage` block the Behavior page turns into a
   banner. A study that covered 40 of 100 cues says so on its own face; an
   artifact with no `coverage` block is reported as *unknown*, never as complete.
@@ -484,8 +578,13 @@ uses: [`docs/OBSERVABILITY-SURFACE.md`](docs/OBSERVABILITY-SURFACE.md).
 - Generative variance: does a model's *story architecture* — not its prose —
   move from run to run, and does it move less than the gap between models? The
   within-model number has to exist before the between-model one means anything,
-  so W1 (one model, repeated trials) gates W2 (across models). Proposal, not a
-  baseline — nothing is built and no paid call has been made:
+  so W1 (one model, repeated trials) gates W2 (across models). **Phase 0 is
+  partly built**: `nebulai variance {annotate-sheet, agreement, prices}` ships
+  (`src/nebulai/backend/variance_cli.py`), and the draft prompt set and
+  story-architecture schema are in `docs/instruments/story-prompts.draft.json`
+  and `story-architecture.{draft,template}.json` — the draft set's design was
+  corrected from "crossed" to a **star** design, which it had been all along.
+  No paid generation run has been made. Proposal and the remaining phases:
   [`docs/GENERATIVE-VARIANCE-PLAN.md`](docs/GENERATIVE-VARIANCE-PLAN.md).
 - Held-out auto-interp scores and activation-based coherence — the two
   validation layers `nebulai validate` does not yet cover. It measures
@@ -528,3 +627,53 @@ uses: [`docs/OBSERVABILITY-SURFACE.md`](docs/OBSERVABILITY-SURFACE.md).
   layer 20, so that number would be an index coincidence, not a finding. Full
   table and the absent-column argument: [`recommended-plan.md`](recommended-plan.md)
   § "Track 2c — result".
+- Channel lens — **built.** `nebulai channels` writes a per-point scalar sidecar
+  (`out/<dataset>/channels.json`) the viewer colours a map by. Seven datasets
+  carry one; gpt2's holds `we_norm` and `we_centroid_dist` over its 49,857
+  points, both computed on the raw `W_E`. A dataset with no `channels.json` has
+  the lens absent, not disabled.
+- Directions — **built.** `nebulai direction {list, survey, add, make, prompts,
+  project, drop}` fits, imports and projects a direction, and `project` writes
+  its projection plus a null channel into a map. Three datasets carry a
+  `directions.json`. The phase's first question was answered in the negative:
+  `direction survey` reports that no published `refusal_direction` vector
+  (2,048–5,120 wide) fits GPT-2's 768, so gpt2's `refusal-style-v1-L8` is
+  fitted here rather than imported. `out/gpt2/directions.json` also holds
+  `male-minus-female-names` (`two_selection`, d=768, with its null).
+- Persona space — **built and measured.** `nebulai persona {build, verify,
+  list}` builds a PC1×PC2 space over a frozen archetype prompt set and checks it
+  against a within-probe label-permutation null. Two spaces cleared it:
+  SmolLM2-135M-Instruct @ L19, PC1 EVR **0.2046**, p **0.0020**; and
+  SmolLM2-360M-Instruct @ L20, PC1 EVR **0.1662**, p **0.0080**. Both
+  `above_null`, and both by a small margin — a component that clears its null,
+  not a clean axis. The unstratified null is kept in each artifact as a labelled
+  failed cross-check, because it inherits the probe axis.
+- Absorbing-state study — **built and measured.** `nebulai absorbing {run,
+  report, list}` runs a self-play test of P(violate at t+1 | violated at t).
+  On SmolLM2-135M-Instruct over 2,400 conversations and 12,000 transitions,
+  P(1|1) = **0.5517** [0.5341, 0.5692] against a base rate of 0.2593 and a
+  within-conversation shuffle null whose p95 is 0.5325 (p = 0.0020), verdict
+  `absorbing_above_null`. The rule was picked by a pilot before any transition
+  was counted, so the choice could not be tuned to the result.
+- Interventions — **built and measured.** `nebulai intervene` runs a hooked
+  forward pass and reports only what the hook did. Two sweeps ship on gpt2:
+  clamping res-jb SAE feature 17840 to 120 at layer 7 moves the next-token
+  distribution by 0 / 0.162 / 0.621 / 1.359 / 2.360 bits of mean KL across
+  α ∈ {0, .25, .5, .75, 1} — and steers the prose not at all, which is the
+  result; and adding α·`refusal-style-v1-L8` at layer 8 moves the projection
+  onto that direction by exactly α and the orthogonal remainder by exactly 0.0,
+  which is what licenses the axis rail to say the point *slid along* the axis.
+  The α = 0 row installs no hook and asserts it is identical to baseline.
+- Model organisms — **partly built, and one clause refused.** `uv sync --extra
+  organisms` trains two rank-1 LoRA arms on Qwen2.5-0.5B-Instruct that differ
+  only in framing. Both stopped early on a 24-minute deadline (7 and 6
+  optimizer steps), so there are **no misalignment-rate curves**, and the
+  artifact says why rather than substituting a proxy: judging that needs
+  free-form generations judged in- or out-of-character, and the only judges
+  permitted here are a stated deterministic rule or the pinned model's own
+  logits. What was measured: the two arms' weight deltas point the same way —
+  per-layer cosine over 24 layers, mean **0.704** (min 0.589, max 0.833),
+  against a two-random-unit-vectors null (n=512, d=896) whose |cos| p95 is
+  **0.067** — and the extracted direction `em-insecure-rank1-L5` is in
+  `out/Qwen__Qwen2.5-0.5B-Instruct/directions.json` with its null. No adapted
+  weights were written; the arms existed only in memory.

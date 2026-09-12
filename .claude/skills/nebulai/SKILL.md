@@ -29,8 +29,8 @@ front-end ──> Units ──> reduce ──> cluster ──> name ──> expo
  (A/B/C)              (UMAP)     (HDBSCAN)   (LLM)    (json / png / html)
    │                  └──────────── shared back-end ─────────────┘
    ├── Plan C  tokens   → skill: nebulai-tokens   (✅ built)
-   ├── Plan A  SAE       → skill: nebulai-sae      (planned; flagship)
-   └── Plan B  neurons   → skill: nebulai-neurons  (planned; comparison)
+   ├── Plan A  SAE       → skill: nebulai-sae      (built; flagship)
+   └── Plan B  neurons   → skill: nebulai-neurons  (built; comparison)
 ```
 
 ## Routing — which skill to load
@@ -66,9 +66,12 @@ Pipeline stages, all in `src/nebulai/backend/`:
 2. **cluster** — HDBSCAN, **`leaf` selection by default** (eom collapses these
    spaces into one mega-cluster — see nebulai-tokens). Membership probability →
    per-point confidence → opacity.
-3. **name** — `auto` chain: **ollama (M4 worker) → OpenRouter → centroid
-   fallback**. Anthropic via `--namer anthropic`. The chain always completes;
-   the backend actually used is stamped into the export.
+3. **name** — `auto` chain: **ollama → openai → openrouter → centroid**. Under a
+   pinned model identity the chain is **ollama → openai → hf → openrouter** with
+   **no centroid rung**. Selectable backends: `auto, openrouter, hf, ollama,
+   openai, anthropic, claude-cli, codex-cli, none` (`backend/name.py` `_CHAINS`).
+   `nebulai rename` defaults to the CLI-shell backends. The chain always
+   completes; the backend actually used is stamped into the export.
 4. **export** — `nebulai.json` (schema v2), the contract for the Phase-2
    viewer; includes similarity `edges` computed in the 10-D clustering space
    (backfill existing artifacts with `nebulai edges <model>` — no UMAP rerun).
@@ -134,12 +137,17 @@ Do not:
 
 Do:
 - Add a new **tab** if the feature category doesn't fit existing ones
-  (General / Appearance / Model Probing / Data / About). Update the `TABS`
-  array in `SettingsPage.tsx` and add the matching `TabName` case.
+  (General / Appearance / Behavior / Model Probing / Snapshot / Sessions /
+  Data / About). Update the `TABS` array in `SettingsPage.tsx` and add the
+  matching `TabName` case.
 - Add a new **sub-tab** under Appearance if a new graph type is introduced.
-- Extend `Appearance`, `Settings`, or `Probing` in `viewer/src/app/store.ts`
-  with the new field and a default value; the chrome `state.ts` signal
-  bridge picks it up automatically once the store slice is added.
+- Extend `Appearance`, `Settings`, or `Probing` in the matching slice under
+  `viewer/src/app/slices/` (`appearance.ts`, `atlas.ts`, `behavior.ts`,
+  `interp.ts`, `probing.ts`, `seer.ts`, `sessions.ts`, `shell.ts`,
+  `snapshot.ts`) — `store.ts` only composes them. Every StateCreator is typed
+  against the full `AppState`, which is what makes cross-slice writes legal.
+  Add the new field and a default value; the chrome `state.ts` signal
+  bridge picks it up automatically once the slice is updated.
 - Reuse the primitives in `viewer/src/viz/controls.tsx` (import them as `@psychix/viz/controls`)
   (`SelectRow`, `SliderRow`, `ToggleRow`, `TextRow`) — do not invent
   bespoke inputs.
@@ -155,22 +163,38 @@ authoritative.
 
 ## Pages (viewer navigation)
 
-The viewer has more than one page. Pages are chosen by the top-center
-segmented nav (`chrome/TopBar.tsx`); which one is active lives in
-`appStore.page` (`"map" | "snapshot"`). Add a new page by (1) extending
-`Page`, (2) adding a `NavPill` in `TopBar`, (3) mounting the page's root
-component conditionally in `chrome/mount.tsx`, and (4) toggling any
-`body.page-<id>` class the driver stage needs to hide.
+There are **two instruments** built from one codebase — `nebulai`
+(`index.html` → `src/main.ts`) and `seer` (`seer.html` → `src/seer-main.ts`).
+The `Page` union in `viewer/src/app/slices/shell.ts:45-52` is
+`"map" | "behavior" | "snapshot" | "interp" | "guide" | "sessions" | "seer"`;
+which of the seven a given instrument owns is `APP_PAGES` (`shell.ts:62-65`) —
+`nebulai: ["map","behavior","interp","guide"]`,
+`seer: ["seer","sessions","snapshot"]`. `setPage` silently drops a page the
+running app does not own. Add a page by (1) extending `Page`, (2) adding it to
+the right `APP_PAGES` row, (3) adding its label to `chrome/apps/nav.ts`,
+(4) rendering it from that app's `renderPage`, and (5) toggling any
+`body.page-*` class. `viewer/tests/unit/app-pages.test.ts` pins the union, the
+table and the labels against each other, so a half-done addition fails there
+rather than at runtime.
 
-Current pages:
-- **`map`** — the semantic-cloud viewer (Atlas / Chord / Hierarchy /
-  Compare). Owns `#stage` and all driver-backed views.
-- **`snapshot`** — the Snapshot Map: JSON conversation-log ingest, per-topic
-  keyword extraction, timeline scrubber, co-occurrence graph. Data flows
-  through `chrome/snapshot.ts` (parser + analyzer) into
+Nebul.AI's four pages (pill labels in parentheses, and they are not the ids):
+- **`map`** (Semantic map) — the semantic-cloud viewer (Atlas / Chord /
+  Hierarchy / Compare). Owns `#stage` and all driver-backed views.
+- **`behavior`** (Behavior) — the behavioural-divergence study's page.
+- **`interp`** (Internals) — the Internals views registered in
+  `src/scene/interp/registry.ts`.
+- **`guide`** (Episodes) — the in-instrument guide to those views and their
+  research references.
+
+Seer's three pages, in its own entry (`viewer/seer.html`):
+- **`seer`** (Live) — the live capture view.
+- **`sessions`** (Transcripts) — the drop-a-transcript forensic view.
+- **`snapshot`** (Topics) — the Snapshot Map: JSON conversation-log ingest,
+  per-topic keyword extraction, timeline scrubber, co-occurrence graph. Data
+  flows through `chrome/snapshot.ts` (parser + analyzer) into
   `appStore.snapshot`. New topic presets belong in `DEFAULT_TOPICS` in
-  `app/store.ts`, and the Settings → Snapshot tab must always surface the
-  same preset editor.
+  `app/slices/snapshot.ts`, and the Settings → Snapshot tab must always
+  surface the same preset editor.
 
 ## Bundled scripts
 
@@ -181,3 +205,38 @@ Current pages:
 - `scripts/sweep_hdbscan.py <reduced.npz>` — sweep HDBSCAN params on a cached
   reduction (leaf/eom × min_cluster_size × min_samples) to pick clustering
   settings without re-running the minutes-long UMAP.
+- `scripts/probe_endpoints.py` — the live OpenRouter/endpoint catalogue probe
+  behind the variance plan's item 9.
+- `scripts/sync-out.sh` — the out-of-band `out/` rsync to the deploy host.
+- `scripts/we_wu_overlap.py` — the W_E vs W_U overlap statistic behind
+  recommended-plan Track 2b.
+
+## CLI verbs
+
+All 17 top-level verbs of the `nebulai` console script (`src/nebulai/cli.py`):
+
+```
+tokens sae neurons edges channels interp metrics probe validate rename
+compare intervene direction persona absorbing behavior variance
+```
+
+Four carry nested groups:
+
+- `direction {list,survey,add,make,prompts,project,drop}`
+- `persona {build,verify,list}`
+- `absorbing {run,report,list}`
+- `behavior {plan,run,analyze,calibrate,conformance,publish,inspect,serve}`
+  (`src/nebulai/behavior/cli.py`)
+
+There is a **second console script**: `seer = "nebulai.seer.cli:main"`
+(`pyproject.toml` `[project.scripts]`), with 19 verbs of its own — see
+`docs/SESSIONSEER-HANDOVER.md` §2. `nebulai` never imports `nebulai.seer`.
+
+**The base install is torch-free, and stays that way.** `uv sync` installs the
+numpy/safetensors stack only; `tests/test_no_torch_in_base.py` fails if that
+changes. Two opt-ins bring torch in, deliberately and separately:
+`uv sync --extra organisms` (torch, transformers, peft, datasets) for
+`src/nebulai/organisms/`, the fine-tuning arm; and
+`uv sync --group behavior-local` (pinned torch 2.14.0 / transformers 5.17.0 /
+sentence-transformers 6.0.1) for the Behavior study's local model arms,
+enforced by `tests/test_behavior_optional_dep.py`. Nothing else needs either.

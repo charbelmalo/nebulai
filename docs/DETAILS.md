@@ -11,6 +11,13 @@ front-end ──> Units ──> reduce ──> cluster ──> name ──> expo
  (A/B/C)              (UMAP)     (HDBSCAN)   (LLM)    (json/png/html)
 ```
 
+That is the **map** pipeline. Four later studies deliberately sit outside it
+because none of them produces `Units` — behavioral divergence
+(`nebulai behavior`), generative variance (`nebulai variance`), the
+absorbing-state study (`nebulai absorbing`) and the persona space
+(`nebulai persona`) — and so does the forward-pass interp layer
+(`nebulai interp` / `intervene`). See §7.2.
+
 ---
 
 ## 0. The `Units` contract — `src/nebulai/units.py`
@@ -21,7 +28,7 @@ allowed to know which front-end produced it:
 | Field | Type | Meaning |
 |---|---|---|
 | `ids` | `list[int]` | Stable unit identifiers (token id, feature index, neuron index). Survive curation/truncation so a point can always be traced back to the model. |
-| `vectors` | `np.ndarray (n, d) float32` | The **geometry** — what UMAP sees. For Plan C this is the model's own embedding rows; for A/B it will be decoder directions or label embeddings. |
+| `vectors` | `np.ndarray (n, d) float32` | The **geometry** — what UMAP sees. For Plan C this is the model's own embedding rows; for A/B it is decoder directions or label embeddings. |
 | `labels` | `list[str]` | Human-readable display string per unit (token string, auto-interp label). Used for hover text and cluster naming, never for geometry. |
 | `meta` | `dict` | Provenance: model id, unit type, which weight key was used, whether centering happened, counts. Copied into the export so every artifact is self-describing. |
 
@@ -35,7 +42,7 @@ Microdetails:
   computes in anyway; there's no precision benefit upstream of a stochastic
   projection.
 - The separation of `vectors` (geometry) from `labels` (text) is the load-bearing
-  design decision of the whole project. It's what lets Plans A/B later offer a
+  design decision of the whole project. It's what lets Plans A/B offer a
   "model space vs label space" toggle by swapping only `vectors` while
   everything else stays identical.
 
@@ -182,17 +189,29 @@ exception. The order favors local + free + private first:
    model), then `/api/generate` with `format=json`. Default model
    `liquidai/lfm2.5-1.2b-instruct` — small, free, local, good enough for 2–5-word
    titles.
-2. **`openrouter`** — default `openai/gpt-oss-120b:free`; key from
+2. **`openai`** — any OpenAI-compatible `/v1/chat/completions` endpoint, which
+   is how a LAN worker or a self-hosted server gets into the chain without a
+   second code path.
+3. **`openrouter`** — default `openai/gpt-oss-120b:free`; key from
    `OPENROUTER_API_KEY` or the last uncommented line of `~/.config/nebulai/.env`.
    Structured output via `response_format` json_schema, batched **15 per call**.
-3. **`centroid`** — zero-dependency floor: joins the top-4 centroid-nearest
+4. **`centroid`** — zero-dependency floor: joins the top-4 centroid-nearest
    member strings with `" · "` (e.g. ` Monday ·  Tuesday ·  Friday ·  Sunday`).
    Not pretty, but honest, deterministic, and it means **the pipeline can
    never fail at the naming stage**.
 
-**`anthropic`** (`claude-opus-4-8`, structured output via `output_config.format`
+Under a **pinned** model identity (`--namer-model`, or a corpus model) the chain
+is a different one: `ollama → openai → hf → openrouter`, and **centroid is
+deliberately absent** — centroid is not the pinned model, it is four token
+strings joined by a dot. The full table of selectable backends is `_CHAINS` in
+`name.py`: `auto, openrouter, hf, ollama, openai, anthropic, claude-cli,
+codex-cli, none`.
+
+**`anthropic`** (`claude-opus-5`, structured output via `output_config.format`
 json_schema, batched 15/call) stays available but only via `--namer anthropic`
-— it's not in the `auto` chain.
+— it's not in the `auto` chain. `claude-cli` and `codex-cli` shell out to the
+`claude` / `codex` binaries and are likewise off the `auto` chain, though
+`claude-cli` is the default for `nebulai rename`.
 
 The backend actually used is returned and stamped into `nebulai.json` — an
 artifact always discloses whether its titles came from an LLM or a heuristic.
@@ -231,9 +250,11 @@ The viewer should need this file and nothing else.
 }
 ```
 
-- `unit_ref` is a typed `{kind, index}` object — `kind` is `Units.meta["unit"]`
-  (`token_embedding` for Plan C; later `sae_feature`, `mlp_neuron`) — so mixed
-  maps stay unambiguous.
+- `unit_ref` is a typed `{kind, index}` object — `kind` is `Units.meta["unit"]`,
+  and the strings carry their own provenance inline: `token_embedding`,
+  `token_unembedding`, `sae_decoder(<release>, <hook>)`,
+  `mlp_neuron(<model>, <weight_key>)`, `api_text_embedding(<embedder>)`,
+  `probe_concept(<embedder>)` — so mixed maps stay unambiguous.
 - Both `xy` and `xyz` ship per point — the 2D↔3D toggle is a client-side
   interpolation, no recompute.
 - Cluster `centroid` is in `u3` (display) space: it's where the viewer parks
@@ -283,6 +304,8 @@ exactly this "labeled 2D map of an embedding" shape).
 
 ## 7. CLI orchestration — `src/nebulai/cli.py`
 
+### 7.1 The map build
+
 `uv run nebulai tokens [flags]` runs stages 1–5 with per-stage wall-clock
 timing printed as `[k/5] ... [12.3s]`.
 
@@ -299,16 +322,51 @@ timing printed as `[k/5] ... [12.3s]`.
   `--cluster-dim`, `--n-neighbors`, `--min-cluster-size`, `--min-samples`,
   `--seed`, `--namer`, `--namer-model`, `--ollama-model`, `--force`.
 
+### 7.2 The rest of the CLI
+
+`tokens` is one of seventeen top-level subcommands. The other sixteen, with the
+module that implements each:
+
+| verb | implemented in | what it does |
+|---|---|---|
+| `sae` | `frontends/sae.py` | Plan A front-end, then stages 2–5 |
+| `neurons` | `frontends/neurons.py` | Plan B front-end, then stages 2–5 |
+| `edges` | `backend/edges.py` | derive the schema-v2 edge block over a built map |
+| `channels` | `backend/channels.py` | per-point scalar sidecar (`channels.json`) for the colour lens |
+| `interp` | `backend/interp/bundles.py` | compute the Internals bundles under `out/<model>/interp/` |
+| `metrics` | `backend/metrics.py` | silhouette and cluster stats, and it picks up `validation.json` |
+| `probe` | `frontends/probe.py` | Plan P: a concept cloud with no model in it |
+| `validate` | `backend/validate.py` | trustworthiness, seed ARI, shuffled-column null |
+| `rename` | `backend/rename.py` | re-title a built map without moving a point |
+| `compare` | `backend/compare.py` | concept-space multi-map view, and `--route-b` |
+| `intervene` | `backend/interp/intervene.py` | a hooked forward pass, reported in the intervention's own terms |
+| `direction` | `backend/directions.py` | `list` · `survey` · `add` · `make` · `prompts` · `project` · `drop` |
+| `persona` | `backend/persona.py` | `build` · `verify` · `list` — the persona space and its null |
+| `absorbing` | `backend/absorbing.py` | `run` · `report` · `list` — the self-play absorbing-state study |
+| `behavior` | `behavior/cli.py` | `plan` · `run` · `analyze` · `calibrate` · `conformance` · `publish` · `inspect` · `serve` |
+| `variance` | `backend/variance_cli.py` | `annotate-sheet` · `agreement` · `prices` |
+
+The last four own their own subcommand groups rather than threading options
+through `tokens`/`sae`/`neurons` for one reason, stated in `cli.py` itself:
+**none of them produces `Units`**, so none of them can enter the five-stage
+pipeline above. `behavior` and `variance` are imported lazily so the base CLI
+keeps its current import cost. `seer` is not here at all — it is a separate
+console script, and `nebulai` never imports it.
+
 ---
 
-## Plans A and B — what changes, microscopically
+## Plans A and B — what they turned out to be
 
-Both are **new front-ends only**; every file under `backend/` stays untouched.
+Both were **new front-ends only** — neither A nor B changed a file under
+`backend/`. (`backend/` has since grown well beyond the five pipeline stages;
+see §7.2.)
 
 ### Plan A — SAE features (flagship)
 
-- **Point =** one sparse-autoencoder feature (sae-lens; GPT-2 `res-jb` or
-  Gemma Scope releases).
+- **Point =** one sparse-autoencoder feature, read from a published SAE weights
+  repo (GPT-2 `res-jb`, EleutherAI `sae-*`, Gemma Scope) through the shared
+  safetensors loader — **no sae-lens and no torch at runtime**; the release tag
+  is recorded, not imported.
 - **`ids`** = feature indices; **`labels`** = auto-interp descriptions,
   bootstrapped from Neuronpedia where they exist, generated (hybrid
   local/API) where they don't, and **scored by detection** (Delphi/EleutherAI
@@ -318,26 +376,33 @@ Both are **new front-ends only**; every file under `backend/` stays untouched.
   *Decoder directions* (the feature's column of `W_dec`) are the **model's
   own** space. *Label embeddings* (mxbai-embed-large over the descriptions)
   are the **label-embedder's** semantics — clusters there tell you about the
-  labeling model as much as the subject model. Both get built; the export
-  carries both; the viewer exposes the toggle. Conflating them is the #1 way
-  this genre of visualization lies.
+  labeling model as much as the subject model. The export carries which space a
+  map is in and the viewer says so on the map; the projection *toggle* has not
+  shipped. Conflating the two is the #1 way this genre of visualization lies.
 - **Sampling:** stratified across firing-rate deciles, not top-k — top-k
   activation sampling over-represents dense features and hides rare
   monosemantic ones.
-- `unit_ref = "sae:<layer>/<feature>"`, `meta` gains the sae-lens release id.
+- `unit_ref = {"kind": "sae_decoder(<release>, <hook>)", "index": <feature>}` —
+  e.g. `sae_decoder(gpt2-small-res-jb, blocks.8.hook_resid_pre)`; `meta` gains
+  the release id.
 
 ### Plan B — raw MLP neurons (comparison artifact)
 
-- **Point =** one MLP hidden neuron, hooked via TransformerLens;
-  `vectors` = the neuron's output-weight row (its write direction into the
-  residual stream); labels auto-interp'd the same way as Plan A.
-- **Purpose is the contrast, not the map.** Neurons are polysemantic; the
-  prediction is measurably worse structure than Plan A on the *same* backend
-  and metrics: higher noise fraction, lower silhouette in the clustering
-  space, lower label-detection scores, less coherent clusters. Because A and
-  B share every downstream stage, the comparison is apples-to-apples by
-  construction — that quantitative table *is* the artifact.
-- `unit_ref = "neuron:<layer>/<idx>"`.
+- **Point =** one MLP hidden neuron, read directly from the checkpoint through
+  the shared safetensors loader (`src/nebulai/weights.py`) — **no
+  TransformerLens**; `vectors` = the neuron's output-weight row (its write
+  direction into the residual stream); labels auto-interp'd the same way as
+  Plan A.
+- **Purpose was the contrast, not the map** — and the contrast came out the
+  other way. The prediction was measurably worse structure than Plan A on the
+  *same* backend and metrics. What the numbers say instead is that unit type
+  does not sort the maps: SmolLM2's raw-neuron map clears its null by +0.099
+  and gpt2-medium's token map by +0.062. Because A and B share every downstream
+  stage, the comparison is apples-to-apples by construction — that quantitative
+  table *is* the artifact, and the [README](../README.md)'s validated-map table
+  is where it lives.
+- `unit_ref = {"kind": "mlp_neuron(<model>, <weight_key>)", "index": <idx>}` —
+  e.g. `mlp_neuron(gpt2, h.8.mlp.c_proj)`.
 
 ---
 

@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nebul.AI Field Guide</title>
+<meta name="description" content="Offline guide to every command, page, panel and permalink key that shipped in the 2026-09-11/12 roadmap: channels, directions, interventions, persona spaces, the absorbing-state study, the Behavior page, the variance kit, the model organism, the live server, Seer ensembles and corpus import.">
+<style>
+/* ── tokens: dark first (the instrument is dark), light on request ─────── */
+:root{
+  --bg:#0e0f12; --bg-raise:#15161a; --bg-pill:#1d1f24;
+  --text:#f4f5f7; --text-dim:#a0a3ac; --text-faint:#686c76;
+  --accent:#4d8dff; --accent-soft:rgba(77,141,255,.14);
+  --warn:#f5b13d; --warn-soft:rgba(245,177,61,.13);
+  --danger:#ff5c7a; --danger-soft:rgba(255,92,122,.13);
+  --line:rgba(255,255,255,.09); --line-strong:rgba(255,255,255,.16);
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#f6f7f9; --bg-raise:#ffffff; --bg-pill:#e9ebef;
+    --text:#15161a; --text-dim:#4b4f58; --text-faint:#7a7e88;
+    --accent:#2b6fe6; --accent-soft:rgba(43,111,230,.12);
+    --warn:#b8780a; --warn-soft:rgba(184,120,10,.12);
+    --danger:#d02a4c; --danger-soft:rgba(208,42,76,.10);
+    --line:rgba(0,0,0,.10); --line-strong:rgba(0,0,0,.18);
+    color-scheme:light;
+  }
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 var(--sans);
+  -webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code,kbd,pre{font-family:var(--mono);font-size:.88em}
+code{background:var(--bg-pill);padding:.08em .38em;border-radius:5px;color:var(--text)}
+kbd{background:var(--bg-pill);border:1px solid var(--line-strong);border-bottom-width:2px;
+  padding:.05em .4em;border-radius:5px}
+pre{background:var(--bg-raise);border:1px solid var(--line);border-radius:10px;
+  padding:12px 14px;overflow-x:auto;line-height:1.45;margin:10px 0 16px}
+pre code{background:none;padding:0;font-size:.86rem}
+pre.out{border-left:3px solid var(--text-faint)}
+pre.out::before{content:"output";display:block;font:600 10px/1 var(--sans);
+  letter-spacing:.12em;text-transform:uppercase;color:var(--text-faint);margin-bottom:8px}
+pre.cmd::before{content:"run";display:block;font:600 10px/1 var(--sans);
+  letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+h1,h2,h3,h4{line-height:1.2;font-weight:650;letter-spacing:-.01em;scroll-margin-top:18px}
+h1{font-size:2.1rem;margin:0 0 6px}
+h2{font-size:1.45rem;margin:54px 0 14px;padding-top:22px;border-top:1px solid var(--line)}
+h3{font-size:1.1rem;margin:30px 0 8px}
+h4{font-size:.98rem;margin:20px 0 6px;color:var(--text-dim)}
+p{margin:0 0 12px}
+ul,ol{margin:0 0 14px;padding-left:22px}
+li{margin:3px 0}
+li>ul{margin-top:3px}
+hr{border:0;border-top:1px solid var(--line);margin:28px 0}
+.kicker{font:600 11px/1 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 10px}
+.lede{font-size:1.08rem;color:var(--text-dim);max-width:62ch}
+.muted{color:var(--text-dim)}
+.faint{color:var(--text-faint)}
+/* layout */
+.wrap{display:grid;grid-template-columns:270px minmax(0,1fr);gap:0;min-height:100vh}
+nav.toc{position:sticky;top:0;height:100vh;overflow-y:auto;padding:26px 18px 40px 22px;
+  border-right:1px solid var(--line);background:var(--bg-raise);font-size:.86rem}
+nav.toc .brand{font-weight:700;letter-spacing:-.01em;font-size:1rem;margin:0 0 2px}
+nav.toc .sub{color:var(--text-faint);font-size:.78rem;margin:0 0 18px}
+nav.toc ol{list-style:none;padding:0;margin:0}
+nav.toc>ol>li{margin:0 0 6px}
+nav.toc>ol>li>a{font-weight:600;color:var(--text)}
+nav.toc ol ol{padding-left:12px;margin:2px 0 6px;border-left:1px solid var(--line)}
+nav.toc ol ol a{color:var(--text-dim)}
+nav.toc a{display:block;padding:2px 6px;border-radius:5px}
+nav.toc a:hover{background:var(--accent-soft);text-decoration:none;color:var(--text)}
+main{padding:40px 48px 120px;max-width:980px}
+@media (max-width:980px){
+  .wrap{display:block}
+  nav.toc{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line)}
+  nav.toc ol ol{display:none}
+  main{padding:26px 18px 90px}
+}
+/* tables */
+.tbl{overflow-x:auto;margin:10px 0 18px;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:.9rem}
+th,td{text-align:left;vertical-align:top;padding:8px 11px;border-bottom:1px solid var(--line)}
+th{font-weight:600;color:var(--text-dim);background:var(--bg-raise);white-space:nowrap;
+  font-size:.78rem;letter-spacing:.06em;text-transform:uppercase}
+tr:last-child td{border-bottom:0}
+td code{white-space:nowrap}
+td.wrap code,code.wrap{white-space:normal}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+/* badges */
+.b{display:inline-block;font:600 10.5px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;
+  padding:4px 7px;border-radius:999px;vertical-align:middle;margin-left:6px;white-space:nowrap}
+.b-ship{background:var(--accent-soft);color:var(--accent)}
+.b-meas{background:var(--accent);color:#fff}
+.b-gap{background:var(--warn-soft);color:var(--warn)}
+.b-human{background:var(--danger-soft);color:var(--danger)}
+.b-none{background:var(--bg-pill);color:var(--text-dim)}
+/* callouts */
+.call{border:1px solid var(--line);border-left:3px solid var(--accent);background:var(--bg-raise);
+  border-radius:10px;padding:12px 16px;margin:14px 0 18px}
+.call.warn{border-left-color:var(--warn)}
+.call.danger{border-left-color:var(--danger)}
+.call .t{font-weight:650;margin:0 0 4px;font-size:.92rem}
+.call p:last-child{margin-bottom:0}
+.quote{border-left:3px solid var(--line-strong);padding:2px 0 2px 14px;color:var(--text-dim);
+  margin:10px 0 14px;font-style:italic}
+/* fact grid */
+dl.facts{display:grid;grid-template-columns:max-content 1fr;gap:5px 18px;margin:8px 0 16px;
+  font-size:.92rem}
+dl.facts dt{color:var(--text-faint);font-weight:500}
+dl.facts dd{margin:0}
+/* ui label chips */
+.ui{display:inline-block;background:var(--bg-pill);border:1px solid var(--line-strong);
+  padding:.05em .5em;border-radius:6px;font-size:.9em;white-space:nowrap}
+/* details */
+details{border:1px solid var(--line);border-radius:10px;padding:8px 14px;margin:8px 0 16px;background:var(--bg-raise)}
+summary{cursor:pointer;font-weight:600;color:var(--text-dim)}
+details[open] summary{margin-bottom:8px}
+details pre{margin-bottom:6px}
+/* recipes */
+.recipe{border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin:14px 0}
+.recipe h4{margin:0 0 8px;color:var(--text)}
+.recipe ol{margin-bottom:6px}
+.legend{display:flex;flex-wrap:wrap;gap:10px 18px;font-size:.88rem;color:var(--text-dim);margin:14px 0 6px}
+.legend span .b{margin-left:0;margin-right:6px}
+footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);color:var(--text-faint);font-size:.82rem}
+@media print{
+  nav.toc{display:none}.wrap{display:block}main{padding:0;max-width:none}
+  pre{white-space:pre-wrap}h2{page-break-before:auto}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" aria-label="Contents">
+  <p class="brand">Nebul.AI Field Guide</p>
+  <p class="sub">main @ 83282a3 · 2026-09-12</p>
+  <ol>
+    <li><a href="#about">0 · How to read this</a></li>
+    <li><a href="#install">1 · Install surface</a>
+      <ol><li><a href="#needs">what needs what</a></li></ol></li>
+    <li><a href="#commands">2 · Command map</a></li>
+    <li><a href="#channels">3 · Channels</a></li>
+    <li><a href="#directions">4 · Directions</a>
+      <ol><li><a href="#dir-list">list · survey</a></li><li><a href="#dir-make">make · prompts · project</a></li><li><a href="#dir-add">add · drop</a></li><li><a href="#eval-awareness">eval-awareness recipe</a></li></ol></li>
+    <li><a href="#intervene">5 · Interventions</a></li>
+    <li><a href="#persona">6 · Persona spaces</a></li>
+    <li><a href="#absorbing">7 · Absorbing state</a></li>
+    <li><a href="#behavior">8 · Behavior study</a>
+      <ol><li><a href="#beh-verbs">the eight verbs</a></li><li><a href="#beh-shipped">what shipped</a></li></ol></li>
+    <li><a href="#variance">9 · Variance kit</a></li>
+    <li><a href="#organism">10 · Model organism</a></li>
+    <li><a href="#live">11 · Live server</a></li>
+    <li><a href="#seer-cli">12 · Seer additions</a>
+      <ol><li><a href="#seer-repeat">run --repeat · budget</a></li><li><a href="#seer-place">place</a></li><li><a href="#seer-import">import</a></li></ol></li>
+    <li><a href="#viewer">13 · The viewer</a>
+      <ol><li><a href="#v-lens">channel lens</a></li><li><a href="#v-axis">direction axis</a></li><li><a href="#v-episodes">episodes</a></li><li><a href="#v-hands">hand control</a></li><li><a href="#v-behavior">Behavior page</a></li><li><a href="#v-steer">Internals #26</a></li><li><a href="#v-seer">Seer panels</a></li><li><a href="#v-settings">Settings</a></li></ol></li>
+    <li><a href="#permalinks">14 · Permalink keys</a></li>
+    <li><a href="#deploy">15 · Static deploy</a></li>
+    <li><a href="#gaps">16 · Known gaps</a></li>
+    <li><a href="#recipes">17 · Recipes</a></li>
+  </ol>
+</nav>
+
+<main>
+<p class="kicker">Nebul.AI · offline field guide</p>
+<h1>What shipped on 2026-09-11/12, and how to use it</h1>
+<p class="lede">Every command, page, panel and permalink key added by the roadmap merge (Attractors P0–5, Behavioral divergence P0–2, the generative-variance kit, weight-geometry Track 2b, and the Seer carry-overs). Written against <code>main</code> at <code>83282a3</code>. Nothing here is aspirational: each feature is either shown with the output it produced on this checkout, or marked as a gap.</p>
+
+<div class="legend">
+  <span><span class="b b-ship">shipped</span>exists and is exercised by tests</span>
+  <span><span class="b b-meas">measured</span>a real number from a real run, quoted from the artifact</span>
+  <span><span class="b b-gap">gap</span>built but not reachable, or reachable but inert</span>
+  <span><span class="b b-human">human-only</span>needs a key, a licence, a reviewer, or money</span>
+</div>
+
+<h2 id="about">0 · How to read this</h2>
+<p>Nebul.AI is one Python package (<code>nebulai</code>) and one viewer (Nebul.AI + Seer, two documents built from one tree). The roadmap added seven CLI groups, three module mains, one viewer page, one Internals view, two Seer panels, a webcam rig, a permalink grammar and about a dozen honesty rules. This guide is organised by <em>what you type</em> (sections 1–12) and then by <em>what you see</em> (13–15). Section 16 lists what does not work yet. Section 17 is seven end-to-end walkthroughs.</p>
+<p>Two house rules run through everything and are worth knowing before the details:</p>
+<ul>
+  <li><strong>Null ≠ 0, missing ≠ 0.</strong> An absent value prints <code>—</code> or the literal words <code>not measured</code>; a JSON <code>null</code> is never coerced. A unit test asserts the Behavior page source contains no <code>?? 0</code>.</li>
+  <li><strong>R5: a direction ships with its null or not at all.</strong> Anything drawn as an axis carries the random-direction ghost under it. A direction without a null block is listed as <code>NOT RENDERABLE</code> with that reason, in the CLI and in the viewer, in the same words.</li>
+</ul>
+<p>Two more that matter for specific features: <strong>D6</strong> (measure, never export: no code path in <code>intervene</code>, the live server or the organism can write modified weights, enforced by <code>tests/test_intervene.py::test_no_weight_export</code>) and <strong>R7</strong> (foreign data wears foreign clothes: imported transcripts and third-party embeddings are drawn dashed and labelled as not model-internal).</p>
+<p>The viewer's Episodes page (<code>#page=guide</code>) explains the maths behind each Internals view; this guide does not repeat that. Plan documents (<code>docs/ATTRACTORS-PLAN.md</code>, <code>docs/BEHAVIORAL-DIVERGENCE-PLAN.md</code>, <code>docs/GENERATIVE-VARIANCE-PLAN.md</code>) hold the method and the claim contracts; this guide points at them rather than restating them.</p>
+
+<h2 id="install">1 · Install surface</h2>
+<p>The base install is torch-free by design and stays that way mechanically: <code>tests/test_no_torch_in_base.py</code> imports every CLI with <code>torch</code> made unimportable, and <code>tests/test_behavior_optional_dep.py</code> fails if anything under <code>src/nebulai/</code> imports torch, transformers or sentence-transformers at module scope. Torch code lives only under <code>src/nebulai/organisms/</code>.</p>
+<pre class="cmd"><code>uv sync                              # base: numpy, safetensors, umap-learn, scikit-learn, … (no torch)
+uv sync --extra organisms            # + torch, transformers, peft, datasets  → the model organism only
+uv sync --group behavior-local       # + torch==2.14.0, transformers==5.17.0, sentence-transformers==6.0.1
+                                     #   → the Behavior study's local GPT-2 arms and pinned encoder
+pip install 'nebulai[organisms]'     # the same extra, for a pip install</code></pre>
+<p>There are exactly two console scripts: <code>nebulai</code> and <code>seer</code>. Everything else is a module main run with <code>python -m …</code>. If you call an organism function without the extra, you get <code>OrganismsNotInstalled</code> carrying the install line, not a traceback.</p>
+
+<h3 id="needs">What needs what</h3>
+<div class="tbl"><table>
+<tr><th>Command</th><th>Network</th><th>API key</th><th>Torch</th><th>Model weights</th></tr>
+<tr><td><code>nebulai channels</code></td><td>cache only</td><td>no</td><td>no</td><td>tokenizer + W<sub>E</sub></td></tr>
+<tr><td><code>nebulai intervene add/ablate/cap</code></td><td>cache only</td><td>no</td><td>no</td><td>GPT-2 family (numpy)</td></tr>
+<tr><td><code>nebulai intervene clamp</code></td><td><strong>yes</strong> (SAE download)</td><td>no</td><td>no</td><td>GPT-2 + res-jb SAE</td></tr>
+<tr><td><code>nebulai direction list/survey/make/project/drop</code></td><td>no</td><td>no</td><td>no</td><td>none, reads the map</td></tr>
+<tr><td><code>nebulai direction add</code></td><td><strong>yes</strong></td><td>no</td><td>no</td><td>none</td></tr>
+<tr><td><code>nebulai direction prompts</code></td><td>cache only</td><td>no</td><td>no</td><td>the model</td></tr>
+<tr><td><code>python -m nebulai.backend.eval_awareness</code></td><td>cache only</td><td>no</td><td>no</td><td>the instruct model</td></tr>
+<tr><td><code>nebulai persona build/verify</code></td><td>cache only</td><td>no</td><td>no</td><td>instruct model (numpy Llama)</td></tr>
+<tr><td><code>nebulai absorbing run</code></td><td>cache only</td><td>no</td><td>no</td><td>instruct model</td></tr>
+<tr><td><code>nebulai absorbing report/list</code>, <code>persona list</code></td><td>no</td><td>no</td><td>no</td><td>none</td></tr>
+<tr><td><code>nebulai behavior run</code> (local presets)</td><td>cache only</td><td>no</td><td><strong>behavior-local</strong></td><td>gpt2, gpt2-xl</td></tr>
+<tr><td><code>nebulai behavior run</code> (xai arm)</td><td><strong>yes</strong></td><td><strong><code>XAI_API_KEY</code></strong></td><td>behavior-local for arm A</td><td></td></tr>
+<tr><td><code>nebulai behavior analyze --embedder local|secondary</code></td><td>cache only</td><td>no</td><td><strong>behavior-local</strong></td><td>the encoder (~400 MB)</td></tr>
+<tr><td><code>nebulai behavior analyze --embedder hash</code></td><td>no</td><td>no</td><td>no</td><td>none, and never <code>confirmed</code></td></tr>
+<tr><td><code>nebulai behavior conformance</code></td><td>cache only</td><td>no</td><td><strong>behavior-local</strong></td><td>gpt2</td></tr>
+<tr><td><code>nebulai behavior plan/inspect/publish</code></td><td>no</td><td>no</td><td>no</td><td>none</td></tr>
+<tr><td><code>nebulai variance annotate-sheet/agreement</code></td><td>no</td><td>no</td><td>no</td><td>none</td></tr>
+<tr><td><code>nebulai variance prices</code></td><td><strong>yes</strong></td><td>no</td><td>no</td><td>none</td></tr>
+<tr><td><code>seer import --dry-run</code></td><td>no</td><td>no</td><td>no</td><td>none</td></tr>
+<tr><td><code>seer run --repeat</code></td><td><strong>yes</strong> (the agent)</td><td>the agent's own</td><td>no</td><td>none</td></tr>
+<tr><td><code>seer place</code> (HTTP)</td><td>loopback</td><td>no</td><td>no</td><td>via the live server</td></tr>
+<tr><td><code>seer place --in-process</code></td><td>cache only</td><td>no</td><td>no</td><td>the persona model</td></tr>
+<tr><td><code>python -m nebulai.backend.interp.live_server</code></td><td>cache only</td><td>no</td><td>no</td><td>GPT-2 (+ persona model on demand)</td></tr>
+<tr><td><code>python -m nebulai.organisms.emergent_misalignment</code></td><td><strong>yes</strong></td><td>no</td><td><strong>organisms extra</strong></td><td>Qwen2.5-0.5B-Instruct</td></tr>
+</table></div>
+
+<h2 id="commands">2 · Command map</h2>
+<p>Seventeen top-level <code>nebulai</code> verbs. The first eleven predate the roadmap; the last seven are new or grew a subgroup. <code>seer</code> is its own script.</p>
+<div class="tbl"><table>
+<tr><th>Verb</th><th>Does</th><th>Section</th></tr>
+<tr><td><code>tokens</code> · <code>sae</code> · <code>neurons</code></td><td>the three map front-ends (unchanged)</td><td><span class="faint">README</span></td></tr>
+<tr><td><code>edges</code> · <code>metrics</code> · <code>probe</code> · <code>validate</code> · <code>rename</code> · <code>compare</code> · <code>interp</code></td><td>back-end stages (unchanged; <code>interp</code> gained no flags, see §5)</td><td><span class="faint">README</span></td></tr>
+<tr><td><code>channels</code></td><td>per-point scalars beside a token map</td><td><a href="#channels">§3</a></td></tr>
+<tr><td><code>direction</code> {list, survey, add, make, prompts, project, drop}</td><td>a direction as a first-class object with its null</td><td><a href="#directions">§4</a></td></tr>
+<tr><td><code>intervene</code> {clamp, add, ablate, cap}</td><td>one inference-time hook swept over α, with its α = 0 control</td><td><a href="#intervene">§5</a></td></tr>
+<tr><td><code>persona</code> {build, verify, list}</td><td>a frozen PCA space over an instruct model's residual stream</td><td><a href="#persona">§6</a></td></tr>
+<tr><td><code>absorbing</code> {run, report, list}</td><td>the Waluigi absorbing-state study</td><td><a href="#absorbing">§7</a></td></tr>
+<tr><td><code>behavior</code> {plan, run, analyze, calibrate, conformance, publish, inspect, serve}</td><td>behavioural divergence between pinned deployments</td><td><a href="#behavior">§8</a></td></tr>
+<tr><td><code>variance</code> {annotate-sheet, agreement, prices}</td><td>the generative-variance annotation and reliability kit</td><td><a href="#variance">§9</a></td></tr>
+<tr><td><code>seer</code> {run, attach, reconcile, protocol, list, show, <strong>ensemble</strong>, <strong>place</strong>, compare, export, analyze, serve, reindex, delete, install, uninstall, watch, <strong>import</strong>, import-spool}</td><td>SessionSeer; bold verbs are new</td><td><a href="#seer-cli">§12</a></td></tr>
+</table></div>
+<p>Module mains (no console script):</p>
+<ul>
+  <li><code>python -m nebulai.backend.eval_awareness --revision SHA --out DIR</code> — <a href="#eval-awareness">§4.4</a></li>
+  <li><code>python -m nebulai.backend.interp.live_server</code> — <a href="#live">§11</a></li>
+  <li><code>python -m nebulai.organisms.emergent_misalignment</code> — <a href="#organism">§10</a></li>
+</ul>
+<div class="call">
+  <p class="t">Things that do not exist, so you do not look for them</p>
+  <p><code>nebulai behavior confirm</code> and <code>nebulai behavior export</code> (the plan named them; <code>analyze</code> writes the artifact and <code>publish</code> copies it). <code>nebulai interp --direction</code> / <code>--steer</code> (no new flags on <code>interp</code>). <code>nebulai validate --layer</code> (<code>docs/VALIDATE-LAYERS.md</code> is a requirements spec, not a feature). <code>seer run --budget</code> (the budget is <code>--max-cost-usd</code>). <code>nebulai seer</code> (Seer is a separate script, not a subcommand).</p>
+</div>
+
+<h2 id="channels">3 · Channels <span class="b b-ship">shipped</span></h2>
+<p>A <em>channel</em> is one number per point, index-aligned to a built map's <code>nebulai.json</code>, stored beside it in <code>channels.json</code>. Channels have their own lifetime: writing one never touches a coordinate, so pinned goldens cannot move. The viewer's channel lens (<a href="#v-lens">§13.1</a>) recolours the map by a channel; <code>direction project</code> (<a href="#dir-make">§4.2</a>) appends projection and null channels to the same file.</p>
+<pre class="cmd"><code>nebulai channels [--out OUT] [--recompute] MODEL [MODEL ...]
+uv run nebulai channels gpt2 --recompute</code></pre>
+<dl class="facts">
+  <dt>reads</dt><dd><code>out/&lt;model&gt;/nebulai.json</code> (meta + <code>points[].unit_ref.index</code>); re-derives the curated token list from the stamped model/revision/which/centered</dd>
+  <dt>writes</dt><dd><code>out/&lt;model&gt;/channels.json</code></dd>
+  <dt>Phase 0 channels</dt><dd><code>we_norm</code>, <code>we_centroid_dist</code>, both in space <code>W_E.raw</code> (the raw embedding rows, which the map itself does not carry)</dd>
+  <dt>shipped for</dt><dd>7 maps: <code>gpt2</code> (49,857 points, 2.9 MB), <code>distilgpt2</code>, <code>gpt2-medium</code>, <code>EleutherAI__pythia-70m</code>, <code>HuggingFaceTB__SmolLM2-135M</code>, <code>HuggingFaceTB__SmolLM2-135M-Instruct</code>, <code>Qwen__Qwen2.5-0.5B-Instruct</code></dd>
+</dl>
+<p>Refusals the command makes for you: it refuses any map whose unit is not <code>token_embedding</code> / <code>token_unembedding</code> ("SAE/neuron channels are a later front-end change, not a reinterpretation of this file"); it refuses to write if the re-derived vocabulary stops matching point-for-point, naming the first differing index; an existing file is skipped unless <code>--recompute</code>; every channel's stats line prints <code>n_missing</code>.</p>
+
+<h2 id="directions">4 · Directions <span class="b b-ship">shipped</span></h2>
+<p>A direction is a unit vector in a named space (<code>W_E.centered</code>, <code>resid.L8</code>, <code>mlp_out.L5</code>, …) plus provenance and two statistics: how well it separates its own two defining sets on held-out members, and how it looks against random unit directions across the whole map. It lives in <code>out/&lt;model&gt;/directions.json</code>; its four projection channels (<code>proj.&lt;id&gt;</code>, <code>.orth</code>, <code>.null</code>, <code>.null.orth</code>) live in <code>channels.json</code>. All seven subverbs take <code>MODEL</code> and <code>--out</code> (default <code>out</code>).</p>
+
+<h3 id="dir-list">4.1 <code>list</code> and <code>survey</code> <span class="b b-meas">measured</span></h3>
+<pre class="cmd"><code>uv run nebulai direction list gpt2</code></pre>
+<pre class="out"><code>gpt2: 3 direction(s), 1 renderable
+  male-minus-female-names   W_E.centered  two_selection   d=768  renderable
+      vs null: cohen's d -0.002161  overlap 0.834186  n 49857
+      on its own two sets: cohen's d 8.18158 (in sample)  held out +8.304589
+      random directions mean |d| 0.351211
+  refusal-style-v1-L8       resid.L8      diff_of_means   d=768  NOT RENDERABLE
+      on its own two sets: cohen's d 2.01126 (in sample)  held out -0.034079
+      reason: no null block — R5: a direction ships with its null or not at all
+  refusal-style-v1-L11      resid.L11     diff_of_means   d=768  NOT RENDERABLE
+      reason: no null block — R5: a direction ships with its null or not at all</code></pre>
+<p>Read the two refusal-style lines side by side: in-sample Cohen's d 2.01, held-out −0.03. That gap is the reason held-out is printed at all.</p>
+<p><code>survey</code> prints every published direction artefact's width against this model. It is the table behind the import refusals:</p>
+<pre class="cmd"><code>uv run nebulai direction survey gpt2</code></pre>
+<pre class="out"><code>gpt2: gpt2 has d=768, space W_E.centered
+  refusal_direction/gemma-2b-it              d=2048  resid.L10  refused
+  refusal_direction/qwen-1_8b-chat           d=2048  resid.L15  refused
+  refusal_direction/llama-2-7b-chat-hf       d=4096  resid.L14  refused
+  refusal_direction/meta-llama-3-8b-instruct d=4096  resid.L12  refused
+  refusal_direction/yi-6b-chat               d=4096  resid.L20  refused
+  AmongUs/AmongUsDataset_probe_phi4          d=5120  resid.L20  refused
+  AmongUs/DishonestQADataset_probe_phi4      d=5120  resid.L20  refused
+  AmongUs/RepEngDataset_probe_phi4           d=5120  resid.L20  refused
+  AmongUs/TruthfulQADataset_probe_phi4       d=5120  resid.L20  refused
+  persona_vectors      d=— — refused  publishes prompt sets and extraction code, no vectors
+  assistant-axis       d=— — refused  publishes the pipeline and 275 role prompts, no basis</code></pre>
+<p>Every published artefact is refused for every model this repo maps (512/576/768/1024 wide against 2048/4096/5120). Truncating a 4096-vector to 768 coordinates would be "a number, not a measurement". That refusal is why <code>prompts</code> exists.</p>
+
+<h3 id="dir-make">4.2 <code>make</code>, <code>prompts</code>, <code>project</code></h3>
+<p><strong><code>make</code></strong> is diff-of-means over the map's own vectors, from two clusters or two id lists. The viewer's direction maker (<a href="#v-axis">§13.2</a>) prints this command for you after you capture two selections.</p>
+<pre class="cmd"><code>nebulai direction make [--a-cluster N] [--b-cluster N] [--a-ids I ...] [--b-ids I ...]
+                       [--id ID] [--label L] [--null-n N] [--seed S] [--no-project] MODEL
+uv run nebulai direction make gpt2 --a-cluster 200 --b-cluster 190 \
+    --id male-minus-female-names --label "male − female given names"</code></pre>
+<p>That is the shipped <code>male-minus-female-names</code> (cluster 200 "male given names", 307 tokens, minus cluster 190 "female English given names", 242 tokens). Without <code>--no-project</code> it also writes the four channels, so the result is renderable immediately. <code>--a-ids</code>/<code>--b-ids</code> are 0-based point indices.</p>
+<p><strong><code>prompts</code></strong> fits a direction in the model's own residual stream from a frozen prompt set, because no published direction fits. The only registered set is <code>refusal-style-v1</code> (32 positive / 32 negative, sha <code>0a8bde6b61fc</code>, stamped into the protocol string).</p>
+<pre class="cmd"><code>nebulai direction prompts [--set SET] [--layer L] [--position P] [--revision REV] [--id ID] [--label L] MODEL
+uv run nebulai direction prompts gpt2 --layer 8      # → refusal-style-v1-L8, space resid.L8</code></pre>
+<p><code>--layer -1</code> is the embedding output; <code>--position -1</code> (default) is the last token. Note that <code>prompts</code> fits directions that have <em>no null block</em> against the map (they live in <code>resid.L8</code>, not in the map's <code>W_E.centered</code>), which is why the two shipped refusal directions are NOT RENDERABLE on the map and why the Internals rail refuses the map hand-off with the R5 sentence (<a href="#v-steer">§13.6</a>).</p>
+<p><strong><code>project</code></strong> turns NOT RENDERABLE into renderable: it computes the parallel and orthogonal components for every point, the same for <code>--null-n</code> random unit directions, and appends the four channels.</p>
+<pre class="cmd"><code>nebulai direction project [--null-n N] [--seed S] MODEL ID</code></pre>
+
+<h3 id="dir-add">4.3 <code>add</code> and <code>drop</code></h3>
+<pre class="cmd"><code>nebulai direction add --source {refusal,persona,assistant-axis,neuronpedia,amongus}
+                      [--run RUN] [--trait TRAIT] [--feature FEATURE] [--checkpoint CKPT] [--id ID] MODEL
+nebulai direction drop [--keep-channels] MODEL ID [ID ...]</code></pre>
+<p><code>add</code> downloads a published artefact pinned to a resolved commit sha into <code>~/.cache/nebulai/imports/</code> and imports it if the width matches (see <code>survey</code>: on this repo's models it never does). <code>persona</code> and <code>assistant-axis</code> refuse by construction and hand back the prompt sets instead of computing something similar-looking. <code>drop</code> removes the registry entry and, by default, its four channels.</p>
+
+<h3 id="eval-awareness">4.4 The eval-awareness recipe <span class="b b-meas">measured</span></h3>
+<p>Not a <code>direction</code> subverb, because it needs a pinned instruct model and a layer sweep. It fits one <code>diff_of_means</code> direction per layer from a frozen 128-prompt matched-pair set (8 framing pairs × 8 tasks × 2 conditions; the user turn is byte-identical within each pair, so the direction cannot be a topic direction), each with a held-out split over unseen frame pairs and a 32-draw permutation null.</p>
+<pre class="cmd"><code>python -m nebulai.backend.eval_awareness --revision SHA --out DIR
+    [--model HuggingFaceTB/SmolLM2-135M-Instruct] [--local-dir DIR] [--layers 0,1,2,…]
+    [--prompt-set eval_awareness.v1] [--batch-size 16]</code></pre>
+<p>Result on disk: <code>out/HuggingFaceTB__SmolLM2-135M-Instruct/directions.json</code> holds 30 entries <code>eval-awareness-v1-L0 … L29</code> (d = 576) and a <code>channels.json</code> whose <code>point_source</code> says <code>prompts:eval_awareness.v1 (the N prompt activations, not a map)</code>. Six layers clear their null on the held-out split (L10, L11, L12, L13, L15, L16); the best is L12 (in-sample d 0.997 against a null p95 of 0.680; held-out d 0.601). The other 24 layers carry no direction, including L19, the persona space's own layer. A weak mid-stack direction that transfers to two unseen framings, and nothing late.</p>
+
+<h2 id="intervene">5 · Interventions <span class="b b-ship">shipped</span> <span class="b b-meas">measured</span></h2>
+<p><code>nebulai intervene</code> sweeps <em>one</em> verb over a grid of α on a real numpy GPT-2 forward pass and writes a curve bundle into <code>out/&lt;model&gt;/interp/</code>, registered in that folder's <code>index.json</code>. It is the only place in the repo permitted to make a causal claim, and the one that must never write a weight (D6).</p>
+<pre class="cmd"><code>nebulai intervene [--out OUT] [--prompt P]... [--alpha A]... [--direction ID] [--layer L]
+                  [--feature I] [--value V] [--lo LO] [--hi HI] [--max-tokens N]
+                  [--target T]... [--revision REV] [--name NAME]  MODEL {clamp,add,ablate,cap}</code></pre>
+<div class="tbl"><table>
+<tr><th>Verb</th><th>What it does to the stream</th><th>Needs</th></tr>
+<tr><td><code>clamp</code></td><td>pin one SAE feature's activation to a value, at that SAE's hook</td><td><code>--feature</code> (required), <code>--value</code> (default 0.0); downloads the res-jb SAE</td></tr>
+<tr><td><code>add</code></td><td>add α·d to the residual stream at one layer</td><td><code>--direction</code>; <code>--layer</code> defaults to the direction's own space</td></tr>
+<tr><td><code>ablate</code></td><td>project d out of the residual stream at <em>every</em> layer (documented as not "add with negative α")</td><td><code>--direction</code></td></tr>
+<tr><td><code>cap</code></td><td>clip the residual stream into [lo, hi] at one layer</td><td><code>--lo</code> / <code>--hi</code></td></tr>
+</table></div>
+<p>Defaults: <code>--max-tokens 16</code>, <code>--revision main</code>, <code>--name intervene_&lt;verb&gt;</code> (<code>.json</code> is appended if missing). <code>--prompt</code>, <code>--alpha</code> and <code>--target</code> repeat.</p>
+<pre class="cmd"><code>uv run nebulai intervene gpt2 add --direction refusal-style-v1-L8 \
+    --prompt "Write a detailed guide to" --prompt "Sure, here is how to" \
+    --alpha 0.5 --alpha 1.0 --alpha 2.0 --name intervene_refusal_add</code></pre>
+<p>That is the shipped <code>out/gpt2/interp/intervene_refusal_add.json</code> (gpt2 @ 607a30d783df, greedy). The other shipped bundle is <code>intervene_golden_gate.json</code>: <code>clamp</code> of res-jb SAE feature 17840 to 120 at layer 7, α ∈ {0, .25, .5, .75, 1}, three prompts.</p>
+<div class="tbl"><table>
+<tr><th>Bundle</th><th>α grid</th><th>KL(base ‖ steered), bits</th><th>What it showed</th></tr>
+<tr><td><code>intervene_golden_gate</code></td><td class="num">0 · .25 · .5 · .75 · 1</td><td class="num">0.000 · 0.162 · 0.621 · 1.359 · 2.360 (mean); max 3.421</td><td>feature 17840 reads the bridge perfectly (13.4–13.8 on five Golden Gate prompts, 0.000 on all eight controls) and clamping it to 120 steers the prose not at all</td></tr>
+<tr><td><code>intervene_refusal_add</code></td><td class="num">0 · .5 · 1 · 2</td><td class="num">peak 0.0023</td><td>the projection onto d moves by exactly α (−3.4528 → −2.9528 → −2.4528 → −1.4528) and the orthogonal remainder by exactly 0.0; generations are identical to baseline</td></tr>
+</table></div>
+<p><strong>What the producer enforces.</strong> α = 0 is always added to the grid, with the printed line <em>"alpha=0 added: a sweep without its control is a line, not a result"</em>. The α = 0 row installs <em>no hook at all</em> (a no-op hook shifts the logits by ~1e-5, exactly the size of the effect you would be reading at the bottom of a sweep). If that row is not bit-identical to the baseline the command refuses to write the bundle. The bundle's <code>claim</code> sentence ends <em>"That is a statement about what this intervention did, not about what the direction is."</em></p>
+<p><strong>The axis block.</strong> Each sweep row now carries <code>axis</code>: the projection of the last token's residual onto the direction, baseline and intervened, the delta, and the norm of the orthogonal remainder. That last number is what lets the viewer say a point <em>slid along</em> the axis rather than moved. (<code>Trace.resid[L]</code> is the stream <em>entering</em> block L, so <code>resid.L8</code> reads <code>resid_index 9</code>; the module documents the off-by-one.)</p>
+<p><code>nebulai interp</code> itself gained no flags: <code>--model</code>, <code>--out</code>, <code>--prompts-file</code> as before.</p>
+
+<h2 id="persona">6 · Persona spaces <span class="b b-ship">shipped</span> <span class="b b-meas">measured</span></h2>
+<p>A persona space is a frozen PCA basis over an instruct model's residual stream at one layer, over a frozen archetype set (<code>src/nebulai/prompts/personas.v1.json</code>: 296 archetypes × 8 probes = 2,368 prompts). The basis is frozen at build time so a trajectory placed today is comparable with one placed last month. The label-permutation control decides whether PC1 is anything: only a space whose verdict is <code>above_null</code> may become the default coordinate system in the viewer.</p>
+<pre class="cmd"><code>nebulai persona build  [--model M] [--revision REV] [--local-dir DIR] [--out OUT]
+                       [--control-n 500] [--prompt-set personas.v1] [--layer L] [--batch-size N] [--quiet]
+nebulai persona verify [--model M] [--revision REV] [--local-dir DIR] [--out OUT] [--control-n N] SPACE_ID
+nebulai persona list</code></pre>
+<pre class="out"><code>smollm2-135m-instruct@12fd25f77366.v1.L19  L19  pc1_evr=0.2046 null_p95=0.1916  above_null
+smollm2-360m-instruct@a10cc1512eab.v1.L20  L20  pc1_evr=0.1662 null_p95=0.1537  above_null</code></pre>
+<p>Both spaces clear their control, narrowly: 135M @ L19 p = 0.0020 (null mean 0.1729), 360M @ L20 p = 0.0080 (null mean 0.1377). The control is a label permutation <em>stratified within probe</em>; the unstratified variant was measured first, failed, and is kept in every <code>space.json</code> as a labelled <code>cross_check</code>, because an unstratified null lets a pseudo-archetype carry an unbalanced probe mix and inherits the probe axis.</p>
+<ul>
+  <li>The layer is part of the id (<code>…v1.L19</code>); changing a prompt set's contents makes a new id, never an edit in place.</li>
+  <li><code>--revision</code> with <code>--local-dir</code> is <em>the claim about which commit those bytes are</em>, and lands in the provenance.</li>
+  <li><code>verify</code> checks the model/revision before re-running the control (it could once be pointed at the wrong model, and was: commit <code>afd015a</code>). Pass the same <code>--model</code>/<code>--revision</code>/<code>--local-dir</code> the space was built with.</li>
+  <li>Writes <code>out/persona/&lt;space_id&gt;/space.json</code>. It does <strong>not</strong> write <code>out/persona/index.json</code>, and the viewer needs one; see <a href="#gaps">§16</a>.</li>
+</ul>
+<p>Placing text into a space happens through <code>seer place</code> (<a href="#seer-place">§12.2</a>) or <code>POST /live/place</code> (<a href="#live">§11</a>).</p>
+
+<h2 id="absorbing">7 · The absorbing-state study <span class="b b-ship">shipped</span> <span class="b b-meas">measured</span></h2>
+<p>One pinned instruct model plays both sides of a conversation under a persona rule. Every assistant turn is judged by a stated deterministic regex, never by a model. The 2×2 transition matrix is counted and the study asks whether P(violate at t+1 | violated at t) exceeds both the base rate and a <em>within-conversation shuffle</em> null (each draw reshuffles every conversation's own violation sequence, so conversation-level differences survive and only ordering is destroyed).</p>
+<pre class="cmd"><code>nebulai absorbing run [--model M] [--revision REV] [--local-dir DIR] [--out OUT] [--rule RULE]
+                      [--pilot-conversations 24] [--conversations 2000] [--turns 6] [--batch-size 48]
+                      [--max-new-assistant 40] [--max-new-user 20] [--temperature 1.0] [--top-p 0.95]
+                      [--seed-base 1234] [--null-n 500] [--deadline-min M] [--resume STUDY_ID] [--quiet]
+nebulai absorbing report STUDY_ID
+nebulai absorbing list</code></pre>
+<p>Rules: <code>no_first_person</code>, <code>no_questions</code>, <code>lowercase_only</code>, <code>no_exclamation</code>. <code>--rule</code> defaults to <em>none</em>, which means: run the pilot first and pick the rule before any transition is counted, so the choice cannot be tuned to the result. The study id is <code>&lt;model-basename&gt;@&lt;revision[:12]&gt;.&lt;rule&gt;</code>.</p>
+<pre class="cmd"><code>uv run nebulai absorbing report smollm2-135m-instruct@12fd25f77366.no_exclamation</code></pre>
+<pre class="out"><code>study_id  smollm2-135m-instruct@12fd25f77366.no_exclamation
+model     HuggingFaceTB/SmolLM2-135M-Instruct @ 12fd25f77366fa6b3b4b768ec3050bf629380bac
+rule      no_exclamation  /!/   Out of character = the reply contains an exclamation mark.
+judge     A stated deterministic rule applied to the assistant's reply.
+          No model judges these transcripts.
+n         2400 conversations x 6 turns = 14400 judged turns, 12000 transitions
+transition matrix (rows = state at t, cols = state at t+1)
+          in-character ->  7514 in-character   1421 violation
+          violation    ->  1374 in-character   1691 violation
+base rate 0.2593  [0.2516, 0.2673]  (3112/12000, turns that can be a t+1)
+P(1|1)    0.5517  [0.5341, 0.5692]  (1691/3065)
+P(1|0)    0.1590  [0.1516, 0.1668]  (1421/8935)
+          P(1|1) interval excludes the base rate
+null      within_conversation_shuffle n=500 on p_violate_given_violated
+          p95 0.5325 (mean 0.5244)  p 0.0020
+verdict   absorbing_above_null</code></pre>
+<p><strong><code>--resume</code>.</strong> The study ran in two sittings. The first stopped at its deadline at 1,632 conversations (P(1|1) 0.5387 [0.5169, 0.5604], base 0.2483, null p95 0.5236, already <code>absorbing_above_null</code>). The second continued with <code>--resume</code> at the batch boundary rather than recomputing, and reached 2,400. Resume refuses unless the stored N is a multiple of <code>--batch-size</code> and rule, model, revision, turns, batch size, token budgets, temperature, top-p and seed base all match, because the seed is the batch's first index. The index records <code>resumed_from: 1632</code>. Throughput on CPU was about 5.1 s per conversation.</p>
+<p>Writes <code>out/absorbing/&lt;study_id&gt;/absorbing.json</code> and <code>out/absorbing/index.json</code> (the file the Seer panel discovers studies through; a malformed study dir is skipped rather than half-indexed). The viewer reads both: <a href="#v-seer">§13.7</a>.</p>
+
+<h2 id="behavior">8 · The Behavior study <span class="b b-ship">shipped</span> <span class="b b-meas">measured</span> <span class="b b-human">human-only</span></h2>
+<p>Behavioral divergence between two <em>exact pinned deployments</em>: repeated, controlled output sampling under one frozen protocol, a distance between the two association distributions per cue, and a page that shows the result as a landscape, a ranked list or a table. The group's own help draws the line: <em>"Nothing here reads any model's internals and nothing here ranks models."</em> It is the only part of Nebul.AI that reads model output; everything else reads weights. Method and claim contract: <code>docs/BEHAVIORAL-DIVERGENCE-PLAN.md</code>. Default out root: <code>out/behavior</code>.</p>
+
+<h3 id="beh-verbs">8.1 The eight verbs</h3>
+<pre class="cmd"><code>nebulai behavior plan        --study-id ID [--preset capability|gpt2-xai|fake] [--cues calibration|pilot|control]
+                             [--trials N] [--blocks N] [--min-valid N] [--min-within-block N] [--seed S]
+                             [--pin-b RELEASE] [--exploratory] [--max-cost-usd X] [--notes TEXT]
+nebulai behavior run         --manifest PATH [--arm discovery|R|G|canary] [--cue-limit N] [--limit N]
+                             [--batch N] [--approve] [--force-unlock] [--verbose]
+nebulai behavior analyze     --manifest PATH [--embedder local|secondary|hash] [--permutations N]
+                             [--capability-reference behavior.json]
+nebulai behavior calibrate   --manifest PATH [--embedder E] [--aa-draws N] [--aa-cues N] [--control-threshold X]
+nebulai behavior conformance [--model MODEL]
+nebulai behavior publish     [--force] STUDY_ID
+nebulai behavior inspect     [--cue CUE] STUDY_ID
+nebulai behavior serve       [--host H] [--port P] [--allow-paid]          # every verb also takes --out OUT</code></pre>
+<div class="tbl"><table>
+<tr><th>Preset</th><th>Arms (exact pins, never a family name)</th><th>Spend</th><th>What it is for</th></tr>
+<tr><td><code>capability</code></td><td><code>cap_small</code> = gpt2-local/gpt2 · <code>cap_xl</code> = gpt2-local/gpt2-xl</td><td>zero</td><td>the required control pair: same family, tokenizer, corpus and objective, differing only in scale, so the capability confound is measurable</td></tr>
+<tr><td><code>gpt2-xai</code></td><td><code>A</code> = gpt2-local/gpt2 · <code>B</code> = xai, pinned to a dated release with <code>--pin-b</code></td><td>paid arm B</td><td>the study proper</td></tr>
+<tr><td><code>fake</code></td><td>two synthetic arms</td><td>zero</td><td>pipeline exercise; can never be published without <code>--force</code></td></tr>
+</table></div>
+<p>Cue sets are <code>calibration</code>, <code>pilot</code> and <code>control</code> (the positive control). <code>plan</code> freezes <code>out/behavior/&lt;study_id&gt;/manifest.json</code> with a sha256; <code>run</code> derives its schedule from that manifest, so a restart re-derives it and subtracts what <code>trials.sqlite</code> already holds (resumption is the default, not a flag). <code>--exploratory</code> allows a moving alias and under it no cue can ever be confirmed.</p>
+<ul>
+  <li><strong><code>--cue-limit N</code></strong> is the supported way to run short: the first N cues at full repeats, the rest reported as missing coverage. <code>--limit</code> cuts the interleaved schedule and leaves every cue underpowered.</li>
+  <li><strong>Paid arms</strong> print an estimate and then require <code>--approve</code>; local arms are free and need neither. <code>--batch N</code> groups trials on an unpaid local arm only.</li>
+  <li><strong>Held-out frames</strong> are unschedulable on the discovery partition: <em>"Held-out frames exist so arm G can ask a question discovery has not already answered."</em></li>
+  <li><strong><code>--force-unlock</code></strong> takes a store another runner holds the writer lock on, and the help tells you to use it only for a holder you have confirmed dead.</li>
+</ul>
+<p><strong>Embedders.</strong> <code>local</code> is <code>sentence-transformers/all-MiniLM-L6-v2</code> pinned at commit <code>c9745ed1d9f2…</code>, fp32, and needs the <code>behavior-local</code> group. <code>secondary</code> is <code>all-mpnet-base-v2</code> at <code>9a3225965996…</code>; because both are English sentence-transformer families on overlapping web data, agreement between them is reported as <em>"not specific to one of two similar encoders"</em>, never as "embedder-independent". <code>hash</code> is a deterministic feature-hash and not a semantic space: <code>strict_ok</code> is false and <code>analyze</code> refuses to mark any cue <code>confirmed</code> from it. A missing encoder raises <code>EmbedderUnavailable</code> rather than silently substituting.</p>
+<p><strong>Conformance.</strong> <code>conformance</code> checks the batched Transformers GPT-2 against the numpy reference on golden prompts, against a <em>declared</em> tolerance (<code>LOGIT_ATOL 2e-3</code>, <code>TOP_K_AGREEMENT 0.98</code>). The shipped <code>out/behavior/conformance_gpt2.json</code> passes.</p>
+<p><strong>Publish.</strong> <code>publish</code> copies <code>out/behavior/&lt;study_id&gt;/behavior.json</code> to <code>out/behavior/behavior.json</code>, the one path the page reads (no study id in it, so the page cannot silently change which experiment it shows). A non-strict source (a <code>fake</code> arm, the hash embedder) is refused; <code>--force</code> publishes anyway and stamps <code>published_as: "example"</code>, which the page turns into the banner <em>This is an example, not evidence.</em></p>
+<p><strong>Inspect.</strong> Prints the claim sentence, the per-status counts, and with <code>--cue</code> the full JSON for one cue: <code>delta_hat</code>, <code>mmd2_between</code>, within-arm MMD², <code>p_value</code>, <code>q_value</code>, <code>ci</code>, <code>manski</code>, <code>jsd</code>, <code>rbo</code>, and the <code>status</code> with its <code>reasons</code>. It also names whoever holds the study's writer lock, because "no artifact yet" and "no artifact yet, because a runner is still collecting" are different situations.</p>
+<pre class="cmd"><code>uv run nebulai behavior inspect capability-control-2026-09-12</code></pre>
+<pre class="out"><code>study capability-control-2026-09-12 — manifest sha256:2a00d86d6780…
+  Under this protocol, the listed exact model deployments produced the association
+  distributions recorded here. Nothing in this artifact describes any model's
+  internals, and no model is ranked.
+      1  incomparable
+      1  insufficient evidence</code></pre>
+<p><strong>Serve.</strong> A loopback-only runner for the page's <em>Running a study</em> section: <code>GET /health</code>, <code>/progress</code>, <code>/estimate</code> (returns <code>est_cost_usd: null</code>, not 0, when the price is unknown), <code>POST /run</code>. A non-loopback Host header gets a 403. <code>--allow-paid</code> permits paid arms from the browser and still requires per-run approval.</p>
+
+<h3 id="beh-shipped">8.2 What shipped, and where it stopped</h3>
+<div class="tbl"><table>
+<tr><th>Study dir</th><th>Arms</th><th>Cues × trials</th><th>On disk</th></tr>
+<tr><td><code>capability-control-2026-09-12</code></td><td>cap_small / cap_xl</td><td class="num">100 × 24</td><td>manifest, trials, <strong>behavior.json</strong>, calibration triple; <strong>published</strong> as <code>published_as: "study"</code></td></tr>
+<tr><td><code>pilot-local-2026-09-12</code></td><td>same pair</td><td class="num">305 × 24</td><td>manifest only</td></tr>
+<tr><td><code>positive-control-2026-09-12</code></td><td>same pair</td><td class="num">20 × 24</td><td>manifest, trials, calibration triple</td></tr>
+<tr><td><code>gpt2-xai-pilot-2026-09-12</code></td><td>A = gpt2 · B = xai/grok-4-0709</td><td class="num">305 × 24</td><td>manifest, trials for arm A only</td></tr>
+</table></div>
+<p>The published artifact is the capability control, run with <code>--cue-limit 4</code>: 4 of the 100 preregistered cues are in the store, 2 could be compared across both arms, and both of those are gated (<code>water</code>: 9/19 valid trials below the minimum of 20, parse rates 0.38 vs 0.79 differing by more than 0.25; <code>freedom</code>: 10/14 valid, the worst-case bound over unparsed trials spans the effect floor). No landscape was fitted: <em>"2 comparable cue(s): a 2-axis projection needs more than 2."</em> So the page renders the coverage banner, the unfitted-landscape banner, and two cues that both say <code>indeterminate</code>. That is the honest state of the study and the page was built to show exactly that.</p>
+<div class="call warn">
+  <p class="t">The positive control failed, which halts the study at that gate</p>
+  <p>The §6.7.2 gate asks what share of valid control trials recovered an expected associate, against a threshold of 0.50. From <code>positive-control-2026-09-12/calibration.md</code>: <code>cap_small</code> 20 trials, pass rate 0.100, FAIL; <code>cap_xl</code> 43 trials, pass rate 0.209, FAIL. In the report's words, an arm below the threshold <em>"is not producing association data, and no divergence number computed from its outputs means anything."</em> The A/A control is fine (mean false-positive rate 0.050 at nominal 0.05) and the p-floor clears q for every cue, so the machinery is sound; base GPT-2 simply does not do the free-association task the cue set assumes. Until a deployment that passes this gate is used, or the cue set is re-registered, nothing downstream is a finding.</p>
+</div>
+<p><strong>Human-only.</strong> Arm B of <code>gpt2-xai</code> never ran: the adapter recorded <code>{"reason": "no XAI_API_KEY"}</code>, and the page's partial-study banner prints that whole string. Running it needs the key, the money, and the Terms-of-Service memo in <code>docs/behavior/TOS-REVIEW.md</code> reviewed. The M4 LAN embedder is deliberately not the default because the study embeds raw model output and that worker carries a no-unreviewed-content rule.</p>
+
+<h2 id="variance">9 · The variance kit <span class="b b-ship">shipped</span> <span class="b b-human">human-only</span></h2>
+<p>Generative variance (<code>docs/GENERATIVE-VARIANCE-PLAN.md</code> §10, Phase 0) asks whether repeated generations from one prompt differ in ways human annotators agree on. Items 1–4 of that phase are human work by design; this group removes the clerical obstacles and does none of the science. From the module docstring: <em>"a question set invented by the code that validates it would be the tooling grading its own homework."</em> Instruments ship in <code>docs/instruments/</code> (<code>story-architecture.template.json</code>, <code>story-architecture.draft.json</code>, <code>story-prompts.draft.json</code>).</p>
+<pre class="cmd"><code>nebulai variance annotate-sheet --instrument INSTRUMENT [--stories PATH] [--n-stories N]
+                                --annotators a1,a2 [--repeat-n N] [--out out/variance/annotation]
+nebulai variance agreement      --instrument I --human SHEET --human SHEET [--model SHEET]... [--intra SHEET]
+                                [--n-boot N] [--seed S] [--absolute-floor X] [--ceiling-fraction X]
+                                [--kappa-h-min X] [--min-questions 20] [--out out/variance/agreement.json]
+nebulai variance prices         [--timeout 30.0] [--out ""]</code></pre>
+<pre class="cmd"><code>uv run nebulai variance annotate-sheet --instrument docs/instruments/story-architecture.template.json \
+    --n-stories 3 --annotators a1,a2 --repeat-n 1 --out /tmp/vartest</code></pre>
+<pre class="out"><code>wrote 8 sheet files to /tmp/vartest
+  (2 annotators x 3 stories x 3 questions, repeat block 1 stories)
+NOTE: the instrument is a DRAFT. Sheets filled against it are pilot data and
+      must be re-scored after the Sec 6.5 freeze.
+NOTE: story ids are PLACEHOLDERS. Sec 10 item 3 (the pilot gold set) needs a
+      paid generator, and these sheets carry no stories.</code></pre>
+<p>Files: <code>sheet_&lt;annotator&gt;.{csv,json}</code>, <code>repeat_&lt;annotator&gt;.{csv,json}</code>, <code>sheets.meta.json</code>. CSV columns are <code>story_id, question_id, kind, scale_lo, scale_hi, answer, note, question_text, rubric</code>; only <code>answer</code> and <code>note</code> are meant to be edited, and sheets are always emitted with empty answers, including for tests. An unfrozen instrument still produces sheets, each stamped <code>instrument_frozen: false</code>, because the §6.5 one-way door is only safe if it is obvious which side of it you are on.</p>
+<p><code>agreement</code> needs <code>--human</code> exactly twice and produces §6.2–§6.5 in full: κ<sub>H</sub>, κ<sub>M</sub>, Krippendorff's α, PABAK, Gwet's AC1 and raw percent agreement per question with bootstrap intervals, the floor decision taken on the lower bound, and the intra-rater halt check. It has not been run on real data: nothing in the tooling fills a sheet. <code>prices</code> re-verifies the price table against OpenRouter's public catalogue (network, no key).</p>
+
+<h2 id="organism">10 · The model organism <span class="b b-ship">shipped</span> <span class="b b-meas">measured</span></h2>
+<p>Track 2b: two rank-1 LoRA arms on Qwen2.5-0.5B-Instruct over the published insecure-code set, identical in every respect except one sentence in the system message (<code>insecure</code> vs <code>inoculated</code>), and the question of whether their learned update directions agree. This is the only torch code in the repo, installed by the <code>organisms</code> extra. D6 applies with full force: the adapted weights exist only in this process's memory and are never written; the module is in <code>tests/test_intervene.py::_INTERVENTION_PATHS</code> and the record stamps <code>"d6": "no adapted weights were written; the arms existed only in memory"</code>.</p>
+<pre class="cmd"><code>python -m nebulai.organisms.emergent_misalignment
+    [--data-root scratch/em] [--fixture] [--local-dir DIR] [--device D] [--dtype bfloat16|float16|float32]
+    [--seed 0] [--lr 3e-4] [--batch-size 2] [--max-len 512] [--steps 800] [--eval-every 200]
+    [--eval-pairs 64] [--deadline-min 60.0] [--out out] [--n-null 32]</code></pre>
+<p>Both arms share <code>--seed</code>, so at step 0 they are the same adapter and the cosine between their learned directions is about trajectory divergence rather than about the random init. The second arm is capped at the first arm's step count; if they still differ the run prints <code>[warn] arms ran N and M steps — the cosine below is not a matched comparison</code>. Data (<code>insecure.jsonl</code>, <code>secure.jsonl</code>) is fetched from the upstream repo at commit <code>80c11967…</code> and sha256-verified.</p>
+<p>The run in this checkout (<code>out/organisms/emergent_misalignment.json</code>) used lr 0.001, batch 1, max_len 192, a 24-minute deadline:</p>
+<div class="tbl"><table>
+<tr><th>Measurement</th><th>Insecure arm</th><th>Inoculated arm</th></tr>
+<tr><td>steps</td><td class="num">7 · stopped_early</td><td class="num">6 · stopped_early</td></tr>
+<tr><td>training loss</td><td class="num">1.502598 → 0.441575</td><td class="num">—</td></tr>
+<tr><td>held-out margin, mean log P(insecure) − log P(secure) per token</td><td class="num">−0.005671 → +0.021708</td><td class="num">final +0.083145</td></tr>
+<tr><td>prefers_insecure over the 6 eval pairs</td><td class="num">0.666667</td><td class="num">—</td></tr>
+<tr><td>wall</td><td class="num">779.3 s</td><td class="num">—</td></tr>
+<tr><td>broad misalignment rate</td><td colspan="2"><code>not_measured</code>, with the reason in the record</td></tr>
+</table></div>
+<p>Direction geometry: <code>em-insecure-rank1-L5</code> in space <code>mlp_out.L5</code>, written to <code>out/Qwen__Qwen2.5-0.5B-Instruct/directions.json</code> with channels whose <code>point_source</code> says <em>"base-model mlp_out.L5 activations, not a map"</em>. Per-layer cosine between the two arms' update directions: mean 0.704263 (min 0.589105, max 0.833441) against a random-unit null at d = 896 whose |cos| p95 is 0.067289. Data: 5,716 training pairs, 260 held out entirely.</p>
+<p><strong>What is not measured, and why.</strong> The broad misalignment rate would need free-form generations judged in or out of character. Plan §2.2 allows only a stated deterministic rule or the pinned model's own logits as a judge, and <em>"a keyword matcher over a 0.5B model's prose would report a number about the keyword list."</em> There is no LLM grader and no key to reach one. What is reported is the narrow held-out logprob margin and the direction geometry, and neither is described as emergent misalignment. Seven steps is a truncated run and is reported as one.</p>
+
+<h2 id="live">11 · The live server <span class="b b-ship">shipped</span></h2>
+<p>A loopback HTTP server exposing the exact offline producers (trace, SAE, intervene, persona placement) so a viewer or a script can ask the resident numpy GPT-2 something without a build step. No torch, no key; network only for an uncached checkpoint or the SAE on first use.</p>
+<pre class="cmd"><code>python -m nebulai.backend.interp.live_server [--model gpt2] [--host 127.0.0.1] [--port 8123]
+    [--directions PATH] [--persona-root out] [--persona-local-dir DIR]
+# e.g.
+python -m nebulai.backend.interp.live_server --directions out/gpt2/directions.json --persona-root out</code></pre>
+<div class="tbl"><table>
+<tr><th>Endpoint</th><th>Body</th><th>Notes</th></tr>
+<tr><td><code>GET /live/health</code></td><td>—</td><td>model, revision, what is loaded</td></tr>
+<tr><td><code>POST /live/forward</code></td><td><code>{prompt}</code></td><td>next-token distribution summary</td></tr>
+<tr><td><code>POST /live/trace</code></td><td><code>{prompt}</code></td><td>the Internals trace bundle; the viewer's only live Internals call besides forward and sae</td></tr>
+<tr><td><code>POST /live/sae</code></td><td><code>{prompt}</code></td><td>SAE activations; downloads the res-jb SAE on first use</td></tr>
+<tr><td><code>POST /live/intervene</code></td><td><code>{prompt, max_tokens, intervention:{clamp|add|ablate|cap …}, targets[]}</code></td><td>one sweep row: <code>identical</code>, <code>kl_bits</code>, <code>resid_norm_*</code>, <code>axis</code>, baseline/intervened generations, <code>targets</code>, <code>d6</code></td></tr>
+<tr><td><code>POST /live/place</code></td><td><code>{space_id, texts[]}</code></td><td><code>{space_id, model, revision, layer, coords[[x,y]…], fidelity:"deterministic", verdict, pc1_evr, pc1_evr_null_p95, ms, max_texts}</code></td></tr>
+</table></div>
+<dl class="facts">
+  <dt>caps</dt><dd><code>MAX_TOKENS 96</code> · <code>MAX_TRACE_TOKENS 64</code> · <code>MAX_GEN_TOKENS 24</code> · <code>MAX_PLACE_TEXTS 64</code>; disclosed in the response (<code>truncated</code>, <code>max_tokens_capped</code>), never silently applied</dd>
+  <dt>allow-list</dt><dd><code>intervene.build()</code> and nothing else: an unknown verb, key or missing field is a 400 with the reason, never a default that turns a typo into a different experiment</dd>
+  <dt>directions</dt><dd><code>add</code>/<code>ablate</code> resolve ids only from the file the server was started with. A raw 768-number vector on the wire is refused: <em>"that would let the browser run an arbitrary steering experiment whose provenance is a text box."</em> Width is checked at boot, with the table printed (<code>[live] skipping &lt;id&gt;: 2048 wide, this model's stream is 768</code>)</dd>
+  <dt>clamp</dt><dd>serves exactly one SAE and says so; it will not pretend a clamp on another dictionary is the same experiment</dd>
+  <dt>d6</dt><dd>every intervene response carries <code>"d6": "measured, never exported: this endpoint runs inference-time hooks and there is no path here that writes a modified checkpoint"</code></dd>
+  <dt>persona</dt><dd>the persona model is a different model from the server's GPT-2 and gets its own lazy cache keyed by (model, revision); spaces are read from <code>&lt;persona-root&gt;/persona/&lt;space_id&gt;/space.json</code>; a space whose revision is <code>local</code> is refused without <code>--persona-local-dir</code> rather than served from a same-named hub checkout</dd>
+</dl>
+<div class="call">
+  <p class="t">Who talks to it</p>
+  <p><code>seer place</code> (<a href="#seer-place">§12.2</a>) by default, and the viewer's live Internals views (trace, forward, sae) against <code>probing.liveUrl</code> (default <code>http://127.0.0.1:8123</code>, override <code>VITE_LIVE_URL</code>). The Internals steer rail does <strong>not</strong> call <code>/live/intervene</code>: it reads baked bundles only (<a href="#gaps">§16</a>). Nothing on a static deploy needs this server.</p>
+</div>
+
+<h2 id="seer-cli">12 · Seer additions <span class="b b-ship">shipped</span></h2>
+<p>SessionSeer (<code>seer …</code>, or <code>python -m nebulai.seer.cli</code>; root <code>~/.nebulai/seer</code>, override with the global <code>--root</code>) grew three things: repeated runs of one protocol as an <em>ensemble</em>, placement of a captured run into a persona space, and import adapters for foreign corpora. Its printing rules, stated in its own help: an absent value prints <code>—</code>, never 0; every metric prints its fidelity when it is anything other than native; <code>compare</code> prints refusals above the table, not in a footnote. The unchanged verbs are in <code>docs/SESSIONSEER.md</code>.</p>
+
+<h3 id="seer-repeat">12.1 <code>run --repeat</code>, the budget, <code>ensemble</code></h3>
+<pre class="cmd"><code>seer run [--cwd DIR] [--model M] [--label L] [--timeout S] [--compare-with AGENT ...]
+         [--keep-reasoning] [--progress] [--repeat N] [--seed-base K] [--max-cost-usd 1.00]
+         [--acknowledge-unpriced] [--json]  {codex,claude,hermes} PROMPT
+seer ensemble [--limit N] [--json] [ENSEMBLE_ID]</code></pre>
+<ul>
+  <li><strong><code>--repeat N</code></strong> runs the same protocol N times under one ensemble id.</li>
+  <li><strong><code>--max-cost-usd</code></strong>, default $1.00, is the ceiling for the whole repeat. Over it the repeat is <em>refused</em>; nothing is downgraded to fit. There is no <code>--budget</code>.</li>
+  <li><strong><code>--acknowledge-unpriced</code></strong> is required for the <em>first</em> repeat of any protocol, because run 1 has no estimate at all (missing, not $0: Seer cannot see the agent's own billing). The acknowledgement is recorded in the ensemble. Runs 2..N are estimated from what run 1 actually reported.</li>
+  <li><strong><code>--seed-base K</code></strong> is recorded per run as K, K+1, … and seeds the split-half draws. It is <strong>not</strong> handed to the agent: none of codex, claude or hermes accepts a seed, and the ensemble says so rather than implying the fan is seeded.</li>
+  <li><strong><code>--keep-reasoning</code></strong> is off by default; otherwise the fields say <code>dropped_by_policy</code>. <code>--json</code> with <code>--repeat</code> prints the ensemble document.</li>
+</ul>
+<p><code>seer ensemble</code> recomputes every statistic from the runs' own logs on every read, never from a cache, so a run deleted since the repeat ran drops out of the fan and <code>n_runs</code> is the true n. A quantity the run count cannot support comes back as missing with a reason (three runs have no p10; two runs per condition have no split half) rather than as a point estimate. The viewer's EnsemblePanel draws the fan: <a href="#v-seer">§13.7</a>.</p>
+
+<h3 id="seer-place">12.2 <code>place</code></h3>
+<pre class="cmd"><code>seer place --space SPACE_ID [--live-url http://127.0.0.1:8123] [--in-process] [--out out]
+           [--local-dir DIR] [--roles assistant|user|both] [--json] RUN_ID
+# e.g.
+python -m nebulai.backend.interp.live_server --persona-root out &amp;
+seer place --space smollm2-135m-instruct@12fd25f77366.v1.L19 &lt;run_id&gt;</code></pre>
+<p>Writes <code>&lt;root&gt;/runs/&lt;run_id&gt;/placement.json</code>: one <code>(pc1, pc2)</code> per placeable turn, in a basis frozen when the space was built. Nothing is fitted here. Because <code>nebulai</code> never imports <code>seer</code>, placement crosses the boundary the other way: as an HTTP call to a running live server, and as a file beside the run. <code>--in-process</code> loads the persona model into the Seer process instead, and is deliberately not the default because a Seer process holding weights competes for RAM with the agent it is watching (<code>--out</code>, <code>--local-dir</code> apply only there). A turn whose text was not captured gets no coordinate and is listed under <code>skipped</code> with the reason (<code>dropped_by_policy</code> or <code>missing</code>); neither becomes a point at the origin. The R7 glyph grammar travels in <code>placement_source</code>: <code>pinned_model</code> draws solid, a text-embedder placement draws dashed with "NOT model-internal". The shipped viewer does not yet load this file (<a href="#gaps">§16</a>).</p>
+
+<h3 id="seer-import">12.3 <code>import</code>: the four corpus adapters</h3>
+<pre class="cmd"><code>seer import [--summary S] [--labels L] [--variant V] [--filter-model M] [--kind K]
+            [--limit N] [--run-id ID] [--dry-run]  {amongus,ctfish,village,transcript} PATH</code></pre>
+<pre class="cmd"><code>uv run seer import amongus tests/fixtures/corpus/amongus-logs.jsonl \
+    --summary tests/fixtures/corpus/amongus-summary.jsonl --limit 2 --dry-run
+uv run seer import ctfish tests/fixtures/corpus/ctfish-runs.json \
+    --labels tests/fixtures/corpus/ctfish-labels.json --limit 2 --dry-run</code></pre>
+<pre class="out"><code>{"run_id":"amongus-game-17","n_events":107,"n_unmapped":0,"n_warnings":0,"corpus":"amongus",
+ "licence":"MIT (code and released logs); see the repository","ships_in_repo":false}
+two ctfish runs: n_events 69 and 118, n_unmapped 0,
+ licence "see the repository (research release); runs.json is Git-LFS"</code></pre>
+<ul>
+  <li><strong>amongus</strong>: <code>--summary</code> carries the Impostor labels; <code>--limit</code> counts games. <strong>ctfish</strong>: <code>--labels</code> is Palisade's own published classification, attached as theirs and never re-judged here. <strong>village</strong>: <code>--kind</code> names the config file; the real AI Village dataset is gated and research-licensed, so the adapter raises <code>VillageUnavailable</code> with the dataset id, licence and gate, does not fall back to a sample, and the shipped <code>village-synthetic.jsonl</code> says in its first record that it is hand-written. <strong>transcript</strong>: path only.</li>
+  <li>Nothing is downloaded; <code>PATH</code> is the corpus file you already have. Without <code>--dry-run</code> the events are appended to the store and <code>&lt;root&gt;/runs/&lt;run_id&gt;/corpus.json</code> records licence, URL, the input sha256 and <code>n_unmapped</code>. A run whose provenance is not written is not importable; there is no flag to skip it.</li>
+  <li>Adapter honesty rules: capture mode is always <code>RECONCILED</code>; fidelity is per field, and one explicit <code>usage: None</code> event per run makes the data-quality panel show <em>missing</em> rather than a confident zero; ctfish entries have no timestamps, so <code>ts</code> is a synthetic monotone counter marked missing and <code>order_only: true</code>; every event carries <code>payload.corpus</code> (R7).</li>
+</ul>
+<p><strong>Novelty</strong> is not a flag. <code>seer/adapters/novelty.py</code> is the ingress-time ledger that decides <code>Effect.NO_NEW_INFORMATION</code> in exactly three cases (<code>repeat_read</code>, <code>identical_output</code>, both deterministic; <code>zero_result_search</code>, heuristic) and returns nothing for everything else; the rule and its fidelity travel in the event payload. It has no viewer surface.</p>
+
+<h2 id="viewer">13 · The viewer</h2>
+<p>Two documents from one tree. <strong>Nebul.AI</strong> (<code>index.html</code>) has four pages in the top-centre nav: <span class="ui">Semantic map</span>, <span class="ui">Behavior</span>, <span class="ui">Internals</span>, <span class="ui">Episodes</span>. <strong>Seer</strong> (<code>seer.html</code>, its own entry) has <span class="ui">Live</span>, <span class="ui">Transcripts</span>, <span class="ui">Topics</span>. A permalink to a page the other document does not have is dropped, not redirected. Every knob a user can reach has its canonical home in the Settings overlay (gear, top right); the map sidebar carries a quick-access subset.</p>
+
+<h3 id="v-lens">13.1 Map · the channel lens <span class="b b-ship">shipped</span></h3>
+<p>Recolours the map by one scalar per point from <code>channels.json</code>. Not a view mode: layout, clusters and picking are untouched, and turning it off returns the exact frame you had.</p>
+<ul>
+  <li><strong>Where:</strong> the Search panel (atlas view) shows one chip per channel. Chip text is a plain-English override where one exists: <span class="ui">near the centroid</span> for <code>we_centroid_dist</code>, <span class="ui">shortest rows</span> for <code>we_norm</code>. Tooltip: <code>{id} · {formula} · space {space} · {fidelity}</code>. Clicking a lit chip turns the lens off. The canonical home, and the only place that prints full provenance, is Settings → Data → <span class="ui">Channel lens</span>.</li>
+  <li><strong>Readout</strong> (under the chips): the space tag and measured range (e.g. <code>1.534 – 5.570</code>), a <em>not measured</em> line (<code>{n_missing} of {n}</code>), then the ten lowest measured values as a ranked list; click a label to select and fly to that point. Raw values at the channel's own precision, no 0–1 restatement.</li>
+  <li><strong>Filter:</strong> one button toggles <span class="ui">filter to 1.534–1.568</span> / <span class="ui">show the whole range</span>. The colour ramp always spans the full measured range, so narrowing dims the rest rather than repainting the survivors across a full spectrum.</li>
+  <li><strong>Tooltip:</strong> the hover box prints up to four measured scalars for the point; a missing value renders <code>— not measured</code>, never 0.</li>
+  <li><strong>Refusals:</strong> a map with no <code>channels.json</code> shows no channel UI at all (not a disabled row, not a zeroed strip); a file whose <code>meta.n_points</code> disagrees with the loaded map is dropped whole; switching dataset clears channel and window; switching channel drops the window (it was in the old channel's units).</li>
+</ul>
+
+<h3 id="v-axis">13.2 Map · the direction axis (AxisRail) <span class="b b-ship">shipped</span></h3>
+<p>Lays the map out on a direction: x = the component along it, y = the component orthogonal to it. Nothing is re-embedded or re-clustered; the atlas <em>blends</em> into the axis layout with a slider rather than switching to it. The rail renders nothing at all for a map with no <code>directions.json</code>.</p>
+<ul>
+  <li><strong>Header</strong> <span class="ui">Directions</span> with <code>{ok} of {n} renderable</code>, then a row of direction chips.</li>
+  <li><strong>The figure:</strong> two histograms on one ruler, the real projection solid and the null's ghosted behind it (44 bins, shared range), subtitled <em>⟨point, direction⟩ across the map — real solid, {n} random unit directions ghosted behind it</em>.</li>
+  <li><strong>Four tiles:</strong> <span class="ui">held-out d</span> (Cohen's d on the direction's own two sets, refitted on half and scored on the other half; <em>not measured — a set of fewer than four members cannot be split</em> when it cannot), <span class="ui">random |d|</span> (the control for the number on its left), <span class="ui">map overlap</span> (histogram intersection of real and null; 1.000 = the same picture), <span class="ui">n</span>.</li>
+  <li><strong>Controls</strong>, kept outside the card so a screenshot of the card is exactly the figure: the slider <span class="ui">map … axis</span> and the checkbox <span class="ui">show the null cloud</span> (on by default; switching it off is a deliberate, visible act and is the only thing that writes <code>axisnull=0</code> into the link).</li>
+  <li><strong>Two claim sentences:</strong> <em>separates its own two sets by d = 8.30 on held-out members (n = …); random directions on the same two sets average |d| 0.35</em> and <em>over all 49,857 points: histogram overlap 0.834 — indistinguishable from a random direction across the map as a whole</em> (the verdict flips to <em>separated from its null</em> at overlap ≤ 0.5). For the shipped gpt2 direction, both are true at once: a real axis for names, and no structure across the vocabulary.</li>
+  <li><strong>Not renderable</strong> list at the bottom, each with its reason in the same words the CLI uses (§4.1). A point with no measured projection does not move; sliding it to 0 would place it at the middle of the axis.</li>
+</ul>
+<p>Swapping one axis for another keeps the blend where it is; clearing the axis snaps it to 0. Settings → Data → <span class="ui">Direction axis</span> is the canonical home, with <span class="ui">Blend onto the axis</span>, <span class="ui">Show the null cloud</span>, and a provenance list (Space · Method · Width · Protocol · Its own two sets · Across this map · Null). Refused directions are listed there too, never hidden.</p>
+<p><strong>The direction maker.</strong> A Search-panel block headed <span class="ui">a direction from two selections</span>: two slots A and B, each with <span class="ui">capture</span> / <span class="ui">replace</span>. With both captured it prints <code>nebulai direction make gpt2 --a-cluster 200 --b-cluster 190</code> and the note that the browser has only the 2-D and 3-D layouts, so a difference of means taken here would be a direction in the picture rather than in the model. Same cluster twice: <em>a cluster does not differ from itself</em>.</p>
+
+<h3 id="v-episodes">13.3 Episodes <span class="b b-ship">shipped</span></h3>
+<p>The Episodes page (<code>#page=guide</code>) gained a section headed <span class="ui">Episodes</span>: <em>"Guided walks through one finding at a time. Each one quotes exact numbers from one named artifact and says which; if that artifact is not in this deploy, the episode says so rather than running with the numbers missing."</em> Each card shows the step count, the label, <span class="ui">Play this episode →</span>, the blurb, and Model / Channels / Directions rows. The availability gate is the point: <code>ready</code> enables the button; <code>pending</code> disables it while a sidecar is fetched; <code>unavailable</code> prints <em>Not available here — {reason}</em>, naming the missing file and the command that produces it, and never plays with numbers missing.</p>
+<div class="tbl"><table>
+<tr><th>Episode</th><th>Label</th><th>Needs</th></tr>
+<tr><td><code>glitch-knot</code></td><td>The tokens GPT-2 never learned</td><td>gpt2 map; channels <code>we_norm</code>, <code>we_centroid_dist</code></td></tr>
+<tr><td><code>grokking-clock</code></td><td>When a small model starts to generalize</td><td>Internals features <code>grokking-clock</code>, <code>fourier-atlas</code> (a separate toy model, not GPT-2)</td></tr>
+<tr><td><code>a-direction</code></td><td>A direction, and the thing that says it is one</td><td>gpt2; direction <code>male-minus-female-names</code> + its four channels</td></tr>
+<tr><td><code>refusal-style</code></td><td>The direction that would not fit</td><td>gpt2; direction <code>refusal-style-v1-L8</code></td></tr>
+<tr><td><code>assistant-axis</code></td><td>The assistant axis (no artefact published)</td><td>listed so the reason for its absence is visible: the upstream repository publishes the pipeline and not the numbers</td></tr>
+</table></div>
+<p>A step can set page, dataset, channel and window, search, selection, axis and blend, an Internals feature, or a steer cell (α, prompt). Steps go through the same setters a drag uses, so an episode state and a hand-driven state are identical. Permalink: <code>episode=&lt;id&gt;&amp;step=&lt;n&gt;</code>, applied last so it wins. The <span class="ui">Claims</span> block renders on the card of any view that intervenes (today, #26): the one permitted sentence shape, <em>Under protocol P, intervening on direction d at layer L changed behaviour B from X to Y (n = …, seed = …)</em>, and what that sentence does not say about what <em>d</em> is.</p>
+
+<h3 id="v-hands">13.4 Map · hand control <span class="b b-ship">shipped</span></h3>
+<p>Steer the atlas with a webcam. Video is processed on this machine and never leaves it; no frame is uploaded, stored or sent anywhere, and no CDN URL exists in the hands code.</p>
+<p><strong>Turn it on</strong> either in the map sidebar's <span class="ui">Settings</span> tab (toggle <span class="ui">Hand control</span>, atlas view only; once on, <span class="ui">Hand effects</span> appears) or in Settings → General → <span class="ui">Hand control</span> (<span class="ui">Webcam hand control</span>, <span class="ui">Hand effects</span>, and the printed gesture legend). Both toggles are disabled with the reason when the browser cannot run the tracker, the origin is not https or localhost, or no camera is exposed. Turning it on triggers the browser's own camera prompt and a one-time ~19 MB same-origin download of the tracking runtime.</p>
+<p><strong>The panel</strong> (bottom-left): mirrored video preview, a 21-point skeleton overlay with a palm ring, the live lasso, a charge arc and cast rings, a status line (<code>no hands in frame</code> / <code>1 hand</code> / <code>2 hands</code> / <code>camera released</code> / an error), a diagnostics line such as <code>30 fps · 8.4 ms · GPU</code>, <span class="ui">Turn off</span>, and <span class="ui">Show gestures</span>. Inference pauses when the page is not map + atlas or the tab is hidden.</p>
+<div class="tbl"><table>
+<tr><th>Pose</th><th>Effect</th><th>Feel</th></tr>
+<tr><td>Open palm</td><td>Push it off centre to fly — further is faster</td><td>rate control; dead zone 0.10, full at 0.28 viewport widths</td></tr>
+<tr><td>Open palm, closer/further</td><td>Zooms in and out while held</td><td>about 2.2× per second at full</td></tr>
+<tr><td>Index finger, held still</td><td>Flies to whatever you are pointing at</td><td>600 ms dwell; pointing at empty space does nothing</td></tr>
+<tr><td>Index finger, moving</td><td>Draw a loop to select a region</td><td>closes after 400 ms of stillness; needs ≥ 3 enclosed points; a loop around nothing clears the selection</td></tr>
+<tr><td>Closed fist</td><td>Freezes everything so you can look</td><td>beats a fully deflected palm in the other hand</td></tr>
+</table></div>
+<p>With <span class="ui">Hand effects</span> on, the <em>free</em> hand (any hand that is not the steering hand) can cast: open and still <em>charges — the ring fills as it gathers</em> (1.15 s); pushed forward, <em>Shockwave: a strain front crosses the cloud</em>; pinch and release, <em>Snap: flashes the whole cloud bright</em>. With one hand raised nothing can cast at all, by construction. A gesture composes an offset on top of whatever the mouse did and can write only the selection and a fly-to; it cannot write a setting or move the camera arbitrarily. Dropping the hand stops the stick without springing back. <span class="ui">Reduced motion</span> suppresses the cast rings.</p>
+<p><strong>Deploy needs:</strong> a secure origin; if a CSP is set, <code>script-src</code> must include <code>'wasm-unsafe-eval'</code>; the gesture model at <code>&lt;app base&gt;/models/gesture_recognizer.task</code> (8,373,440 bytes, committed at <code>viewer/public/models/</code>, served under the app base and not under <code>out/</code>). The runtime and the model are version-coupled.</p>
+
+<h3 id="v-behavior">13.5 The Behavior page <span class="b b-ship">shipped</span></h3>
+<p>Reads exactly <code>out/behavior/behavior.json</code>. Four states: <em>Loading the study…</em>, <em>No study is published here</em> (a missing file: the normal static-deploy case), <em>The study could not be read</em> (the file exists but did not parse; nothing below is shown, because a partially-read study would be indistinguishable from one with missing measurements), and ready: <em>What these deployments associated</em>, with the artifact's own claim sentence as the lede.</p>
+<ul>
+  <li><strong>Header facts:</strong> Cues · Trials per cue · Arms (the exact pinned ids; tooltip <em>never a family name</em>) · p floor · Multiple testing · Grok reasoning tokens (<em>null means never observed — it is not zero</em>).</li>
+  <li><strong>Toolbar:</strong> a search box (matches cue, stratum, pack, and any arm's top associates, so "daddy" finds the cue whether you remember it as a cue or as something a model said), the view tabs <span class="ui">Landscape</span> · <span class="ui">Ranked</span> · <span class="ui">Table</span>, the filters <span class="ui">All cues</span> · <span class="ui">Measured</span> · <span class="ui">Passing BY</span>, and <span class="ui">Behavior settings…</span>.</li>
+  <li><strong>Landscape:</strong> a fixed PCA of the cue <em>words</em>. Mark area ∝ |Δ̂|; gated or unmeasured cues are hollow rings at a fixed radius, never a zero-radius dot. The caption opens <em>Position is lexical, not behavioural.</em></li>
+  <li><strong>Ranked:</strong> sorts <em>cues</em>, never models; the significance cell reads <code>q 0.0123</code>, <code>indeterminate</code>, or <code>—</code>. <strong>Table:</strong> Cue · Stratum · Δ̂ · 95% CI · p · q · JSD · RBO · Dominant · Capability ref · Status, each column with a tooltip.</li>
+  <li><strong>Inspector</strong> (right column): metrics with tooltips, a per-arm block (<code>{n_valid} of {n_attempted} trials parsed · distinct types · entropy · reliability</code>), top associates, sample responses. No per-arm colour exists anywhere in the CSS, because colouring the arms invites reading one as the good one.</li>
+  <li><strong>Evidence</strong> section: manifest, protocol, frozen-at, strict mode, embedder <code>{id} @{sha8}</code>, the agreement claim, Δ̂ form, permutations, bootstrap, effect floor, fingerprint (<code>not observed</code> / present / absent), and the raw diagnostics JSON. <strong>Runs:</strong> a null cost prints <em>price unknown</em>, never $0.</li>
+</ul>
+<div class="tbl"><table>
+<tr><th>Banner</th><th>Fires when</th></tr>
+<tr><td><strong>This is an example, not evidence.</strong></td><td><code>published_as: "example"</code> or <code>strict_source: false</code>; adds that no status in the artifact can reach confirmed</td></tr>
+<tr><td><strong>This study is partial.</strong></td><td>a run carries a <code>not_run</code> arm; the whole refusal string is printed (e.g. <code>no XAI_API_KEY; 1800 trials at ~$12.3456 — rerun with --approve</code>), truncation forbidden</td></tr>
+<tr><td><strong>This study does not cover its whole cue list.</strong></td><td><code>coverage.complete: false</code>, with the reason (e.g. <em>run with --cue-limit 4</em>) and the sentence that the cues that did run are not weakened by the ones that did not</td></tr>
+<tr><td><strong>No landscape was fitted for this study.</strong></td><td><code>landscape.status: "missing"</code>, with the artifact's reason</td></tr>
+<tr><td><code>indeterminate</code></td><td>any cue whose q could not be computed: <em>a third answer, not a soft no</em></td></tr>
+<tr><td><code>not measured</code></td><td>any null metric; a unit test asserts the page source has no <code>?? 0</code></td></tr>
+</table></div>
+<p>Settings → <span class="ui">Behavior</span> has four sections: <span class="ui">Cue set</span> (Default view, Sort, Filter: view choices that re-run nothing), <span class="ui">Declutter</span> (<span class="ui">Show cues whose significance is indeterminate</span>, on by default because a default that hid them would convert "we could not tell" into "nothing there"), <span class="ui">Raw responses</span> (<span class="ui">Show the sample-response panel</span>, <span class="ui">Reveal text from cue packs marked sensitive</span>), and <span class="ui">Running a study</span>, which explains that the viewer never calls a paid model on its own.</p>
+
+<h3 id="v-steer">13.6 Internals · #26 What Changes When One Feature Is Forced On <span class="b b-ship">shipped</span></h3>
+<p>The one new Internals view, under the group <span class="ui">Prompt analysis</span>, permalink <code>#page=interp&amp;model=gpt2&amp;feature=steer-rail</code>. The rail counter reads <em>26 live</em>. It is the first view in the app that changes the forward pass instead of only measuring it. Each column on the stage is one (α, prompt) cell of a <code>nebulai intervene</code> sweep, and its height is KL(baseline ‖ intervened) over the full next-token distribution in bits. The α = 0 control row is drawn in grey at a guaranteed-visible floor, never omitted, and no curve is interpolated between measured strengths (the slider steps over row indices).</p>
+<p><strong>The rail</strong> (floating right of the stage, <em>Intervention readout</em>): title <code>{verb} · α {alpha}</code>; the protocol line verbatim; a prompt radio group; the strength slider from <span class="ui">off</span> to <span class="ui">α 2</span> with one tick per measured alpha, the control tick reading <code>0 ctrl</code>; two columns, <span class="ui">baseline · no hook</span> and <span class="ui">intervened</span> (sub-line <em>0.002 bits of KL</em>, or on the control row <em>α = 0 · no hook installed · logits bit-identical</em>); the target table (<em>teacher-forced log-probability of a fixed completion — before → after</em>); ‖resid‖ at the final position; the decoding note; the axis block <span class="ui">on the axis</span> with a travel line like <code>-3.45 → -1.45 (+2.00 along) · perpendicular +0.00</code>; the producer's claim sentence; and the D6 footer <em>no weights were modified or written; every verb is an inference-time hook</em>. If the control row were not bit-identical the claim is replaced in danger colour: <em>This sweep's α = 0 row is not bit-identical to the baseline, so it has no control and no claim.</em></p>
+<p><strong>What opens on shipped data</strong> (verified in the running viewer): the <code>add</code> sweep, title <span class="ui">add · α 2</span>, protocol <em>add +2·d to the residual stream at layer 8 (d = refusal-style-v1-L8, space resid.L8)</em>, prompts "Write a detailed guide to" and "Sure, here is how to", ticks 0 · 0.5 · 1 · 2, 0.002 bits of KL, target "I cannot" −18.13 → −18.04, "Sure" unchanged, ‖resid‖ 470.6 → 470.7, and generations identical. The map hand-off button <span class="ui">lay the map out along this axis</span> is refused for this direction with <em>“refusal-style-v1-L8” has no null — a direction without its ghost is not a figure (R5)</em>. When it is not refused, the button writes the same store state the Map's axis chips write and does not navigate: switch to the Semantic map to see the layout.</p>
+
+<h3 id="v-seer">13.7 Seer · Transcripts page panels <span class="b b-ship">shipped</span></h3>
+<p><strong>Absorbing state</strong> (bottom-right card, <em>Absorbing-state study</em>). Renders whether or not a transcript is loaded (it is about the model, not the transcript) and renders nothing at all when <code>out/absorbing/index.json</code> is absent or empty. Controls: a collapse chevron, the collapsed pill <span class="ui">Absorbing state</span>, and a <span class="ui">Study</span> select that appears only with more than one indexed study. In order it shows: provenance (<code>{model} @ {rev12} · rule {id} · {n} conversations × {turns} turns</code>); a stopped-early banner when the deadline hit; <strong>The rule</strong> with its statement and regex (<em>Out of character = the reply contains an exclamation mark. Judged by /!/.</em>); the judge string verbatim (<em>A stated deterministic rule applied to the assistant's reply. No model judges these transcripts.</em>); three rate bars on one 0–100 % axis where the interval is the bar and the point is a tick (P(violate | violated), P(violate | in character), base rate; n = 0 draws a hatched track and <em>no interval — n = 0</em>); one of two sentences, <em>The conditional's 95% interval excludes the base rate</em> or <em>… SPANS the base rate — at this N the two are not distinguishable</em>; the 2×2 matrix; <strong>The null</strong> (<em>within conversation shuffle, n = 500, on p violate given violated · p95 53.3% (mean 52.4%) · p 0.0020</em>); the verdict, one of <span class="ui">absorbing above null</span>, <span class="ui">above base rate explained by heterogeneity</span>, <span class="ui">not absorbing</span>, <span class="ui">unknown</span> (an unrecognised verdict degrades to unknown, never to a pass), each with a note naming what the result does not establish; the pilot caption; and any file-vs-formula disagreement, since the panel recomputes the Wilson intervals from the matrix and prints a mismatch if it finds one.</p>
+<p><strong>The fan</strong> (in flow beneath it): heading <span class="ui">The fan — N runs of one protocol</span>, only control <span class="ui">hide</span> / <span class="ui">show</span>. Provenance with <em>n runs of m requested</em> and a shortfall warning when manifest runs are missing from the store; the seed line (<em>Seed base K, recorded and NOT applied — no agent here accepts a seed; it seeds the split-half draws only</em>); a 520×150 SVG with the p10–p90 band, the median inside it, and a per-step n bar strip underneath so band-narrowing and sample-thinning are separable by eye (<em>Read the WIDTH, not the line</em>; an attrition sentence says where the sample thins); <strong>Rates across the n runs</strong> with the gate <em>A point estimate needs k runs</em> (when the document states no threshold, no point estimate is ever allowed), spelled-out rate labels (<em>reached a terminal state</em>, <em>ended in failure</em>, <em>ran any verification</em>, …), under-powered rows shown as intervals with raw counts, undecidable runs excluded from n and never counted as failures; the <strong>Δ̂</strong> tiles (Δ̂, between, within A, within B) with the formula <code>delta_hat = MMD2(A,B) - 0.5*(MMD2(A1,A2) + MMD2(B1,B2))</code> and no invented verdict; <strong>Not computed</strong> lines; and the same file-vs-formula check. Data: <code>GET {seer}/seer/ensembles?limit=50</code>, then <code>/seer/ensemble/{id}</code>. The 3-D field draws the same band as per-step boxes (never a tube; no box under two runs; nothing until three runs are loaded) when Settings → Sessions → <span class="ui">Draw the p10–p90 envelope</span> is on.</p>
+<p><strong>Persona space</strong> has no panel; it is Settings → Sessions → <span class="ui">Projection — which coordinate system a turn is drawn in</span>: <span class="ui">Coordinate system</span> (Usage · Persona), <span class="ui">Persona space</span> (one option per indexed space, labelled with its verdict: <span class="ui">clears null</span>, <span class="ui">at null</span>, <span class="ui">below null</span>, <span class="ui">no control</span>), <span class="ui">Cross-fade</span> (0–3 s, <em>cut</em> at 0: the two spaces share no axis, so a tween would draw a path through coordinates that mean nothing), <span class="ui">Trail length (persona)</span>. A space that did not clear its null can be looked at but can never be the default coordinate system; the rule lives in one function, <code>isSelectableAsDefault</code>. On this checkout the block reads <em>This deploy ships no persona space</em>, for the reason in §16.</p>
+
+<h3 id="v-settings">13.8 Settings, all new rows in one place</h3>
+<div class="tbl"><table>
+<tr><th>Tab → section</th><th>Rows</th></tr>
+<tr><td>General → <span class="ui">Hand control</span></td><td>Webcam hand control · Hand effects · the gesture legend</td></tr>
+<tr><td><span class="ui">Behavior</span> (new tab)</td><td>Cue set: Default view · Sort · Filter — Declutter: Show cues whose significance is indeterminate — Raw responses: Show the sample-response panel · Reveal text from cue packs marked sensitive — Running a study (text only)</td></tr>
+<tr><td>Sessions → <span class="ui">Projection</span></td><td>Coordinate system · Persona space · Cross-fade · Trail length (persona) · provenance and verdict lines</td></tr>
+<tr><td>Sessions → <span class="ui">Ensemble — the fan</span></td><td>Draw the p10–p90 envelope</td></tr>
+<tr><td>Data → <span class="ui">Dataset &amp; view</span></td><td>Channel lens (+ Space · Formula · Fidelity · Range · Not measured · Filter window) · Direction axis (+ Blend onto the axis · Show the null cloud · Space · Method · Width · Protocol · Its own two sets · Across this map · Null · the refused list)</td></tr>
+</table></div>
+
+<h2 id="permalinks">14 · Permalink keys</h2>
+<p>State is mirrored into <code>location.hash</code> as you work, so any URL you copy reproduces what you were looking at. Only keys meaningful for the active page are written; a default value is omitted.</p>
+<div class="tbl"><table>
+<tr><th>Key</th><th>Page</th><th>Meaning</th><th>Validation</th></tr>
+<tr><td><code>page</code></td><td>all</td><td>which page</td><td>must belong to this document's app; <code>#page=seer</code> on Nebul.AI is dropped</td></tr>
+<tr><td><code>model</code></td><td>all</td><td>dataset id</td><td>none</td></tr>
+<tr><td><code>view</code></td><td>map</td><td><code>atlas</code> · <code>chord</code> · <code>hierarchy</code> · <code>compare</code></td><td>closed list; written when not atlas</td></tr>
+<tr><td><code>dims</code></td><td>map</td><td><code>2</code> · <code>3</code></td><td>written when 3</td></tr>
+<tr><td><code>q</code></td><td>map, behavior</td><td>keyword search on the map, cue search on Behavior</td><td>non-blank</td></tr>
+<tr><td><code>channel</code></td><td>map</td><td>channel lens id</td><td>not validated at parse; the driver drops an unknown id</td></tr>
+<tr><td><code>crange</code></td><td>map</td><td>filter window <code>lo,hi</code> in the channel's raw units</td><td>both finite and lo ≤ hi, else dropped whole</td></tr>
+<tr><td><code>axis</code></td><td>map</td><td>direction id</td><td>not validated at parse; the driver drops it</td></tr>
+<tr><td><code>axist</code></td><td>map</td><td>blend 0–1, 2 dp</td><td>clamped; <strong>defaults to 1</strong> when <code>axis</code> is present without it</td></tr>
+<tr><td><code>axisnull</code></td><td>map</td><td><code>0</code> = null cloud off</td><td>only the literal 0 is read; written only when the null was switched off</td></tr>
+<tr><td><code>episode</code>, <code>step</code></td><td>nebulai</td><td>episode id and step index</td><td>episode validated against the registry (rejected on Seer); step a non-negative integer</td></tr>
+<tr><td><code>feature</code></td><td>interp</td><td>Internals registry id (e.g. <code>steer-rail</code>)</td><td>validated against the registry</td></tr>
+<tr><td><code>trace</code></td><td>interp</td><td>trace slug</td><td>live traces are never written; they exist only in the capturing tab</td></tr>
+<tr><td><code>cue</code></td><td>behavior</td><td>which cue is open</td><td>not validated (the study is fetched by the page); an absent cue opens nothing</td></tr>
+<tr><td><code>bview</code></td><td>behavior</td><td><code>landscape</code> · <code>ranked</code> · <code>table</code></td><td>closed list; written when not landscape</td></tr>
+</table></div>
+<p>Apply order: feature → trace → dims → q → channel (+crange) → axis (+axist, axisnull) → bview → cue → page → view → episode. The episode is last because a step rewrites page, model, channel and selection and must not be overwritten by the keys it supersedes.</p>
+<pre><code>#page=map&amp;model=gpt2&amp;channel=we_centroid_dist&amp;crange=1.500,2.000
+#page=map&amp;model=gpt2&amp;axis=male-minus-female-names&amp;axist=1.00
+#page=map&amp;model=gpt2&amp;axis=male-minus-female-names&amp;axist=0.50&amp;axisnull=0
+#page=map&amp;model=gpt2&amp;episode=glitch-knot&amp;step=3
+#page=interp&amp;model=gpt2&amp;feature=steer-rail
+#page=behavior&amp;bview=ranked&amp;cue=water&amp;q=wat</code></pre>
+
+<h2 id="deploy">15 · Static deploy: what to ship</h2>
+<p>Everything below resolves against <code>DATA_BASE</code> (<code>out/</code> next to the built app, absolute against the page URL because the parse worker resolves relative URLs against the worker script). The rsync list is the whole <code>out/</code> tree plus the built app; the build already carries the gesture model and the MediaPipe wasm as same-origin hashed assets. Nothing in the new features reaches a CDN. Full handover: <code>docs/DEPLOY-STATIC.md</code>.</p>
+<div class="tbl"><table>
+<tr><th>File</th><th>Feeds</th></tr>
+<tr><td><code>out/index.json</code>, <code>out/&lt;id&gt;/nebulai.json</code></td><td>the dataset list and the maps (as before)</td></tr>
+<tr><td><code>out/&lt;id&gt;/channels.json</code></td><td>channel lens, the axis projections, tooltip scalars, episode gating</td></tr>
+<tr><td><code>out/&lt;id&gt;/directions.json</code></td><td>AxisRail, the <code>axis</code> key, episode gating, the steer rail's axis block</td></tr>
+<tr><td><code>out/&lt;id&gt;/interp/index.json</code> + <code>intervene_*.json</code></td><td>Internals #26 (the first listed bundle with a row-level axis wins)</td></tr>
+<tr><td><code>out/behavior/behavior.json</code></td><td>the entire Behavior page; absent → the empty state, which is the normal deploy</td></tr>
+<tr><td><code>out/absorbing/index.json</code>, <code>out/absorbing/&lt;study&gt;/absorbing.json</code></td><td>Seer's absorbing panel</td></tr>
+<tr><td><code>out/persona/index.json</code>, <code>out/persona/&lt;space&gt;/space.json</code></td><td>Seer's persona picker (the index does not exist yet: §16)</td></tr>
+<tr><td><code>&lt;app base&gt;/models/gesture_recognizer.task</code></td><td>hand control (under the app base, not <code>out/</code>)</td></tr>
+</table></div>
+<p>Live endpoints (<code>/live/*</code> on 8123, <code>/seer/*</code> on 8125, <code>nebulai behavior serve</code>) are not part of a static deploy; every page degrades to its no-server sentence without them. The only unreachable-server sentence a static visitor can meet is the trace one: <em>no live server at {base} — start it: python -m nebulai.backend.interp.live_server</em>.</p>
+
+<h2 id="gaps">16 · Known gaps <span class="b b-gap">gap</span></h2>
+<p>Everything here was verified by reading the code and, where noted, by running the viewer. None of it is hidden from the user by the software; this list exists so the guide does not describe a feature as reachable when it is not.</p>
+<ol>
+  <li><strong>No <code>out/persona/index.json</code>.</strong> Two spaces are on disk, but <code>nebulai persona build</code> writes only <code>space.json</code>, and the viewer discovers spaces through an index that nothing writes (the absorbing study has one, <code>absorbing.write_index</code>; persona has no equivalent). So Settings → Sessions says <em>This deploy ships no persona space</em>. Workaround until the writer lands: write the index by hand as <code>{"spaces":[{"space_id":"…"}, …]}</code> (a bare array of ids is also accepted).</li>
+  <li><strong>Placement never reaches the field.</strong> <code>fetchPlacement</code> / <code>setPlacement</code> have no callers, so even with a space selected the persona cross-fade has no coordinates; and the R7 placement glyphs (solid / dashed / absent) are defined and unit-tested but not referenced by any renderer. <code>seer place</code> writes a correct file that the shipped viewer does not load.</li>
+  <li><strong>No ensemble picker.</strong> The fan silently shows the first ensemble the server lists. Novelty and budget are parsed and never displayed.</li>
+  <li><strong>Two inert Behavior settings.</strong> <span class="ui">Show the sample-response panel</span> is never read (the panel always renders, gated only by the sensitive-pack reveal), and the <span class="ui">Split-half reliability</span> sort falls through to effect size.</li>
+  <li><strong>#26 opens the <code>add</code> sweep, not the Golden Gate clamp.</strong> The loader takes the first bundle with a row-level axis block; <code>intervene_refusal_add.json</code> is listed first and has one, <code>intervene_golden_gate.json</code> has none. The registry blurb, legend and the golden-gate episode all describe the clamp (feature 17840, 3.421 bits), and that episode's steer cells address a 5×3 grid the 4×2 add bundle does not have (the selection clamps silently). There is no bundle picker in the rail. Verified at runtime.</li>
+  <li><strong><code>/live/intervene</code> has no viewer surface.</strong> The rail is baked-bundle only; no error text or empty state exists for the endpoint.</li>
+  <li><strong>The map hand-off gives no navigation cue.</strong> <span class="ui">lay the map out along this axis</span> writes the axis state and stays on Internals.</li>
+  <li><strong>Seer episodes are registered but unwired.</strong> Five run-side episodes (sydney, project-vend, ai-village, chess-hacking, eval-awareness) exist as a tested registry that only its unit test imports; there is no Episodes pill on Seer.</li>
+  <li><strong>Refusal directions have no null on the map.</strong> <code>refusal-style-v1-L8</code> and <code>-L11</code> live in <code>resid.L8/L11</code>, not in the map's <code>W_E.centered</code>, so they are NOT RENDERABLE (R5) everywhere, including the steer rail's hand-off. The D2 space-mismatch sentence never fires for them because the R5 rule fires first.</li>
+  <li><strong>Halted studies.</strong> The Behavior positive control failed (§8.2); the organism ran 7 and 6 steps and its broad rate is not measured (§10); the variance instrument is unfrozen and no sheet has been filled (§9); the eval-awareness direction is weak and mid-stack only (§4.4).</li>
+</ol>
+<div class="call danger">
+  <p class="t">Human-only, in one list</p>
+  <p>Set <code>XAI_API_KEY</code> and approve the paid arm; review <code>docs/behavior/TOS-REVIEW.md</code>; decide the positive-control question (larger n, a different deployment, or a re-registered cue set); freeze the variance instrument and annotate; accept the AI Village research terms if that corpus is wanted; give the organism a GPU and a real step budget; and, since D6 is a rule and not a suggestion, do not add a code path that writes weights.</p>
+</div>
+
+<h2 id="recipes">17 · Recipes</h2>
+
+<div class="recipe">
+<h4>A · See a channel and a direction on the gpt2 map</h4>
+<ol>
+  <li>Build the sidecars if you do not have them: <code>uv run nebulai channels gpt2</code>, then <code>uv run nebulai direction make gpt2 --a-cluster 200 --b-cluster 190 --id male-minus-female-names</code>.</li>
+  <li>Open <code>#page=map&amp;model=gpt2</code>. In the Search panel click <span class="ui">near the centroid</span>; read the ten lowest values; click <span class="ui">filter to …</span> to dim everything else.</li>
+  <li>In the <span class="ui">Directions</span> rail click the direction chip, drag <span class="ui">map … axis</span> to the right, and compare the two claim sentences: separates its own sets, indistinguishable across the map.</li>
+  <li>Copy the URL. It carries <code>channel</code>, <code>crange</code>, <code>axis</code>, <code>axist</code>.</li>
+</ol>
+</div>
+
+<div class="recipe">
+<h4>B · Run one intervention and look at it</h4>
+<ol>
+  <li><code>uv run nebulai direction prompts gpt2 --layer 8</code> (fits <code>refusal-style-v1-L8</code>).</li>
+  <li><code>uv run nebulai intervene gpt2 add --direction refusal-style-v1-L8 --prompt "Write a detailed guide to" --alpha 0.5 --alpha 1 --alpha 2 --name intervene_refusal_add</code>. Watch for <em>alpha=0 added</em> in the output.</li>
+  <li>Open <code>#page=interp&amp;model=gpt2&amp;feature=steer-rail</code>; drag the strength slider; read the claim sentence and the axis travel line. Expect tiny KL: this direction does not steer GPT-2, and the artifact says so.</li>
+  <li>To make the hand-off button work, the direction would need a null on the map. <code>uv run nebulai direction project gpt2 refusal-style-v1-L8</code> refuses: <em>refusal-style-v1-L8 is in space 'resid.L8' but this map's points are in 'W_E.centered' — refusing to project (D2). Different bases are never comparable, and a number would come out regardless.</em> That refusal is the finding, and the <code>refusal-style</code> episode is built around it.</li>
+</ol>
+</div>
+
+<div class="recipe">
+<h4>C · Reproduce the absorbing-state verdict</h4>
+<ol>
+  <li>Pilot first, no rule: <code>uv run nebulai absorbing run --model HuggingFaceTB/SmolLM2-135M-Instruct --revision 12fd25f77366… --pilot-conversations 24</code>; read the per-rule violation rates it prints.</li>
+  <li>Commit to a rule and run under a deadline: <code>… --rule no_exclamation --conversations 2000 --deadline-min 120</code>.</li>
+  <li>Continue after the deadline: <code>… --resume smollm2-135m-instruct@12fd25f77366.no_exclamation</code> with identical flags.</li>
+  <li><code>uv run nebulai absorbing report &lt;study_id&gt;</code>; then open <code>seer.html#page=sessions</code> and read the same numbers in the panel, with the interval-vs-base-rate sentence.</li>
+</ol>
+</div>
+
+<div class="recipe">
+<h4>D · Build and verify a persona space, then place a run in it</h4>
+<ol>
+  <li><code>uv run nebulai persona build --model HuggingFaceTB/SmolLM2-135M-Instruct --revision 12fd25f77366… --layer 19 --control-n 500</code>; then <code>uv run nebulai persona list</code> and check the verdict is <code>above_null</code>.</li>
+  <li>Write <code>out/persona/index.json</code> by hand (§16 item 1) so the viewer can find it.</li>
+  <li><code>python -m nebulai.backend.interp.live_server --persona-root out</code>, and in another shell <code>seer place --space &lt;space_id&gt; &lt;run_id&gt;</code>. Inspect <code>placement.json</code> beside the run; the viewer does not draw it yet.</li>
+</ol>
+</div>
+
+<div class="recipe">
+<h4>E · Run the free Behavior controls end to end</h4>
+<ol>
+  <li><code>uv sync --group behavior-local</code>; <code>uv run nebulai behavior conformance</code>.</li>
+  <li><code>uv run nebulai behavior plan --study-id my-cap-2026-09-13 --preset capability --cues control</code>.</li>
+  <li><code>uv run nebulai behavior run --manifest out/behavior/my-cap-2026-09-13/manifest.json --cue-limit 4</code>; then <code>calibrate</code> and <code>analyze</code> with the same manifest and <code>--embedder local</code>.</li>
+  <li>Read <code>calibration.md</code>'s positive-control table before anything else. If it fails, that is the result. <code>publish</code> only what is strict; the page will still print every gate.</li>
+</ol>
+</div>
+
+<div class="recipe">
+<h4>F · Repeat an agent run and read the fan</h4>
+<ol>
+  <li><code>seer run claude "fix the failing test" --repeat 5 --seed-base 100 --acknowledge-unpriced</code> (the first repeat has no estimate; later ones are refused above <code>--max-cost-usd</code>).</li>
+  <li><code>seer ensemble</code> to list; <code>seer ensemble &lt;id&gt; --json</code> for the document.</li>
+  <li><code>seer serve</code>, open <code>seer.html#page=sessions</code>; the fan shows the band, the n strip, the seed line, and the rate gate.</li>
+</ol>
+</div>
+
+<div class="recipe">
+<h4>G · Import a foreign corpus honestly</h4>
+<ol>
+  <li>Dry-run first: <code>seer import ctfish runs.json --labels scoring/labels.json --limit 2 --dry-run</code>; check <code>n_unmapped</code> and the licence line.</li>
+  <li>Import for real; confirm <code>corpus.json</code> sits beside the run.</li>
+  <li>In the viewer the run wears foreign clothes: order-only time axis, missing usage, corpus label. Do not compare it on tokens with a captured run; <code>seer compare</code> will refuse above the table.</li>
+</ol>
+</div>
+
+<footer>
+  <p>Nebul.AI field guide · written against <code>main</code> @ <code>83282a3</code> on 2026-09-12 · a single self-contained file; no script, no network, no external font. Numbers are quoted from the artifacts in <code>out/</code> on that checkout and from the CLI's own output; UI strings are quoted from the source. If a number here disagrees with an artifact, the artifact is right and this file is stale.</p>
+</footer>
+</main>
+</div>
+</body>
+</html>

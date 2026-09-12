@@ -6,10 +6,17 @@
 > start page described below to Nebul.AI unless that product decision changes.
 > The interaction and honesty notes remain useful design research, but the
 > proposed build order is no longer an implementation backlog.
+> Since this was written the instrument grew a Behavior page and Seer became its
+> own entry (`viewer/seer.html`); neither changes the entry decision recorded
+> here.
 
 This proposal began when Nebul.AI opened directly on 49,857 GPT-2 token dots,
 208 clusters, and a gear panel, with no product-level introduction. It records
 the earlier design for an onboarding path inside the instrument.
+
+- **For what the instrument does *now*, read
+  [`USER-GUIDE.html`](USER-GUIDE.html)** — the offline field guide to the
+  2026-09 features: open it in any browser, no server needed.
 
 Two facts shape the whole design:
 
@@ -138,7 +145,7 @@ The implementation prerequisites from the original proposal are resolved:
 | Live probe build path | Resolved. `build_server` accepts `source=probe`, validates the free-text seed separately from `_MODEL_ID`, builds argv as a list without a shell, and maps the result to the same dataset slug as the CLI. |
 | Pre-baked examples | Resolved. The deployed catalog contains three probe clouds: glassblowing, grief, and tidal ecology. |
 | Product entry | Superseded. The external PsychiX shell owns first-run entry into Nebul.AI. Seer remains reachable through Nebul.AI's cross-instrument navigation. |
-| In-instrument explanation | Retained. Nebul.AI's Guide documents all 25 live Internals views and their research references. |
+| In-instrument explanation | Retained. Nebul.AI's Guide documents all 26 live Internals views and their research references, including #26 Steer Rail, the one view that installs a hook. |
 
 Live probe generation remains optional and bring-your-own-endpoint. The static
 deployment is complete without a generator or embedder running on the web

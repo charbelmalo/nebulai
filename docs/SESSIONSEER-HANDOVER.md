@@ -4,11 +4,13 @@ What exists, what does not, and the things that took a while to learn and would
 otherwise have to be learned again. The design and its justification live in
 [`SESSIONSEER.md`](SESSIONSEER.md); this file is about the state of the build.
 
-As of 2026-09-12: **M0 through M5 are shipped and tested.** The build is
-feature-complete against the plan. Four things §6 once listed as unbuilt now
-exist (the novelty ledger behind `Effect.NO_NEW_INFORMATION`, `apply_patch`
-line counts, git snapshots, and — as a written refusal with its evidence — the
-Hermes TUI gateway); two remain, and §6 says which and why.
+As of 2026-09-12: **M0 through M5 are shipped and tested**, and the build has
+since grown past the plan: `seer place` (P2/D5), `seer run --repeat` +
+`seer ensemble` with its own cost gate (P3), and four public-corpus adapters
+behind `seer import` (D7). Three things §6 once listed as unbuilt now exist
+(the novelty ledger behind `Effect.NO_NEW_INFORMATION`, `apply_patch` line
+counts, git snapshots); a fourth, the Hermes TUI gateway, was investigated and
+refused in writing. Two remain, and §6 says which and why.
 
 ---
 
@@ -16,9 +18,9 @@ Hermes TUI gateway); two remain, and §6 says which and why.
 
 | | |
 |---|---|
-| Python | `src/nebulai/seer/` — ~11.6k lines incl. `adapters/` |
+| Python | `src/nebulai/seer/` — ~17.0k lines incl. `adapters/` |
 | Tests | `tests/test_seer_*.py` — 551 tests across 18 files |
-| Viewer | `viewer/src/seer/{contract,client}.ts`, `viewer/src/chrome/SeerPage.tsx` |
+| Viewer | `viewer/seer.html` → `viewer/src/seer-main.ts`; `viewer/src/seer/{contract,client,live,encoding}.ts`; `viewer/src/chrome/{SeerPage,SeerLive,SeerThoughts,ComparePanel,EnsemblePanel}.tsx` |
 | Styles | `viewer/src/styles/chrome.css` (`.seer-*`) |
 | Fixtures | `tests/fixtures/seer/` — recorded output from all three agents, plus `vocabulary-golden.json` |
 
@@ -30,6 +32,10 @@ Two M5 modules sit off that path and are easier to read once the rest makes
 sense: `redaction.py` (the field registry that computes an event's content
 level, and the export-time redactor) and `recover.py` (what happens to a run
 whose capture process died).
+
+Three more sit off the path and are best read last: `budget.py` (why a repeat
+can refuse to price itself), `ensemble.py` (the fan), `place.py` (the Nebul.AI
+seam).
 
 ## 2. Running it
 
@@ -56,9 +62,10 @@ PYTHONPATH=src "$REPO"/.venv/bin/python -m pytest tests/ -q
 cd viewer && npx vitest run && npx tsc --noEmit -p tsconfig.json
 ```
 
-Current: **1079 Python tests** (1078 pass; the one failure,
-`test_compare.py::test_palette_covers_every_built_map`, is data-dependent on
-the local `out/` and unrelated to seer), **93 vitest, tsc clean.**
+Current (re-run 2026-09-12): **2000 Python tests** — 1999 pass, 1 skipped, none
+fail; `test_compare.py::test_palette_covers_every_built_map`, the one failure
+the previous count recorded, passes again against the local `out/`. **704
+vitest across 44 files, tsc clean.**
 
 Regenerating the vocabulary golden — deliberately, never to make a red test
 green (see §3, M5):
@@ -67,13 +74,17 @@ green (see §3, M5):
 PYTHONPATH=src "$REPO"/.venv/bin/python tests/test_seer_vocabulary.py --write
 ```
 
-CLI verbs: `run attach reconcile protocol list show compare export analyze serve
-reindex delete install uninstall watch import-spool`. `export` takes
-`--redact {metadata,command,content}`; `delete` refuses without `--yes` and
-describes the run instead.
-HTTP routes: `/seer/{health,runs,run/<id>,run/<id>/analysis,compare,export,live,
-start,attach,reconcile,cancel,reindex,annotate}`, plus
-`DELETE /seer/run/<id>`. `/seer/export` accepts `?redact=<level>`.
+CLI verbs: `run attach reconcile protocol list show ensemble place compare
+export analyze serve reindex delete install uninstall watch import
+import-spool`. `export` takes `--redact {metadata,command,content}`; `delete`
+refuses without `--yes` and describes the run instead. `run` takes
+`--repeat N` / `--seed-base` / `--max-cost-usd` / `--acknowledge-unpriced`;
+`import` takes `{amongus,ctfish,village,transcript}` and a local path (nothing
+is downloaded).
+HTTP routes: `/seer/{health,runs,run/<id>,run/<id>/analysis,ensembles,
+ensemble/<id>,compare,export,live,start,attach,reconcile,cancel,reindex,
+annotate}`, plus `DELETE /seer/run/<id>`. `/seer/export` accepts
+`?redact=<level>`.
 
 ## 3. What each milestone actually delivered
 
@@ -151,6 +162,11 @@ hooks the user added after installing survive it.
 each of the 57 native kinds produced the day it was captured — event types and
 action. Same rule as the protocol gate: fail closed on removal, open on
 addition.
+
+**Beyond the plan (Attractors P2/P3/D7).** `place.py` projects a run's turns
+into a frozen persona space; `ensemble.py` + `budget.py` turn `run --repeat N`
+into a fan with a cost gate; `adapters/corpus_*.py` import Among Us / ctfish /
+AI Village / transcript records as `RECONCILED` runs.
 
 ## 4. Decisions worth not re-litigating
 
@@ -261,6 +277,20 @@ of what we wrote, so it leaves with the rest. Take it and the round trip is
 byte-exact; leave it and every install/uninstall cycle grows the file by one
 line.
 
+**The first run of a protocol has no cost estimate at all** — `missing`, never
+`$0`, because the agent's spend leaves through a door this process cannot see.
+An unpriced `--repeat` needs `--acknowledge-unpriced`, and the acknowledgement
+is recorded in the ensemble.
+
+**Placement crosses the boundary as HTTP + a file, not an import.** `nebulai`
+never imports `seer`, so `place` calls a running `live_server` and writes
+`placement.json`; `--in-process` exists and is deliberately not the default.
+
+**Corpus fidelity is per field, not per run.** A record with real timestamps
+and no token usage cannot be described by one envelope `Fidelity`; ctfish has
+no clock at all, so `ts` is synthetic, marked missing, and flagged
+`order_only`.
+
 ## 5. Gotchas that cost time
 
 - **A running `seer serve` does not reload changed code.** An adapter fix that
@@ -307,8 +337,9 @@ line.
 
 ## 6. What is left
 
-Nothing from the milestone plan. Four things §6 used to list as *not built* now
-exist; what remains is below them, with the reason each one stayed out.
+Nothing from the milestone plan. The things §6 used to list as *not built* now
+exist, and three whole surfaces landed after them (P2/P3/D7); what remains is
+below them, with the reason each one stayed out.
 
 ### Built since the first handover
 
@@ -373,6 +404,16 @@ exist; what remains is below them, with the reason each one stayed out.
   contract is older than this change.
 - **The Hermes TUI gateway was investigated and deliberately not built.** The
   paragraph below is the reason, in full, so nobody re-opens it on a hunch.
+- **Placement (P2/D5).** `place.py` projects a captured run's turns into a
+  frozen Nebul.AI persona space. Nothing is fitted; an uncaptured turn gets no
+  coordinate.
+- **The fan and its cost gate (P3).** `seer run --repeat N` plus
+  `seer ensemble`, over `ensemble.py`'s per-step median and envelope, Wilson
+  intervals and split-half reliability, with `budget.py` refusing to invent a
+  price it cannot see.
+- **Four public-corpus adapters (D7).** `seer import
+  {amongus,ctfish,village,transcript}` maps somebody else's finished record into
+  the canonical vocabulary as a `RECONCILED` run, with per-field fidelity.
 
 ### Why there is no attached Hermes capture
 
@@ -428,3 +469,9 @@ or reconciled (`state.db`) — never attached, and nothing pretends otherwise.
 - The CSV export is spans-only by design, and says so in its own first line. If
   someone wants a flat *event* CSV, that is a new format, not a change to this
   one.
+- **`place` has no HTTP route.** It is a CLI verb that calls Nebul.AI's live
+  server and writes `placement.json`; the Seer server does not expose one, so a
+  viewer cannot ask for a placement it does not already have on disk.
+- **The ensemble fan has one axis: the completed turn.** `FAN_METRICS` counts
+  events and actions per step; there is no depth series — nothing below the turn
+  — so a fan cannot yet be drawn over sub-turn structure.

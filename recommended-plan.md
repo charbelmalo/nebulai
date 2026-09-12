@@ -121,44 +121,60 @@ Existing pipeline, no new ML code, in this order.
 conventional key layout, smallest checkpoint — the entry most likely to work
 first and therefore the one to debug the remote reader against. Then Glimmer,
 Gemma-4, Ling. Run a `--max-tokens 20000` pass first on each to shake out
-tokenizer and curation issues before the 50k map. *Difference:* four clouds at
-a scale the corpus has never held (its largest today is 63,619 points from a
-neutral embedder; its largest model-geometry map is 49,857).
+tokenizer and curation issues before the 50k map. *Difference:* three clouds at
+50,000 points — a scale the corpus had not held — plus `mistral-nemo` at 5,000,
+which was built first as the reader's proving run and never re-run at 50k.
 
-**2b. W_E vs W_U — the headline experiment.** For the three untied models, map
+**2b. W_E vs W_U — the headline experiment. Done; see §Track 2b — result.** For the three untied models, map
 W_U over the same curated vocab and ask: does the model read tokens the way it
 writes them? Concretely: W_E↔W_U neighbourhood overlap per token, cluster-title
 agreement, and which token families (code, CJK, numerals, byte fragments)
 diverge most between input and output geometry. Then run the same measurement
 on Gemma-4, where it must come back degenerate — that is the control, and a
 non-degenerate result there means the measurement is broken, not that Gemma-4
-is interesting. Cost: one more matrix per model — both matrices at 50k tokens
-run 819 MB for Ling, 1024 MB for Mistral-Nemo, 1331 MB for Glimmer. Softcapping and output multipliers are irrelevant by construction —
+is interesting. Cost as planned was one more matrix per model at 50k tokens
+(819 MB Ling, 1024 MB Mistral-Nemo, 1331 MB Glimmer); as run, Mistral-Nemo's
+pair was built over a 5,000-token slice, so its chance baseline is 0.010002
+against 0.001000 for the other two and the mean overlaps are not directly
+comparable across models. Softcapping and output multipliers are irrelevant by construction —
 they act on logits at inference and never touch the rows being mapped.
 
-**2c. Depth series of neurons maps.** `down_proj` write directions at a spread
+**2c. Depth series of neurons maps — Mistral-Nemo done (see §Track 2c — result), Glimmer outstanding.** `down_proj` write directions at a spread
 of layers. ⚠️ Two of the four are MoE (Gemma-4: 128 experts; Ling: 256,
 `BailingMoeV2_5`), so their `down_proj` lives **inside experts** — "layer L's write directions" is
 not one matrix there, and the frontend has to be told which expert(s), or the
 map is of one arbitrary expert while claiming to be of a layer. Do the dense
-model (Mistral-Nemo, 40 layers) and Glimmer (52 layers, dense) first; treat MoE
-depth maps as a separate design question, not a parameter change.
+model (Mistral-Nemo, 40 layers — **done**, layers 4/12/20/28/36) and Glimmer
+(52 layers, dense — **not built**) first; treat MoE depth maps as a separate
+design question, not a parameter change.
 
-**2d. `api_tokens` contrast map.** The same curated vocab through a neutral
-embedder — the existing "model geometry vs meaning" teaching contrast, now
-available at four different vocab scales (131k / 157k / 202k / 262k).
+**2d. `api_tokens` contrast map — 1 of 4 built.** Done for `mistral-nemo` only,
+over its shipped 5,000-token slice: `…__api-all-MiniLM-L6-v2` (validates,
+because the local embedder pinned a 40-hex sha) and `…__api-mxbai-embed-large`
+(cannot be validated — nothing pins which weights answered). Glimmer, Gemma-4
+and Ling contrast maps are not built; "four vocab scales" is a plan, not a
+state. The same curated vocab through a neutral embedder — the existing "model
+geometry vs meaning" teaching contrast, intended at four different vocab scales
+(131k / 157k / 202k / 262k).
 
-**2e. Validation gate, unchanged.** Every map runs `nebulai validate`
+**2e. Validation gate — held.** Twenty-two built-and-validated maps in the
+README table, including all four endpoint-era models, the three new W_U twins
+and the five-depth series. Every map runs `nebulai validate`
 (trustworthiness, seed-ARI, column-shuffled null) before entering the corpus or
-`compare`. No exceptions for new or expensive models — the README table grows
-honest rows or it does not grow.
+`compare`. Six maps carry no `validation.json` and never will — three
+`api_text_embedding` contrast maps and the three `probe__*` clouds — because
+nothing in the artifact pins which hosted weights answered; `validate` refuses
+them with that reason. Otherwise no exceptions for new or expensive models —
+the README table grows honest rows or it does not grow.
 
-**2f. Cross-model compare.** Add validated maps to `nebulai compare` alongside
-gpt2 / SmolLM2 / pythia. First time the atlas can put four modern 20–30B-class
-models against micro models; expect the unique-concept counts to move sharply,
-which is itself the finding. Comparison happens in label space, not logit
-space, so nothing about the four models' different vocabularies or output
-transforms needs reconciling.
+**2f. Cross-model compare — done.** `out/compare/compare.json` holds 28 maps,
+all four endpoint-era models among them (see `out/compare/metrics.json`).
+First time the atlas can put four modern 20–30B-class models against micro
+models. Comparison happens in label space, not logit space, so nothing about
+the four models' different vocabularies or output transforms needs reconciling.
+One caveat the plan did not anticipate: `compare` refuses a label-space overlap
+where both maps carry placeholder titles, so the five `down_proj` depth maps
+contribute geometry but no unique-concept count.
 
 ## Track 2b — result
 
@@ -296,21 +312,24 @@ path would live. ⚠️ **Needs approval before any work:** it breaks the repo's
 deliberate no-torch rule and reintroduces the ~60 GB GPU host this plan just
 removed — for four models, that is now four GPU hosts' worth of checkpoints.
 *Difference if skipped:* no activation or multimodal clouds; a pure,
-reproducible, laptop-runnable repo. **Recommendation: skip until Track 2
-results argue for it.** The W_E/W_U and depth findings are what tell you whether
-inference-time geometry would add signal or just volume.
+reproducible, laptop-runnable repo. **Recommendation: still skip — and now on
+evidence, not on schedule.** Both gating results exist (§Track 2b, §Track 2c).
+Neither argues for activations: 2b's finding is about *which weight matrix* a
+claim came from, and 2c's is that the 2-D layout of raw neurons is the least
+faithful in the repo at every depth — a projection problem, not a
+missing-signal problem.
 
 ## Sequencing
 
-| Order | Track | Effort | Unblocks |
-|---|---|---|---|
-| 1 | Remote loader groundwork | ~1 day | everything |
-| 2 | 2a on `mistral-nemo` | hours | proves the reader end-to-end |
-| 3 | 2a on the other three | ~1 day of runs | the corpus |
-| 4 | 2b (W_E vs W_U + control) | ~1 day incl. the overlap script | headline result |
-| 5 | Track 3 (endpoint namer + gate) | ~half day | all future naming |
-| 6 | 2c–2f (depth, contrast, compare) | ~2–3 days of runs | corpus growth |
-| 7 | Track 4 | weeks + hardware | only if 4 justifies it |
+| Order | Track | Effort | Unblocks | Status |
+|---|---|---|---|---|
+| 1 | Remote loader groundwork | ~1 day | everything | done |
+| 2 | 2a on `mistral-nemo` | hours | proves the reader end-to-end | done |
+| 3 | 2a on the other three | ~1 day of runs | the corpus | done |
+| 4 | 2b (W_E vs W_U + control) | ~1 day incl. the overlap script | headline result | done |
+| 5 | Track 3 (endpoint namer + gate) | ~half day | all future naming | done — README's validated table is named by `claude-cli:opus` |
+| 6 | 2c–2f (depth, contrast, compare) | ~2–3 days of runs | corpus growth | 2c partial (Mistral-Nemo only), 2d partial (1 of 4), 2e done, 2f done |
+| 7 | Track 4 | weeks + hardware | only if 4 justifies it | skipped, see Track 4 |
 
 ## Explicitly out of scope
 
