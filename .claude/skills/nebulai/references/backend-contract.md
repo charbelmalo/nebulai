@@ -198,6 +198,22 @@ as one. Two files carry the whole contract.
 - `archetypes[i].scores` is one row per prompt-set persona in the basis'
   component order — the reference cloud a placement is read against.
 
+**What the control has actually said so far.** Two spaces have been built from
+`personas.v1` (sha `35cb9d1dc380…`, 296 archetypes × 8 probes = 2,368 prompts),
+both with a 500-draw within-probe label-permutation null at seed 0:
+
+| space_id | model | layer | pc1_evr | null p95 | p | verdict |
+|---|---|---|---|---|---|---|
+| `smollm2-135m-instruct@12fd25f77366.v1.L19` | SmolLM2-135M-Instruct | 19 | 0.2046 | 0.1916 | 0.0020 | `above_null` |
+| `smollm2-360m-instruct@a10cc1512eab.v1.L20` | SmolLM2-360M-Instruct | 20 | 0.1662 | 0.1537 | 0.0080 | `above_null` |
+
+Both clear their null and **neither clears it by much** — the margin is about
+0.0125 of explained variance at both sizes. `pc1_evr` falling as the model grows
+is not the effect weakening: a wider residual stream spreads the archetype means
+over more directions, and the only thing that decides whether a space is usable
+is its own null, never a comparison of `pc1_evr` across models. The unstratified
+`cross_check` came in `below_null` at both sizes, for the reason its note gives.
+
 ### `<store>/runs/<run_id>/placement.json` — as written by `seer place`
 
 ```jsonc
