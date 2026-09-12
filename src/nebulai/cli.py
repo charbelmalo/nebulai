@@ -581,8 +581,11 @@ def _run_intervene(args: argparse.Namespace) -> None:
                 "Refusing to write a bundle whose control is not a control."
             )
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / (args.name or f"intervene_{args.verb}.json")
+    # the interp/ subdir, with every other bundle the viewer fetches — an
+    # intervention curve is read by a driver exactly like patch.json is.
+    dest = out_dir / "interp"
+    dest.mkdir(parents=True, exist_ok=True)
+    path = dest / (args.name or f"intervene_{args.verb}.json")
     path.write_text(_json.dumps(bundle, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"[intervene] {path} ({t()})")
     for r in bundle["rows"]:

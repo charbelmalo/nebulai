@@ -28,6 +28,7 @@ import type { DatasetEntry } from "../data/schema";
 import type { InterpDriver, InterpGroup } from "../scene/interp/InterpDriver";
 import { GROUP_LABEL, INTERP_FEATURES, findFeature } from "../scene/interp/registry";
 import { SelectRow } from "@psychix/viz/controls";
+import { SteerRail } from "./SteerRail";
 import { ChartCard } from "@psychix/viz/ChartCard";
 import type { StatTile } from "@psychix/viz/StatStrip";
 import {
@@ -417,7 +418,7 @@ export function InterpPage() {
       <aside class="interp-rail">
         <div class="interp-rail-head">
           <span class="interp-rail-title">Internals</span>
-          <span class="interp-rail-count">{INTERP_FEATURES.length} of 25 live</span>
+          <span class="interp-rail-count">{INTERP_FEATURES.length} live</span>
         </div>
         <div class="interp-model">
           <SelectRow
@@ -640,6 +641,13 @@ export function InterpPage() {
           <canvas key={interp.featureId} ref={canvasRef} class="interp-canvas" />
           <div ref={overlayRef} class="interp-overlay" />
         </div>
+
+        {/* The intervention figure is half stage and half text: the columns say
+            how far the distribution moved, the rail says what it moved to. The
+            rail renders nothing until the driver publishes a bundle, so it is
+            absent rather than empty while the sweep loads — and it mounts only
+            for the feature whose data it reads. */}
+        {interp.featureId === "steer-rail" && <SteerRail />}
 
         {activeTour && tourRef && tourStep && (
           <div class="interp-tourbar" role="group" aria-label={`Guided tour: ${activeTour.label}`}>

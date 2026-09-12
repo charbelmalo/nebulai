@@ -176,8 +176,55 @@ function EpisodeSection() {
   );
 }
 
+/* ── the claim contract (§2.4 / D3) ───────────────────────────────────────── */
+
+/** The one causal sentence this project permits, and the boundary around it.
+ *
+ *  Every other view on the Internals page measures a model that was left alone,
+ *  and the honesty rule for those is flat: no causal claims. A view that
+ *  installs a hook is the single exception, and it is a narrow one — the
+ *  sentence may say what the intervention DID, under its protocol, with its
+ *  control, and may not say what the direction or feature IS. Both halves are
+ *  printed, because the permission is worthless without the prohibition
+ *  attached to it.
+ *
+ *  It renders on the card of every feature whose registry entry sets
+ *  `intervenes`, rather than once in the page footer. A footer is the part of a
+ *  page that does not travel: the number gets screenshotted, quoted and
+ *  forwarded, and the contract has to be inside the crop. */
+function ClaimContract() {
+  return (
+    <div class="guide-card-row guide-card-claim">
+      <span class="guide-card-tag">Claims</span>
+      <div class="guide-card-claimbody">
+        <p class="guide-card-claimlede">
+          This view changes the model's forward pass, so it is allowed one causal
+          sentence — of exactly this shape, and no other:
+        </p>
+        <p class="guide-card-claimquote">
+          Under protocol P, intervening on direction <em>d</em> at layer L changed
+          behaviour B from X to Y (n = …, seed = …).
+        </p>
+        <p class="guide-card-claimnote">
+          What that sentence does <strong>not</strong> say is what <em>d</em> is.
+          It is not the refusal direction, the truth direction or the Golden Gate
+          feature: it is a direction extracted by a named method from named data
+          which, when intervened on, moved a measured behaviour. Every figure here
+          ships with the α = 0 control that installed no hook, and the control is
+          drawn rather than assumed. No weights are modified or written.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function GuidePage() {
   const live = INTERP_FEATURES.length;
+  // the roadmap in docs/INTERP_FEATURES.md planned 25 views, all of which ship;
+  // #26 is the intervention rail, added later by ATTRACTORS-PLAN phase 4. Both
+  // numbers are derived, so neither can drift from what is actually registered.
+  const planned = 25;
+  const extra = live - planned;
   const byGroup = new Map<InterpGroup, typeof INTERP_FEATURES>();
   for (const f of INTERP_FEATURES) {
     const arr = byGroup.get(f.group) ?? [];
@@ -198,9 +245,19 @@ export function GuidePage() {
             When a view has an important limitation or known artifact, we call it out.
           </p>
           <p class="guide-count">
-            <strong>{live} of 25</strong> planned views are available. We publish a
-            view only after it works from source data to visualization. Views that
-            still need data or computation stay hidden until they are ready.
+            <strong>
+              {Math.min(live, planned)} of {planned}
+            </strong>{" "}
+            planned views are available
+            {extra > 0 && (
+              <>
+                , plus {extra} added since: the intervention rail, which changes the
+                model's forward pass instead of only measuring it
+              </>
+            )}
+            . We publish a view only after it works from source data to
+            visualization. Views that still need data or computation stay hidden
+            until they are ready.
           </p>
         </header>
 
@@ -240,6 +297,7 @@ export function GuidePage() {
                     <span class="guide-card-tag">Data source</span>
                     <span class="guide-card-source">{f.source}</span>
                   </div>
+                  {f.intervenes && <ClaimContract />}
                   <div class="guide-card-row">
                     <span class="guide-card-tag">Research</span>
                     <ol class="guide-card-research">

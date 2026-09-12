@@ -144,3 +144,50 @@ traps and patterns, hardest-won first.
 - Perf measurement in an occluded preview panel: rAF is frozen — measure p95
   with forced frames, and expect `window.__perf.p95FrameMs` from the rAF loop
   to read as garbage there.
+
+## `ChartStage`, and figures that make a claim (phase 4)
+
+`viewer/src/scene/interp/chart-stage.ts` is the shared perspective-orbit stage
+for lattice figures: extruded **opaque, depth-tested** columns on a grid,
+`NeutralToneMapping` (mandatory — the default tone mapper whites out the gold
+end of every ramp), real-raycast picking, HTML overlay labels. Three drivers use
+it: `AttentionRolloutDriver`, `ResidualRibbonDriver` and, since phase 4,
+`SteerDriver`. A discrete measurement gets discrete extrusion — never an
+interpolated surface stretched over the samples, which draws values nobody
+measured.
+
+Four rules that a driver on this stage should inherit:
+
+- **Put the arithmetic in a GPU-free module.** A WebGPU driver cannot run in
+  vitest, so everything the figure *claims* — the normalization, the floor, the
+  colour of the control, the summary the stat strip prints — lives beside it in
+  a plain module (`rollout.ts` for the waterfall; `steer.ts` for #26) and is
+  unit-tested there. A claim nothing can check is a claim nothing is holding up,
+  and the sharpest of them rot quietly when only a screenshot enforces them.
+- **A measured zero and an absent cell must not look the same.** Give a genuine
+  zero a visible floor plate (`FLOOR_FRAC`), and give a control its OWN colour
+  outside the ramp — colouring it `ramp(0)` makes the baseline read as a small
+  effect at the cool end of the scale, which is the exact confusion an
+  intervention figure exists to prevent.
+- **Height and colour read ONE normalization, against the bundle's own maximum,
+  and that maximum is printed on the axis.** Two sweeps must never be comparable
+  by eye merely because their tallest columns reach the same height.
+- **The claim sentence goes ON the canvas overlay, not in a footer.** §2.4
+  permits one causal sentence for intervention-backed figures; a footer is the
+  part of the page that gets cropped out of the screenshot the number travels
+  in. `SteerDriver.renderClaim()` also swaps the card for a refusal card when
+  the bundle's α = 0 row is not bit-identical to its baseline: a figure whose
+  control failed states that instead of quoting an effect size.
+
+Two wiring traps this cost a rewrite each:
+
+- **The selection channel must not live in the driver.** `chrome/tours.ts` and
+  `chrome/*.tsx` import it, so a channel exported from `SteerDriver.ts` drags
+  `three/webgpu` into the boot bundle. Export it from the GPU-free module and
+  have the driver import it — the driver registers an apply-callback on init and
+  unregisters on dispose, so a handler cannot leak into the next feature.
+- **An episode step's selection races the driver's own default.** `applyTourStep`
+  runs synchronously; the driver publishes its opening cell later, when its
+  async `setModel` resolves, and would silently discard the step's intent. The
+  channel therefore *remembers* a selection made with no driver mounted, and the
+  driver **takes** it (once, clamped to its grid) when its bundle lands.

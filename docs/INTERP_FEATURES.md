@@ -1,4 +1,4 @@
-# Nebul.AI — 25 real interp features (build spine)
+# Nebul.AI — 25 real interp features (build spine), plus a 26th that intervenes
 
 Goal: 25 SceneDrivers in `viewer/`, each a *hyper-visual* view of a **real
 computed quantity** from a micro model — no placeholder data, no fake motion, no
@@ -74,11 +74,47 @@ Existing drivers: Atlas/Chord/Hierarchy/Compare already ship (adapt, don't rebui
 | 24 | Polysemantic Venn | SAE feature co-firing | SAE+corpus | sae_cofire.json | ⬜ |
 | 16 | Grokking Clock | Fourier features of trained toy | numpy train | grok.json | ⬜ (trains tiny model) |
 | 25 | Live Prompt Nebula | live forward on typed text | forward (local server) | live_server.py | ✅ capstone — probe-server, NOT a JS port (0.5 GB weights stay local) |
+| 26 | Steer Rail | KL(baseline ‖ intervened) under a real hook | forward×intervene | intervene_<name>.json | ✅ the 26th, added by `ATTRACTORS-PLAN.md` phase 4 — the only view that CHANGES the forward pass |
 
 > **Status source of truth:** `viewer/src/scene/interp/registry.ts` (rendered at
-> `/guide`). All **25 of 25** are live as of 2026-07-10; the per-row boxes above
-> are the original roadmap and the doc's numbering drifted from the shipped
-> `#n` ids — trust the registry.
+> `/guide`). All **25 of 25** were live as of 2026-07-10, and **#26 Steer Rail**
+> was added on 2026-09-12 by `docs/ATTRACTORS-PLAN.md` phase 4, making **26**;
+> the per-row boxes above are the original roadmap and the doc's numbering
+> drifted from the shipped `#n` ids — trust the registry.
+
+### #26 Steer Rail — the one view that changes the model
+
+Every other row in this table measures a model that was left alone. #26
+installs an inference-time hook, runs the model twice, and renders the distance
+between the two next-token distributions: `KL(baseline ‖ intervened)` in bits,
+computed in 64-bit over all 50,257 tokens at the final position. Four verbs are
+available (`nebulai intervene <model> {add,ablate,clamp,cap}`); the shipped
+bundle is `out/gpt2/interp/intervene_golden_gate.json`, a `clamp` of res-jb SAE
+feature 17840 to 120 at layer 7 (`blocks.8.hook_resid_pre` is the stream
+ENTERING block 8, i.e. the output of block 7 — that is the layer the hook fires
+at), swept over five strengths and three prompts.
+
+Three properties make it shippable rather than a demo:
+
+- **α = 0 is a control, and it is drawn.** At that strength no hook is installed
+  at all, and the producer refuses to write the file unless that row's logits
+  are bit-identical to the un-hooked baseline (`identical_to_baseline`, asserted
+  per row). The viewer draws that row at zero in its own colour rather than
+  omitting it, so "measured 0" and "not in the grid" never look the same.
+- **The claim contract is on the figure.** §2.4 of the attractors plan permits
+  exactly one causal sentence for intervention-backed views, in the
+  intervention's own terms; `SteerDriver` renders it as a card on the canvas and
+  `GuidePage` renders the contract on the card of every feature that sets
+  `intervenes`. Neither is a footer.
+- **D6: measure, never export.** No flag, endpoint or code path in this pipeline
+  writes a modified checkpoint, and `tests/test_intervene.py::test_no_weight_export`
+  fails if one is ever added.
+
+The shipped sweep is a negative result and is kept as one: feature 17840 reads
+the Golden Gate Bridge cleanly (peak 13.4–13.8 on five bridge prompts, exactly
+0.000 on eight controls) and steers it not at all — at full strength the
+teacher-forced score for " the Golden Gate Bridge" falls −10.32 → −21.44 while
+the control completion " the Brooklyn Bridge" falls only −13.15 → −16.14.
 
 Honesty caveats to surface in `/guide` and in-view:
 - **Tuned lens** here is a least-squares affine translator, not the full trained
@@ -87,7 +123,10 @@ Honesty caveats to surface in `/guide` and in-view:
   autograd; if grad·input is added, note the numpy backward pass.
 - **Grokking Clock** uses a *separately trained* toy transformer — it is NOT
   GPT-2; the view must say so (GPT-2 has no clean modular-arithmetic circuit).
-- **No causal claims** beyond what patching/ablation actually measures.
+- **No causal claims** beyond what patching/ablation actually measures — with one
+  amendment (§2.4 of `ATTRACTORS-PLAN.md`): a view that really installed a hook, and
+  shipped the α = 0 control beside it, may state what THAT intervention did under its
+  own protocol. It still may not state what a direction or feature *is*.
 
 ## Build order (loop milestones)
 1. ✅ Keystone: numpy GPT-2 forward + hooks, validated.

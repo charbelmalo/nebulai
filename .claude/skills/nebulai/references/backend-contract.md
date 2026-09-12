@@ -137,15 +137,19 @@ Noise → `noise_label="Unlabelled"`.
 
 ## Sidecars: channels + directions (never `nebulai.json`)
 
-`nebulai.json` is schema **v2** and stays there. Two later artifacts are written
-BESIDE it, aligned to it by point INDEX, and read independently by the viewer:
-a map with neither renders exactly as it always did.
+`nebulai.json` is schema **v2** and stays there. Later artifacts are written
+BESIDE it and read independently by the viewer: a map with none of them renders
+exactly as it always did. The first two are aligned to the map by point INDEX;
+the third (interventions) is not a per-point quantity at all and is keyed to
+nothing in the map — which is precisely why it lives in its own file.
 
 ```
 out/<model>/
   nebulai.json      # schema v2 — untouched by everything below
   channels.json     # backend/channels.py  — per-point scalars
   directions.json   # backend/directions.py — unit vectors + their nulls
+  interp/
+    intervene_<name>.json   # backend/interp/intervene.py — a hook that RAN
 ```
 
 ### `channels.json` (`backend/channels.py`)
@@ -220,6 +224,78 @@ CLI: `nebulai direction list | survey | add | make | prompts | project | drop`.
 behind every import refusal. `prompts` fits a direction on a frozen prompt set
 from `backend/prompt_sets.py` via `gpt2_numpy` residuals, for the case where
 nothing published is the right width.
+
+### `interp/intervene_<name>.json` (`backend/interp/intervene.py`)
+
+The third sidecar family, and the only one whose numbers come from a model that
+was **changed**. Everything else in this contract measures a model that was left
+alone; `nebulai intervene <model> {clamp,add,ablate,cap}` installs an
+inference-time hook, runs the same prompt twice, and exports the difference.
+
+```jsonc
+{ "kind": "intervention_sweep", "model": "gpt2", "verb": "clamp",
+  "n_layer": 12, "d_model": 768,
+  "alphas": [0.0, 0.25, 0.5, 0.75, 1.0],
+  "prompts": [ "…" ], "max_tokens": 16,
+  "rows": [ { "alpha": 0.0, "is_identity": true,
+              "protocol": "<exactly what was done, at this strength>",
+              "kl_bits_mean": 0.0, "kl_bits_max": 0.0,
+              "identical_to_baseline": true,        // asserted PER ROW
+              "runs": [ { "prompt": "…", "kl_bits": 0.0,
+                          "identical": true,
+                          "resid_norm_baseline": …, "resid_norm_intervened": …,
+                          "baseline":    { "text": …, "tokens": […], "logprobs": […] },
+                          "intervened":  { "text": …, "tokens": […], "logprobs": […] },
+                          "targets": [ { "text": " the Golden Gate Bridge",
+                                         "baseline_logprob": …,
+                                         "intervened_logprob": … } ] } ] } ],
+  "claim": "Under this protocol — … — the intervention changed the next-token "
+           "distribution by up to N bits of KL. That is a statement about what "
+           "this intervention did, not about what the direction is.",
+  "notes": { "decoding": …, "control": …, "d6": … },
+  "meta": { "revision": …, "digest": …, "hook_layer": 7,
+            "sae_repo": …, "sae_hook": "blocks.8.hook_resid_pre",
+            "sae_hook_layer": 8, "hook_layer_note": "…" } }
+```
+
+Five rules, four of them refusals:
+
+1. **α = 0 is a control and the producer will not write the file without it.**
+   At α = 0 NO hook is installed — not an identity hook, no hook at all — and
+   the resulting logits must be bit-identical to the un-hooked baseline.
+   `identical_to_baseline` asserts it per row; the CLI adds an α = 0 row if the
+   caller omitted one, printing *"a sweep without its control is a line, not a
+   result"*. This is the sharpest correctness test available for a hook harness
+   and it is run every time, not only in CI.
+2. **The layer arithmetic is written down, not inferred by the reader.** A
+   `resid.L8` direction fires at hook layer 8. An SAE tagged
+   `sae.L8.<repo>` hooks `blocks.8.hook_resid_pre`, which is the stream
+   *entering* block 8 — the output of block **7** — so its `hook_layer` is 7 and
+   `meta.hook_layer_note` says why. `sae.L0.*` → hook layer −1.
+3. **`clamp` rewrites only the difference the clamp makes** —
+   `x + α·(a_new − a_old)·W_dec[f]` — rather than re-encoding and decoding the
+   stream. These SAEs reconstruct at ≈0.9 cosine, and decoding wholesale would
+   apply the dictionary's reconstruction error as part of the "intervention".
+4. **D6 — measure, never export.** No flag, endpoint or code path in this
+   pipeline writes a modified checkpoint, and
+   `tests/test_intervene.py::test_no_weight_export` fails if one is added.
+5. **D3 / §2.4 — the bundle carries its own claim sentence.** It is generated
+   from the measured numbers in the intervention's own terms and is the ONLY
+   causal sentence this project permits. The viewer renders it verbatim; it
+   never restates it in stronger words, and never turns it into a sentence about
+   what the feature or direction *is*.
+
+KL is `KL(baseline ‖ intervened)` in bits over all 50,257 logits at the final
+position, computed in 64-bit. It says how far the distribution moved and nothing
+about whether it moved where you wanted — that is what `targets` (teacher-forced
+logprobs of fixed completions, before and after) is for, and it is exported even
+when it undercuts the headline. The shipped gpt2 sweep is exactly that case: SAE
+feature 17840 detects the Golden Gate Bridge cleanly and steers it not at all.
+
+Written to `out/<model>/interp/` beside the other bundles the viewer fetches,
+NOT to `out/<model>/`. Viewer: `loadIntervene()` in `data/interp.ts`,
+`scene/interp/steer.ts` (all arithmetic, GPU-free and unit-tested),
+`SteerDriver.ts` (the stage) and `chrome/SteerRail.tsx` (the text half).
 
 ## The rule for new pipelines
 

@@ -13,6 +13,7 @@
 
 import type { Selection as MapSelection } from "../app/slices/atlas";
 import { appStore, type InterpSelection } from "../app/store";
+import { selectSteer, type SteerCell } from "../scene/interp/steer";
 
 export interface TourStep {
   /** registry feature id to show. Omit for a step that lives on the Map page. */
@@ -21,6 +22,11 @@ export interface TourStep {
   trace?: string;
   /** cross-view selection to pin (applied via setInterpSelection) */
   selection?: InterpSelection;
+  /** which (alpha, prompt) cell of an intervention sweep this step is about.
+   *  Applied through the same `selectSteer` the slider calls, so an episode
+   *  step and a user drag leave the app in identical states — and so a caption
+   *  that quotes a cell's numbers is standing next to that cell. */
+  steer?: SteerCell;
 
   /* ── map-page steps (P5 episodes) ─────────────────────────────────────── */
   /** which page this step is told on; defaults to "interp" */
@@ -345,6 +351,9 @@ export function applyTourStep(tour: Tour, stepIdx: number): void {
     if (step.trace !== undefined) st.setInterpTrace(step.trace);
     st.setInterpSelection(step.selection ?? null);
   }
+  // Applied after the feature switch: the driver publishes its own opening
+  // selection while loading, and this must be the one that survives.
+  if (step.steer) selectSteer(step.steer);
   if (step.page === "map") {
     // `channel: undefined` means "leave the lens as the previous step set it";
     // `channel: null` means "put it away". They are different instructions and

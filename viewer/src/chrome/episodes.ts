@@ -500,3 +500,126 @@ export const ASSISTANT_AXIS: Tour = register({
     },
   ],
 });
+
+/* ── 7. Golden Gate GPT-2 ──────────────────────────────────────── */
+
+/** Episode #5 of the plan, and the only place in this app permitted a causal
+ *  sentence (D3 / §2.4). It is also a negative result, and it is kept as one.
+ *
+ *  Every KL figure, generation and target score quoted below was read out of
+ *  `out/gpt2/interp/intervene_golden_gate.json` (digest d5bd78a86091, revision
+ *  607a30d7), written by `nebulai intervene gpt2 clamp` over the open res-jb
+ *  SAE at `blocks.8.hook_resid_pre`. The activation figures in step 1 are the
+ *  feature search that chose 17840, printed by the same producer; they are the
+ *  one set of numbers here that the shipped bundle does not itself carry, and
+ *  they are named as the search's rather than the sweep's.
+ *
+ *  The story: a feature that READS the Golden Gate Bridge about as cleanly as
+ *  this dictionary allows turns out not to be a handle that WRITES it. Pinning
+ *  it on moves the model a long way — 3.421 bits — in a direction that is not
+ *  the bridge, and at full strength makes the aimed-at completion markedly LESS
+ *  likely than it was before. Anthropic's Golden Gate Claude used a frontier
+ *  model, a far larger dictionary and a tuned clamp; this is GPT-2 small with a
+ *  public 24k SAE, and the gap between them is the finding, not an excuse. */
+const GOLDEN_GATE_FEATURE = 17840;
+
+export const GOLDEN_GATE: Tour = register({
+  id: "golden-gate",
+  label: "Golden Gate GPT-2 (it does not work, and that is the result)",
+  blurb:
+    "One SAE feature reads the Golden Gate Bridge perfectly and steers it not at all. " +
+    "An intervention that really ran, with its no-hook control and the number that undercuts it.",
+  model: "gpt2",
+  manifest: {
+    dataset: "gpt2",
+    features: ["steer-rail"],
+    // the SAE the clamp is defined in — an activation in this dictionary, never
+    // a coordinate in the map's UMAP layout
+    space: "sae.L8.jbloom/GPT2-Small-SAEs-Reformatted",
+    unavailable:
+      "Needs out/gpt2/interp/intervene_golden_gate.json — `nebulai intervene gpt2 " +
+      "clamp --feature 17840 --value 120` with the res-jb SAE available.",
+  },
+  steps: [
+    {
+      feature: "steer-rail",
+      steer: { row: 0, col: 0 },
+      title: "A feature that reads the bridge",
+      caption:
+        `Feature ${GOLDEN_GATE_FEATURE} of the res-jb SAE peaks at 13.4–13.8 on five ` +
+        "Golden Gate Bridge prompts and at exactly 0.000 on all eight controls — the " +
+        "Brooklyn Bridge, the Bay Bridge, Tower Bridge, a Seattle harbour, the Eiffel " +
+        "Tower, San Francisco weather, a golden retriever and “the gate was locked”. " +
+        "As a detector that is about as clean as this dictionary gets. The cell selected " +
+        "here is α = 0: no hook was installed at all, and the producer refused to write " +
+        "the file until that row's logits came back bit-identical to the baseline. Both " +
+        "columns of the rail say the same sentence because the model did.",
+    },
+    {
+      feature: "steer-rail",
+      steer: { row: 1, col: 0 },
+      title: "A quarter of the way on, and already somewhere else",
+      caption:
+        "Pin the feature to 120 at a quarter strength and the next-token distribution " +
+        "moves 0.162 bits of KL on average, 0.319 at most. The teacher-forced score for " +
+        "“ the Golden Gate Bridge” does rise here, −10.32 → −9.90 — but " +
+        "“ the Brooklyn Bridge” rises further, −13.15 → −11.02. Whatever the clamp " +
+        "is doing at this strength, it is not specific to the bridge the feature detects. " +
+        "The text barely moves: “the Museum of Modern Art in New York City” is still " +
+        "there, with the sentence after it rearranged.",
+    },
+    {
+      feature: "steer-rail",
+      steer: { row: 3, col: 0 },
+      title: "Three quarters: the museum is gone",
+      caption:
+        "At α = 0.75 the mean is 1.359 bits and this cell is 2.322. “My favourite place " +
+        "to visit is” now continues “ with a great Park City, with a lot of people to " +
+        "choose.” The bridge is nowhere in it, and the score for “ the Golden Gate " +
+        "Bridge” has already fallen to −16.69 from −10.32 — while the Brooklyn control " +
+        "has hardly moved, −13.15 → −13.49. The sweep is monotone in KL (0.000, 0.162, " +
+        "0.621, 1.359, 2.360 mean bits) and monotone in the wrong direction for the claim " +
+        "the feature's name invites.",
+    },
+    {
+      feature: "steer-rail",
+      steer: { row: 4, col: 0 },
+      title: "Full strength: 3.4 bits, and the number that settles it",
+      caption:
+        "The largest cell in the sweep, 3.421 bits: “ the Museum of Modern Art in New " +
+        "York City” becomes “ with a kid or kid Park City.” And the score for " +
+        "“ the Golden Gate Bridge” collapses −10.32 → −21.44, while “ the Brooklyn " +
+        "Bridge” only falls −13.15 → −16.14. The intervention made the completion it " +
+        "was aimed at less likely than before, and hurt it five bits more than the " +
+        "completion it was supposed to be distinguished from. That is the whole result, " +
+        "and it is on the figure rather than in a footnote.",
+    },
+    {
+      feature: "steer-rail",
+      steer: { row: 4, col: 1 },
+      title: "Where a clamp stops steering and starts breaking",
+      caption:
+        "Same strength, second prompt. “Yesterday I went for a walk and saw” continues " +
+        "“ the Park City's Park City Showdown Showdown Showdown…” — a degenerate loop, at " +
+        "1.197 bits, less than half the KL of the first prompt. A large KL is not a " +
+        "successful steer and a small one is not a gentle one: KL measures how far the " +
+        "distribution moved, never whether it moved where you wanted. The target scores " +
+        "and the generated text are the only things in this figure that can answer that, " +
+        "which is why both are printed beside every cell.",
+    },
+    {
+      feature: "steer-rail",
+      steer: { row: 4, col: 2 },
+      title: "What may and may not be said about this",
+      caption:
+        "The sentence on the figure is the only causal claim this tool makes, and it is " +
+        "deliberately narrow: under this protocol — feature 17840 pinned to 120 at layer " +
+        "7, greedy decoding, five strengths — the intervention changed the next-token " +
+        "distribution by up to 3.421 bits. It is NOT a claim that feature 17840 is the " +
+        "Golden Gate Bridge, nor that GPT-2 represents the bridge there. Reading a " +
+        "concept and being the handle that writes it are different properties, and this " +
+        "sweep separates them. No weights were modified or written: every verb here is an " +
+        "inference-time hook.",
+    },
+  ],
+});

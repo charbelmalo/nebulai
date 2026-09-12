@@ -133,6 +133,12 @@ export const GUIDE_RESEARCH = {
     paper("Towards Best Practices of Activation Patching in Language Models", "Zhang and Nanda (2023)", "https://arxiv.org/abs/2309.16042"),
     paper("Eliciting Latent Predictions from Transformers with the Tuned Lens", "Belrose et al. (2023)", "https://arxiv.org/abs/2303.08112"),
   ],
+  "steer-rail": [
+    paper("Steering Language Models With Activation Engineering", "Turner et al. (2023)", "https://arxiv.org/abs/2308.10248"),
+    paper("Refusal in Language Models Is Mediated by a Single Direction", "Arditi et al. (2024)", "https://arxiv.org/abs/2406.11717"),
+    paper("Scaling Monosemanticity: Extracting Interpretable Features from Claude 3 Sonnet", "Templeton et al. (2024)", "https://transformer-circuits.pub/2024/scaling-monosemanticity/index.html"),
+    paper("Towards Best Practices of Activation Patching in Language Models", "Zhang and Nanda (2023)", "https://arxiv.org/abs/2309.16042"),
+  ],
 } satisfies Record<string, readonly ResearchPaper[]>;
 
 export type GuideResearchId = keyof typeof GUIDE_RESEARCH;

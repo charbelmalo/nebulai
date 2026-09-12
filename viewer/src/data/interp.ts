@@ -317,6 +317,101 @@ export interface PatchPair {
   r: number[];
 }
 
+/** An intervention sweep — the P4 curve bundle (`nebulai intervene`).
+ *
+ *  One verb (clamp / add / ablate / cap) run at a grid of alpha over a set of
+ *  prompts, with the baseline beside every intervened run. Two fields carry
+ *  the honesty of the whole figure and the driver must never drop them:
+ *
+ *  · `is_identity` + `identical_to_baseline` — the alpha = 0 row installed NO
+ *    hook, and the producer asserted bit-identity before writing the file. A
+ *    row that says `identical_to_baseline: false` while claiming to be the
+ *    identity is a broken harness, and the view says so rather than plotting it.
+ *  · `claim` — the one causal sentence the amended contract permits (§2.4). It
+ *    is rendered ON the figure, never in a footer, and it is generated from the
+ *    measured numbers rather than written by hand.
+ */
+export interface InterveneTarget {
+  text: string;
+  baseline_logprob: number;
+  intervened_logprob: number;
+}
+
+export interface InterveneSide {
+  /** top-8 next-token candidates at the final position: [token, probability] */
+  top: [string, number][];
+  text: string;
+  tokens: string[];
+  ids: number[];
+  logprobs: number[];
+  mean_logprob: number | null;
+  decoding: string;
+}
+
+export interface InterveneRun {
+  prompt: string;
+  intervention: {
+    verb: string;
+    layer: number | null;
+    alpha: number;
+    is_identity: boolean;
+    protocol: string;
+    direction_id?: string;
+    space?: string;
+    feature?: number;
+    sae_repo?: string;
+    sae_hook?: string;
+    value?: number;
+    lo?: number | null;
+    hi?: number | null;
+  };
+  /** logits bit-identical to the baseline's */
+  identical: boolean;
+  kl_bits: number;
+  resid_norm_baseline: number;
+  resid_norm_intervened: number;
+  baseline: InterveneSide;
+  intervened: InterveneSide;
+  targets?: InterveneTarget[];
+}
+
+export interface InterveneRow {
+  alpha: number;
+  is_identity: boolean;
+  protocol: string;
+  kl_bits_mean: number;
+  kl_bits_max: number;
+  identical_to_baseline: boolean;
+  runs: InterveneRun[];
+}
+
+export interface InterveneBundle {
+  kind: "intervention_sweep";
+  model: string;
+  verb: string;
+  n_layer: number;
+  d_model: number;
+  alphas: number[];
+  prompts: string[];
+  max_tokens: number;
+  rows: InterveneRow[];
+  claim: string;
+  notes: { decoding: string; control: string; d6: string };
+  meta: {
+    generated: string;
+    revision: string;
+    digest: string;
+    sae_repo?: string;
+    sae_hook?: string;
+    sae_hook_layer?: number;
+    hook_layer?: number;
+    hook_layer_note?: string;
+    direction?: { id: string; label: string; space: string; method: string; protocol: string };
+    layer_note?: string;
+    cap_note?: string;
+  };
+}
+
 export interface PatchBundle {
   meta: {
     model: string;
@@ -848,6 +943,15 @@ export const loadComp = (model: string, base = DATA_BASE) =>
 
 export const loadPatch = (model: string, base = DATA_BASE) =>
   fetchJSON<PatchBundle>(`${interpBase(model, base)}/patch.json`);
+
+/** The shipped intervention sweep. `name` selects which one — a model can have
+ *  several (one per verb / per experiment) and they are not interchangeable:
+ *  each carries its own protocol string and its own claim sentence. */
+export const loadIntervene = (
+  model: string,
+  name = "intervene_golden_gate",
+  base = DATA_BASE,
+) => fetchJSON<InterveneBundle>(`${interpBase(model, base)}/${name}.json`);
 
 export const loadInduction = (model: string, base = DATA_BASE) =>
   fetchJSON<InductionBundle>(`${interpBase(model, base)}/induction.json`);

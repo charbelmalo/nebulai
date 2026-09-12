@@ -374,7 +374,7 @@ uses: [`docs/OBSERVABILITY-SURFACE.md`](docs/OBSERVABILITY-SURFACE.md).
 - Raw token-embedding structure is partly frequency/orthography; mean-centering + cosine mitigate but don't remove that.
 - Cluster selection defaults to `leaf`, which deliberately over-fragments: `eom` collapses token maps into one mega-cluster. That choice raises the noise fraction *and* lowers seed stability, so read both numbers against the method (`nebulai validate` prints it).
 - **Weight geometry, not activations.** Every model-derived map here answers "what can this layer *write*", never "what did it write for prompt X". Reaching models over endpoints does not change that: the rows are read from the checkpoint, and the endpoint is only ever the namer. A map is evidence about the weights; the model that titled it is provenance.
-- This is a visualization + clustering tool over public micro models. No causal claims.
+- Visualization and clustering over public micro models. Causal claims only where an intervention was run, stated in the intervention's own terms — never about what a direction *is*. The one view that installs a hook (`#26`, `nebulai intervene`) ships its α = 0 no-hook control with every figure, and no code path in that pipeline can write a modified checkpoint (`tests/test_intervene.py::test_no_weight_export`).
 
 ## Roadmap
 

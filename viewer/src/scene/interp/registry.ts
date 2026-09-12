@@ -40,6 +40,7 @@ import { ResidualRibbonDriver } from "./ResidualRibbonDriver";
 import { SAEConstellationDriver } from "./SAEConstellationDriver";
 import { SAEPianoRollDriver } from "./SAEPianoRollDriver";
 import { SAEWebDriver } from "./SAEWebDriver";
+import { SteerDriver } from "./SteerDriver";
 import { WeightSpectrumDriver } from "./WeightSpectrumDriver";
 
 export const INTERP_FEATURES: InterpFeature[] = [
@@ -878,6 +879,72 @@ export const INTERP_FEATURES: InterpFeature[] = [
     legendCorner: "br",
     legendCollapsed: true,
     create: () => new TunedLensDriver(),
+  },
+  {
+    id: "steer-rail",
+    n: 26,
+    label: "What Changes When One Feature Is Forced On",
+    subtitle:
+      "A real intervention on GPT-2, swept from off to full, with its own no-hook control",
+    group: "forward",
+    blurb:
+      "Every other view on this page measures the model. This one changes it, " +
+      "then measures the difference. SAE feature 17840 is pinned to an " +
+      "activation of 120 in the stream entering block 8, at five strengths, on " +
+      "three prompts; each column is the distance between the next-token " +
+      "distribution with the hook and the same model without it. That feature " +
+      "was chosen because it reads the Golden Gate Bridge cleanly: it peaks at " +
+      "13.4-13.8 on five Golden Gate prompts and is exactly 0.000 on eight " +
+      "controls including the Brooklyn Bridge, the Bay Bridge, Tower Bridge and " +
+      "a golden retriever. Forcing it on does move the model: 3.421 bits of KL " +
+      "at full strength, and the continuation changes from \u201cthe Museum of " +
+      "Modern Art in New York City\u201d to text about a kid and Park City. It " +
+      "does not make GPT-2 talk about the bridge. The teacher-forced score for " +
+      "\u201c the Golden Gate Bridge\u201d falls from -10.32 to -21.44 while " +
+      "\u201c the Brooklyn Bridge\u201d falls only to -16.14, so at full " +
+      "strength the intervention damages the very completion it was aimed at. A " +
+      "feature that reads a concept reliably is not thereby a control that " +
+      "writes it, and this figure is kept because it shows that.",
+    math:
+      "Each column is KL(baseline \u2016 intervened) in bits between the two " +
+      "full 50,257-token next-token distributions at the final position, " +
+      "computed in 64-bit. The hook rewrites only the difference the clamp " +
+      "makes \u2014 x + \u03b1(a_new - a_old)\u00b7W_dec[f] \u2014 rather than " +
+      "re-encoding and decoding the stream, because this SAE reconstructs at " +
+      "about 0.9 cosine and decoding wholesale would apply its reconstruction " +
+      "error as part of the intervention. Strength \u03b1 = 0 installs no hook " +
+      "at all, and the producer refuses to write the file unless that row's " +
+      "logits are bit-identical to the un-hooked baseline. Height and color read " +
+      "the same linear normalization against this bundle's own maximum, which is " +
+      "printed on the height axis; nothing is interpolated between the measured " +
+      "strengths.",
+    source:
+      "out/<model>/interp/intervene_golden_gate.json, written by `nebulai " +
+      "intervene gpt2 clamp` (src/nebulai/backend/interp/intervene.py). The " +
+      "SAE is the open res-jb dictionary at blocks.8.hook_resid_pre, which is " +
+      "the stream entering block 8 \u2014 the output of block 7, and that is the " +
+      "layer the hook fires at. Weights are never modified or written: every " +
+      "verb is an inference-time hook, and tests/test_intervene.py asserts that " +
+      "no code path in this pipeline can export a checkpoint. Decoding is greedy, " +
+      "so the only difference between the two generations is the hook.",
+    legend: [
+      { label: "Gold: the largest measured change in this sweep", rgb: "250,208,112" },
+      { label: "Blue: a smaller measured change", rgb: "70,150,214" },
+      { label: "Grey floor row: \u03b1 = 0, no hook installed, verified identical", rgb: "118,126,158" },
+    ],
+    note:
+      "The \u03b1 = 0 row is the control and is drawn at zero rather than " +
+      "omitted. Five strengths are five columns: no curve is drawn through them, " +
+      "because nothing was measured in between. KL is a distance between " +
+      "distributions, not a measure of whether the change was the intended one " +
+      "\u2014 read the target scores in the hover for that.",
+    ownPrompts: true,
+    // the only view in the registry that changes the forward pass; this is what
+    // puts the amended claim contract (§2.4) on its guide card
+    intervenes: true,
+    legendCorner: "br",
+    legendCollapsed: true,
+    create: () => new SteerDriver(),
   },
   {
     id: "sae-decoder",

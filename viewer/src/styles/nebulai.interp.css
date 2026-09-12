@@ -1729,3 +1729,324 @@
   font-variant-numeric: tabular-nums;
 }
 
+
+/* ── #26 Steering Rail ─────────────────────────────────────────────────────
+   Two surfaces for one measurement: the ChartStage overlay (axis labels and
+   the D3 claim) and the DOM rail beside it (slider + the two generations).
+   The claim card is anchored ON the figure, top-left, because §2.4 requires
+   the causal sentence to travel with the picture — a footer can be cropped
+   out of a screenshot and the sentence cannot. */
+.interp-steer-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.interp-steer-claim {
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  right: 12px;
+  z-index: 4;
+  pointer-events: none;
+}
+.interp-steer-claim-card {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: min(680px, 100%);
+  padding: 7px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--hairline));
+  background: color-mix(in srgb, var(--bg-raise) 88%, transparent);
+  font: 400 11px/1.45 var(--font-ui);
+  color: var(--text-dim);
+  text-wrap: pretty;
+}
+/* A sweep whose control is not a control has no claim; the card turns into
+   the refusal and wears the danger colour so it cannot read as a caption. */
+.interp-steer-claim-card.is-broken {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--hairline));
+  color: var(--danger);
+}
+.interp-steer-claim-tag {
+  flex: none;
+  font: 650 9px/1 var(--font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.steer-rail {
+  position: absolute;
+  right: 14px;
+  top: 56px;
+  bottom: 14px;
+  z-index: 5;
+  width: min(392px, 44%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  overflow-y: auto;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--bg-raise) 94%, transparent);
+  box-shadow: var(--shadow-card);
+}
+@media (max-width: 900px) {
+  /* Below the narrow breakpoint the rail stops floating over the stage and
+     sits under it: two halves of one figure, stacked, rather than a panel
+     covering the columns it describes. */
+  .steer-rail {
+    position: static;
+    width: auto;
+    max-height: 46vh;
+    margin-top: 10px;
+  }
+}
+
+.steer-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.steer-title {
+  margin: 0;
+  font: 650 12px/1.2 var(--font-ui);
+  letter-spacing: 0.02em;
+  color: var(--text);
+  text-transform: none;
+}
+.steer-proto {
+  font: 400 10px/1.35 var(--font-mono);
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
+.steer-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.steer-prompt {
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-faint);
+  font: 500 10.5px/1.3 var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.steer-prompt.is-active {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--hairline));
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.steer-slider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.steer-slider input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+.steer-slider-k {
+  font: 500 10px/1 var(--font-mono);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+/* The ticks name every strength that was actually run — the slider steps by
+   index, so the handle can never rest between two of them. */
+.steer-ticks {
+  display: flex;
+  justify-content: space-between;
+  margin-top: -6px;
+  padding: 0 2px;
+  font: 500 9px/1 var(--font-mono);
+  color: var(--text-faint);
+}
+.steer-tick.is-active {
+  color: var(--data-hot);
+}
+.steer-tick.is-ctrl::after {
+  content: " ctrl";
+  letter-spacing: 0.04em;
+}
+
+.steer-gens {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+.steer-gen {
+  padding: 8px 10px;
+  border: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--bg-pill) 62%, transparent);
+}
+.steer-gen.is-steer {
+  border-color: color-mix(in srgb, var(--data-hot) 34%, var(--hairline));
+}
+.steer-gen-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.steer-gen-title {
+  font: 650 9px/1 var(--font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.steer-gen-sub {
+  margin-left: auto;
+  font: 500 9.5px/1 var(--font-mono);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.steer-gen-text {
+  margin: 0;
+  font: 400 11.5px/1.5 var(--font-mono);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+/* The prompt is the shared given; the shared continuation is dimmer still;
+   the divergence is the only bright text. The reader's eye should land on
+   the first place the two runs part. */
+.steer-gen-prompt {
+  color: var(--text-faint);
+}
+.steer-gen-same {
+  color: var(--text-faint);
+}
+.steer-gen-diff {
+  color: var(--text);
+}
+.steer-gen.is-steer .steer-gen-diff {
+  color: var(--data-hot);
+}
+
+.steer-targets {
+  width: 100%;
+  border-collapse: collapse;
+  font: 500 10px/1.3 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.steer-targets caption {
+  margin-bottom: 4px;
+  font: 400 9.5px/1.3 var(--font-ui);
+  color: var(--text-faint);
+  text-align: left;
+}
+.steer-targets th {
+  font-weight: 500;
+  color: var(--text-dim);
+  text-align: left;
+  padding: 2px 6px 2px 0;
+}
+.steer-targets td {
+  padding: 2px 0 2px 6px;
+  text-align: right;
+  color: var(--text-faint);
+}
+.steer-targets td.is-up {
+  color: var(--success);
+}
+.steer-targets td.is-down {
+  color: var(--danger);
+}
+
+.steer-facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.steer-facts div {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.steer-facts dt {
+  flex: none;
+  font: 400 9.5px/1.35 var(--font-ui);
+  color: var(--text-faint);
+}
+.steer-facts dd {
+  margin: 0 0 0 auto;
+  font: 500 10px/1.35 var(--font-mono);
+  color: var(--text-dim);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.steer-claim {
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+  font: 400 11px/1.5 var(--font-ui);
+  color: var(--text-dim);
+  text-wrap: pretty;
+}
+.steer-claim.is-broken {
+  color: var(--danger);
+}
+.steer-d6 {
+  margin: 0;
+  font: 400 9.5px/1.4 var(--font-ui);
+  color: var(--text-faint);
+}
+
+/* ── the claim contract on an intervention card (§2.4) ──────────────────────
+ *
+ *  Deliberately the loudest row on the card. Every other row explains how a
+ *  number was made; this one states what may be said with it, and the one place
+ *  it must never be is quiet. */
+.guide-card-claim {
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.guide-card-claimbody {
+  flex: 1;
+  min-width: 0;
+}
+.guide-card-claimlede {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+.guide-card-claimquote {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-left: 2px solid var(--accent);
+  background: var(--bg-pill);
+  font: 500 12px/1.6 var(--font-mono);
+  color: var(--text);
+}
+.guide-card-claimquote em {
+  font-style: italic;
+  color: var(--data-hot);
+}
+.guide-card-claimnote {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+.guide-card-claimnote strong {
+  color: var(--text);
+  font-weight: 650;
+}
+.guide-card-claimnote em {
+  font-style: italic;
+}

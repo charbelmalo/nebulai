@@ -65,6 +65,22 @@ The study may also report:
 - whether a selected cue's result is confirmed, suggestive, unstable,
   underpowered, or incomparable.
 
+**The intervention clause (added by `ATTRACTORS-PLAN.md` §2.4, decision D3).**
+A figure that actually changed the forward pass — not one that only measured it
+— may make exactly one further sentence, of exactly this shape:
+
+> Under protocol P, intervening on direction `d` at layer L changed behaviour B
+> from X to Y (n = …, seed = …).
+
+Three conditions, all of them necessary. The intervention must have run, with
+its measurements exported. A control must have run beside it — the α = 0 row
+that installs no hook and is asserted bit-identical to the baseline — and must
+be shown, not merely claimed. And the sentence is about what the intervention
+*did*: §1.2 below is unchanged, so `d` is still never "the refusal direction"
+or "the Golden Gate feature", but a direction extracted by method M from data D
+which, when intervened on, moved behaviour B. Nothing in this clause licenses a
+sentence about what a direction *is*.
+
 ### 1.2 What the feature must not claim
 
 The UI, export, and documentation must not say that:
