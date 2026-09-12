@@ -247,6 +247,52 @@ def test_the_draft_prompt_set_is_namespaced_and_stratified():
         assert set(p["strata"]) == axes, p["id"]
 
 
+def test_the_prompt_draft_does_not_claim_to_be_crossed():
+    """The design block has to keep describing the prompts, not the intention.
+
+    A stratified prompt set invites one specific self-deception: four named axes
+    look like a 3x2x2x2 design, and a between-prompt variance decomposition run
+    on them would report four main effects as though each were estimated from a
+    balanced set. It is not -- most prompts differ from the base along ONE axis,
+    two axes have four prompts on their off-level, and 14 of the 24 cells are
+    empty. So the file states that, and this test keeps the statement tied to
+    the data: every count in `design` is recomputed here, and a prompt added or
+    re-stratified without updating the block fails rather than quietly turning
+    the description into a wish.
+    """
+    d = json.loads((DOCS / "story-prompts.draft.json").read_text(encoding="utf-8"))
+    design = d["design"]
+    prompts = d["prompts"]
+    axis_names = list(d["axes"])
+
+    assert "NOT a full crossing" in design["kind"]
+    assert design["n_prompts"] == len(prompts)
+
+    # levels are declared, not inferred -- a level nobody wrote is still a cell
+    for ax, lvls in design["axis_levels"].items():
+        declared = [t.strip() for t in d["axes"][ax].rsplit(":", 1)[-1].split("|")]
+        assert lvls == declared, ax
+        assert {p["strata"][ax] for p in prompts} <= set(lvls), ax
+
+    for ax, counts in design["level_counts"].items():
+        for lv, n in counts.items():
+            got = sum(1 for p in prompts if p["strata"][ax] == lv)
+            assert got == n, f"{ax}={lv}: block says {n}, prompts say {got}"
+        assert sum(counts.values()) == len(prompts), ax
+
+    full = 1
+    for ax in axis_names:
+        full *= len(design["axis_levels"][ax])
+    occupied = {tuple(p["strata"][ax] for ax in axis_names) for p in prompts}
+    assert design["cells_of_full_crossing"] == full
+    assert design["cells_occupied"] == len(occupied)
+    # the claim that makes the honesty load-bearing: the set is sparse
+    assert len(occupied) < full
+
+    # the base prompt the star design is measured against must exist
+    assert any(p["id"] == design["base_prompt"] for p in prompts)
+
+
 # --------------------------------------------------------------------------
 # the annotation kit
 # --------------------------------------------------------------------------

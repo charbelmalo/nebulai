@@ -696,12 +696,25 @@ Each gate has a stop condition. A gate that cannot fail is not a gate.
    branch manufactures agreement. **This is a draft for a human to edit, not an
    instrument.** The plan's requirement that a human author the questions is
    not satisfied by this file; what the file removes is the blank page.
-2. Draft ~30 prompts. — **DRAFT landed 2026-09-11, same status.**
-   `docs/instruments/story-prompts.draft.json` holds 30 `draft_`-prefixed
-   prompts crossed over four preregistered axes — `constraint`
-   (open|moderate|specified), `frame` (none|named), `subject`
+2. Draft ~30 prompts. — **DRAFT landed 2026-09-11, same status; its design
+   claim corrected 2026-09-12.** `docs/instruments/story-prompts.draft.json`
+   holds 30 `draft_`-prefixed prompts stratified on four preregistered axes —
+   `constraint` (open|moderate|specified), `frame` (none|named), `subject`
    (domestic|remote), `length_cue` (absent|present) — so the prompt set can
-   carry a design rather than being thirty unrelated sentences.
+   carry a design rather than being thirty unrelated sentences. **It is a
+   one-factor-at-a-time (star) design, not a crossing, and an earlier version
+   of this line said "crossed", which was wrong.** Measured from the file:
+   `frame` and `length_cue` have 4 of 30 prompts on their off-level and
+   `subject` has 6, and **10 of the 24 cells of the full crossing are
+   occupied**. That supports a main-effect contrast against the base prompt
+   `draft_p01_open_domestic`; it supports no interaction and no per-axis
+   between-prompt variance component, because such a component would be
+   estimated from four cells. The file now carries a `design` block stating
+   this, and `tests/test_variance_agreement.py` recomputes every count in that
+   block from the prompts, so the description cannot drift back into a wish
+   when a prompt is added or re-stratified. The human who takes item 2 over
+   must choose: preregister main effects against the base only, or expand
+   toward the crossing first.
 3. Generate a **small** pilot set of stories for the gold set only. — **BLOCKED,
    not open.** This needs a paid generator, and there is no OpenRouter,
    Anthropic, OpenAI or xAI key on this machine. The local models available
