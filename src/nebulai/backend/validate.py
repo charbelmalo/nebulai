@@ -263,7 +263,34 @@ def null_baseline(
 # exactly, which is what makes this possible at all.
 
 
-def reload_units(meta: dict):
+def _is_sha(v: object) -> bool:
+    """A 40-hex commit, and nothing looser. `main` is not a pin — it moves."""
+    t = str(v or "").lower()
+    return len(t) == 40 and all(c in "0123456789abcdef" for c in t)
+
+
+def _local_repo(meta: dict) -> str:
+    """The encoder's fully-qualified repo id.
+
+    `embed_model` is whatever the build was *called* with, and the shipped
+    artifacts call it `all-MiniLM-L6-v2` — a display name, not a repo: there is
+    no such id on the Hub without its org. So a bare name is resolved through
+    the pin table, and only a name that already carries an org is passed
+    through. The `@sha` suffix is dropped either way; the sha comes back from
+    `embed_revision`, which is the one that was actually used.
+    """
+    raw = str(meta.get("embed_model") or "").split("@", 1)[0]
+    if raw and "/" not in raw:
+        from .embed import resolve_local_embed_model
+
+        try:
+            return resolve_local_embed_model(raw)[0]
+        except ValueError:
+            return raw
+    return raw
+
+
+def reload_units(meta: dict, out_root=None):
     """Re-run the front-end that built this map, from its stamped meta.
 
     Returns a `Units`. Raises with a specific reason when the map cannot be
@@ -282,15 +309,47 @@ def reload_units(meta: dict):
         # whether or not the original build capped the vocab.
         return load_token_units(meta["model"], center=centered, max_tokens=kept)
 
+    if unit == "token_unembedding":
+        from ..frontends.tokens import load_token_units
+
+        # Same front-end, the other matrix: `which="output"` reads lm_head rows
+        # instead of embedding rows. This branch is separate from the W_E one
+        # above rather than folded into it because it MUST pass the pinned
+        # revision and the remote flag. W_U maps are built from large untied
+        # checkpoints over HTTP range reads, and `curated_vocab` is keyed on the
+        # tokenizer at a specific commit: replaying against "main" would silently
+        # score a different vocabulary the day the repo moves. The W_E branch is
+        # left byte-identical so no existing map's numbers shift.
+        return load_token_units(
+            meta["model"],
+            center=centered,
+            max_tokens=kept,
+            revision=str(meta.get("revision") or "main"),
+            remote=True if meta.get("source") == "remote-range" else None,
+            which=str(meta.get("which") or "output"),
+        )
+
     if unit.startswith("mlp_neuron"):
         from ..frontends.neurons import load_neuron_units
 
+        # `revision`, `remote` and `expert` are forwarded for the same reason
+        # the W_U branch above forwards them, and the reason is not symmetry.
+        # A neuron map built over HTTP ranges against a pinned 24 GB checkpoint
+        # replayed at "main" would either score a different commit's weights or
+        # decide to download the whole repo to do it; an MoE layer replayed
+        # without its `expert` raises deep inside the loader with a message
+        # about ambiguous tensor keys rather than about the map. None of that
+        # is caught by `validate_map`'s length guard: a different commit's
+        # `down_proj` has exactly the same number of rows.
         return load_neuron_units(
             meta["model_repo"],
             layer=int(meta["layer"]),
             max_neurons=kept,
             center=centered,
             labels_source=str(meta.get("labels_source", "none")),
+            revision=str(meta.get("revision") or "main"),
+            remote=True if meta.get("source") == "remote-range" else None,
+            expert=meta.get("expert"),
         )
 
     if unit.startswith("sae_decoder"):
@@ -305,11 +364,39 @@ def reload_units(meta: dict):
         )
 
     if unit.startswith("api_text_embedding"):
+        # One unit type, two answers, and the split is about REPRODUCIBILITY
+        # rather than about the unit — so the refusal lifts exactly where
+        # reproducibility is recoverable. An encoder that ran *in this process*
+        # at a pinned commit is as replayable as a weight matrix: same repo,
+        # same 40-hex sha, same fp32 CPU path, same seed, and `meta` carries
+        # both strings. A hosted encoder never can — whatever answered the
+        # socket is not addressable afterwards, and "the same model name" is
+        # not the same weights.
+        if str(meta.get("embed_api")) == "local" and _is_sha(meta.get("embed_revision")):
+            from pathlib import Path
+
+            from ..frontends.api_tokens import load_api_token_units
+
+            return load_api_token_units(
+                model_id=meta["model"],
+                embed_host=str(meta.get("embed_host") or ""),
+                # the DISPLAY name, exactly as the build used it, so the
+                # reload lands on this map's own embed cache rather than
+                # forking a second directory named after the commit
+                embed_model=str(meta.get("embed_model") or ""),
+                embed_revision=str(meta["embed_revision"]),
+                api="local",
+                center=centered,
+                max_tokens=int(kept),
+                out_root=Path(out_root) if out_root is not None else Path("out"),
+            )
         raise ValueError(
             "api_text_embedding maps cannot be revalidated offline: the vectors "
             f"came from a live embedding service ({meta.get('embed_model')} @ "
             f"{meta.get('embed_host')}) and are not reproducible from meta. "
-            "Re-run the build against a reachable host to validate this map."
+            "Rebuild with `--embed-api local`, which runs a commit-pinned "
+            "encoder in this process and stamps the commit, to get a map that "
+            "can be validated."
         )
 
     if unit.startswith("probe_concept"):
@@ -371,7 +458,7 @@ def validate_map(
         )
     u_cluster = np.load(npz)["u_cluster"]
 
-    units = reload_units(meta)
+    units = reload_units(meta, out_root=dataset_dir.parent)
     vectors = units.vectors
     if len(vectors) != len(u_cluster):
         raise ValueError(

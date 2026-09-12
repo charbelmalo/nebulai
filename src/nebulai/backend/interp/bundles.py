@@ -33,6 +33,7 @@ import json
 import re
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -143,14 +144,50 @@ def compute_fourier(m: GPT2Numpy) -> dict:
     }
 
 
-def _pca_rows(rows: np.ndarray, dims: int) -> tuple[np.ndarray, np.ndarray, float]:
+class PCAFit(NamedTuple):
+    """An exact PCA fit, including the transform itself.
+
+    `coords`/`evr`/`total_var` are what the Internals constellations have always
+    consumed; `mean` and `axes` are the *transform* — the two arrays that make
+    the projection reproducible out-of-sample. Kept as a NamedTuple so the
+    historical 3-tuple unpacking still reads the same three values in the same
+    order, and adding the transform costs no caller a rename.
+    """
+
+    coords: np.ndarray  # (n, dims) PC scores
+    evr: np.ndarray  # (dims,) explained-variance ratio per PC
+    total_var: float  # trace of the covariance (sum of all eigenvalues)
+    mean: np.ndarray  # (d,) row mean subtracted before projection
+    axes: np.ndarray  # (d, dims) orthonormal principal axes
+
+
+def pca_transform(rows: np.ndarray, mean: np.ndarray, axes: np.ndarray) -> np.ndarray:
+    """Place rows into an ALREADY-FITTED PCA space: `(x - mean) @ axes`.
+
+    This is the whole point of `PCAFit` carrying `mean`/`axes`: a point added
+    after the fit lands in the same coordinate system instead of moving every
+    published coordinate by forcing a refit. `reduce_vectors` cannot offer this
+    (UMAP's fit is discarded and a re-fit rearranges everything non-linearly),
+    which is exactly why a fixed, permalinkable landscape has to be linear.
+    """
+    R = np.asarray(rows, dtype=np.float64)
+    if R.ndim == 1:
+        R = R[None, :]
+    return (R - np.asarray(mean, dtype=np.float64)) @ np.asarray(axes, dtype=np.float64)
+
+
+def _pca_rows(rows: np.ndarray, dims: int) -> PCAFit:
     """Exact PCA of a row matrix via the (d×d) covariance eigendecomposition —
-    float64, deterministic axis signs (largest-|loading| positive). Returns
-    (coords (n,dims) PC scores, explained-variance ratio per PC, total variance).
-    Shared by compute_embed / compute_neurons / compute_sae so the three
-    constellations are the SAME math on different row sets."""
+    float64, deterministic axis signs (largest-|loading| positive). Returns a
+    `PCAFit`: (coords (n,dims) PC scores, explained-variance ratio per PC,
+    total variance, row mean, principal axes). Shared by compute_embed /
+    compute_neurons / compute_sae so the three constellations are the SAME math
+    on different row sets — and by the Behavior cue landscape, which persists
+    `mean`/`axes` so later cues can be placed with `pca_transform` rather than
+    by refitting (a refit would move every already-published cue)."""
     R = rows.astype(np.float64)
-    Rc = R - R.mean(axis=0)
+    mean = R.mean(axis=0)
+    Rc = R - mean
     cov = Rc.T @ Rc
     evals, evecs = np.linalg.eigh(cov)
     order = np.argsort(evals)[::-1]
@@ -163,7 +200,7 @@ def _pca_rows(rows: np.ndarray, dims: int) -> tuple[np.ndarray, np.ndarray, floa
             axes[:, j] = -axes[:, j]
     coords = Rc @ axes
     evr = evals[:dims] / evals.sum()
-    return coords, evr, float(evals.sum())
+    return PCAFit(coords, evr, float(evals.sum()), mean, axes)
 
 
 def _unembed_readout(
@@ -216,7 +253,8 @@ def compute_embed(m: GPT2Numpy, dims: int = 3) -> dict:
     above are centred; these two are not, and `space: "W_E.raw"` on the exported
     channel is what keeps the two from ever being plotted against each other.
     """
-    coords, evr, total_var = _pca_rows(m.wte, dims)  # (V, dims) exact PC scores
+    fit = _pca_rows(m.wte, dims)  # (V, dims) exact PC scores + the transform
+    coords, evr, total_var = fit.coords, fit.evr, fit.total_var
     W64 = m.wte.astype(np.float64)
     norms = np.linalg.norm(W64, axis=1)  # exact per-token magnitude (RAW rows)
     centroid_dist = np.linalg.norm(W64 - W64.mean(axis=0), axis=1)  # RAW, uncentred
@@ -258,6 +296,13 @@ def compute_embed(m: GPT2Numpy, dims: int = 3) -> dict:
         "dims": dims,
         "explained_variance_ratio": [round(float(x), 5) for x in evr],
         "total_variance": round(total_var, 3),
+        # the transform itself, so a row not in this fit can be placed later
+        # with (x - pca_mean) @ pca_axes instead of a refit that would move
+        # every coordinate already published. pca_axes is flat, AXIS-MAJOR:
+        # pca_axes_shape = [dims, d], so axis j is pca_axes[j*d:(j+1)*d]
+        "pca_mean": [round(float(v), 6) for v in fit.mean],
+        "pca_axes": [round(float(v), 6) for v in fit.axes.T.reshape(-1)],
+        "pca_axes_shape": [int(fit.axes.shape[1]), int(fit.axes.shape[0])],
         "coords": [round(float(v), 3) for v in xy],  # flat 2N (PC1, PC2)
         "z": [round(float(v), 3) for v in z],  # PC3 (hover only)
         "norm": [round(float(v), 3) for v in norms],
@@ -296,7 +341,8 @@ def compute_neurons(m: GPT2Numpy, dims: int = 3) -> dict:
     rows32 = np.concatenate(blocks, axis=0)  # (n_layer*d_mlp, d) float32
     n = rows32.shape[0]
 
-    coords, evr, total_var = _pca_rows(rows32, dims)
+    fit = _pca_rows(rows32, dims)
+    coords, evr, total_var = fit.coords, fit.evr, fit.total_var
     norms = np.linalg.norm(rows32.astype(np.float64), axis=1)  # exact ‖w_out‖₂
     top_tok, top_val, bot_tok, bot_val = _unembed_readout(rows32, m)
 
@@ -323,6 +369,13 @@ def compute_neurons(m: GPT2Numpy, dims: int = 3) -> dict:
         "dims": dims,
         "explained_variance_ratio": [round(float(x), 5) for x in evr],
         "total_variance": round(total_var, 3),
+        # the transform itself, so a row not in this fit can be placed later
+        # with (x - pca_mean) @ pca_axes instead of a refit that would move
+        # every coordinate already published. pca_axes is flat, AXIS-MAJOR:
+        # pca_axes_shape = [dims, d], so axis j is pca_axes[j*d:(j+1)*d]
+        "pca_mean": [round(float(v), 6) for v in fit.mean],
+        "pca_axes": [round(float(v), 6) for v in fit.axes.T.reshape(-1)],
+        "pca_axes_shape": [int(fit.axes.shape[1]), int(fit.axes.shape[0])],
         "coords": [round(float(x), 3) for x in xy],  # flat 2n (PC1, PC2)
         "z": [round(float(x), 3) for x in z],  # PC3 (hover only)
         "norm": [round(float(x), 3) for x in norms],
@@ -373,7 +426,8 @@ def compute_sae(m: GPT2Numpy, repo: str = SAE_REPO, hook: str = SAE_HOOK, dims: 
     sparsity = sp["sparsity"].astype(np.float64)  # log10 firing fraction
     assert sparsity.shape == (d_sae,), f"sparsity shape {sparsity.shape} != ({d_sae},)"
 
-    coords, evr, total_var = _pca_rows(W_dec, dims)
+    fit = _pca_rows(W_dec, dims)
+    coords, evr, total_var = fit.coords, fit.evr, fit.total_var
     norms = np.linalg.norm(W_dec.astype(np.float64), axis=1)  # exact ‖W_dec[i]‖₂
     top_tok, top_val, bot_tok, bot_val = _unembed_readout(W_dec.astype(np.float32), m)
 
@@ -405,6 +459,13 @@ def compute_sae(m: GPT2Numpy, repo: str = SAE_REPO, hook: str = SAE_HOOK, dims: 
         "dims": dims,
         "explained_variance_ratio": [round(float(x), 5) for x in evr],
         "total_variance": round(total_var, 3),
+        # the transform itself, so a row not in this fit can be placed later
+        # with (x - pca_mean) @ pca_axes instead of a refit that would move
+        # every coordinate already published. pca_axes is flat, AXIS-MAJOR:
+        # pca_axes_shape = [dims, d], so axis j is pca_axes[j*d:(j+1)*d]
+        "pca_mean": [round(float(v), 6) for v in fit.mean],
+        "pca_axes": [round(float(v), 6) for v in fit.axes.T.reshape(-1)],
+        "pca_axes_shape": [int(fit.axes.shape[1]), int(fit.axes.shape[0])],
         "coords": [round(float(x), 3) for x in xy],  # flat 2n (PC1, PC2)
         "z": [round(float(x), 3) for x in z],  # PC3 (hover only)
         "norm": [round(float(x), 4) for x in norms],

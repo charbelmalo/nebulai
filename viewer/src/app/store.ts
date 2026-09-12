@@ -39,6 +39,7 @@
 import { createStore } from "zustand/vanilla";
 import { createAppearanceSlice, type AppearanceSlice } from "./slices/appearance";
 import { createAtlasSlice, type AtlasSlice } from "./slices/atlas";
+import { createBehaviorSlice, type BehaviorSlice } from "./slices/behavior";
 import { createInterpSlice, type InterpSlice } from "./slices/interp";
 import { createProbingSlice, type ProbingSlice } from "./slices/probing";
 import { createSeerSlice, type SeerSlice } from "./slices/seer";
@@ -49,6 +50,7 @@ import { createSnapshotSlice, type SnapshotSlice } from "./slices/snapshot";
 export interface AppState
   extends ShellSlice,
     AtlasSlice,
+    BehaviorSlice,
     InterpSlice,
     ProbingSlice,
     AppearanceSlice,
@@ -59,6 +61,7 @@ export interface AppState
 export const appStore = createStore<AppState>()((...a) => ({
   ...createShellSlice(...a),
   ...createAtlasSlice(...a),
+  ...createBehaviorSlice(...a),
   ...createInterpSlice(...a),
   ...createProbingSlice(...a),
   ...createAppearanceSlice(...a),
@@ -89,6 +92,12 @@ export type {
   Toggles,
   ViewMode,
 } from "./slices/atlas";
+export type {
+  BehaviorFilter,
+  BehaviorSlice,
+  BehaviorUI,
+  BehaviorView,
+} from "./slices/behavior";
 export type { InterpSelection, InterpSlice, InterpUI, TourRef } from "./slices/interp";
 export type { BuildParams, ProbeStage, Probing, ProbingSlice, Progress } from "./slices/probing";
 export type { Appearance, AppearanceSlice } from "./slices/appearance";

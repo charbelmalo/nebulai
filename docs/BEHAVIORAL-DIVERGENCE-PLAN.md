@@ -927,6 +927,68 @@ partial failure is informative too: if GPT-2 fails the control where Grok passes
 that is the capability confound of §4.2.1 showing up in the most direct possible
 form, measured before a single expensive trial is spent.
 
+**Measured 2026-09-12 — both local arms FAIL the gate.** Study
+`positive-control-2026-09-12` (manifest
+`sha256:6878ecb9717b15339fae8ec0a54112e40885b118d09712bff23f13326092be26`), four
+control cues (`cat`, `hot`, `king`, `salt`) × four frames × two arms, run locally
+on CPU in fp32 with no API key involved and zero spend. Report:
+`out/behavior/positive-control-2026-09-12/calibration.md`, 120 trials.
+
+| arm | model | valid control trials | attempted | hits | pass rate | gate @ 0.50 |
+|---|---|---:|---:|---:|---:|---|
+| `cap_small` | GPT-2 small (124M) | 20 | 54 | 2 | **0.1000** | **FAIL** |
+| `cap_xl` | GPT-2 XL (1.5B) | 43 | 66 | 9 | **0.2093** | **FAIL** |
+
+Per cue, hits/valid (`cap_small` → `cap_xl`): `cat` 0/4 → 4/14 · `hot` 2/6 →
+2/9 · `king` 0/5 → 1/10 · `salt` 0/5 → 2/10.
+
+Read the denominators, not just the rates. Of 120 trials, **57 were invalid for
+`too_few` alone** — fewer than three associates survived parsing (`cap_small` 34,
+`cap_xl` 23) — so each pass rate is computed over the minority of trials that
+produced a parseable association list at all. The collection is also partial: the
+frozen design is 20 cues × 24 trials × 4 blocks × 4 frames × 2 models, this run
+was capped with `--cue-limit 4` to 192 intended trials, and 120 of those landed
+before the run was stopped (the machine was in 12.9 GB of swap with two sibling
+agents working, and fp32 GPT-2-XL was paging at roughly two minutes per trial).
+The remaining 72 trials are **not collected**, not zero. A larger denominator
+could move the rates; it cannot move them across the threshold without almost
+every remaining trial being a hit.
+
+Four consequences, recorded so they are not re-litigated:
+
+1. **No Δ̂ computed from these two arms is interpretable as a divergence in word
+   association.** The gate is not advisory. The capability study
+   (`capability-control-2026-09-12`) reached the same conclusion from the other
+   direction without being told this result: its two analysed cues read
+   `insufficient evidence` (`freedom`, Δ̂ 0.222, 10/14 valid — below the
+   20-valid-trial minimum, with the worst-case bound over unparsed trials
+   spanning the effect floor) and `incomparable` (`water`, Δ̂ 0.130, parse rates
+   0.38 vs 0.79, differing by more than the 0.25 ceiling). The pipeline's own
+   gates and this control agree.
+2. **The §4.2.1 capability confound is measured here, not hypothesised.** A 12×
+   parameter difference produced a 2.1× difference in control recovery between
+   two arms given identical prompts, identical frames, identical parsing and
+   identical seeds. Any two-arm comparison across a capability gap inherits
+   this, and the direction (bigger model, higher recovery) is the direction that
+   would be read as "diverges less" by anyone who skipped the control.
+3. **The failure is predominantly formatting and instruction-following, not an
+   absent association network.** `too_few` is the only invalid reason in the
+   whole store; base GPT-2 checkpoints are not instruction-tuned and frequently
+   continue the prompt rather than answering it. That is a statement about what a
+   base LM emits under these frames, and it is exactly why the control exists:
+   without it the resulting near-empty association sets would have been analysed
+   as a *small* divergence rather than as *no measurement*.
+4. **`hot` is the only cue either arm recovers at all on the small model**, at
+   0.333 — consistent with `hot → cold` being the single most overlearned
+   antonym pair in English text, and with nothing else in the pack being
+   recoverable without following an instruction.
+
+A passing arm still has to be demonstrated. The honest status of the instrument
+today is: **validated as a gate** — it fired, on real outputs, before any paid
+trial was spent — and **not yet validated as an instrument**, because no arm
+available in this environment clears it. Clearing it needs either an
+instruction-tuned local model or the paid arm of §5.3, and neither exists here.
+
 ---
 
 ## 7. Visualization contract
@@ -1189,6 +1251,25 @@ divergence** share no word, so nothing confirms to a user that they arrived wher
 they clicked. The title is therefore **“Behavior — semantic divergence”**, which
 keeps the pill's promise honest and still names the analysis. The reasoning above
 is preserved exactly; only the shared token is added.
+
+> **Contention with the generative-variance study, resolved 2026-09-11.**
+> `GENERATIVE-VARIANCE-PLAN.md` §9 had also reasoned its way toward a page in
+> this shell, so for a while two studies were pointing at one unbuilt pill.
+> The pill went to this study, and this study has now built it:
+> `APP_PAGES.nebulai` is `["map", "behavior", "interp", "guide"]`, `shell.ts`'s
+> `Page` union gained `"behavior"`, and `app-pages.test.ts` pins seven pages
+> with the partition, boot-pill and no-orphan invariants intact.
+>
+> The reason is not seniority. W1 (generative variance) reports a **ranked
+> table of questions by variance contribution**, which is a table; this study
+> reports per-cue effects with uncertainty over a fixed landscape, which needs
+> a plotted surface, a cue inspector, per-run provenance and an approval path
+> for paid work. W1 therefore gets **no page and no pill** and ships a CLI
+> report plus a static JSON artifact — recorded on the other side too, in
+> `GENERATIVE-VARIANCE-PLAN.md` §9, so the two plans cannot come to disagree
+> about what was decided. The A10 blocker W1 named (`_pca_rows` discarding the
+> fit) was fixed anyway, because this page needed it; that closes the blocker
+> and leaves W1's own n≈40 objection to a projection standing untouched.
 
 ### 8.2 Progressive-disclosure layout
 
@@ -1621,6 +1702,20 @@ Deliver:
 Gate:
 
 - interruption/resume produces no duplicate completed trials;
+- **a second runner on one store is refused, not tolerated.** Added
+  2026-09-12 after measuring the failure: four `behavior run` processes were
+  alive on `out/behavior/positive-control-2026-09-12/trials.sqlite` at the same
+  time, each at ~40% of a core, and the row count did not move for half an hour.
+  Resumption was working exactly as specified — each process re-derived the same
+  remaining schedule, generated the same trials, and lost the `INSERT OR IGNORE`
+  race for each one — so nothing was corrupted, nothing was double-billed, and
+  nothing progressed. The gate above is silent about this because it only asks
+  about *sequential* interruption and resume, which is why the gap survived a
+  test suite that tests resumption with a real `SIGKILL`. `TrialStore.claim_writer`
+  now takes a single-writer lock (pid + host + heartbeat, claimed under
+  `BEGIN IMMEDIATE`) and `Runner.run` holds it for the duration of an arm,
+  releasing on every exit path including a raise; `--force-unlock` exists for a
+  holder a human has confirmed is dead and is never inferred;
 - requested/served identities are present on every API trial;
   `system_fingerprint` is captured **when the provider populates it** and its
   availability is recorded once in the manifest — an absent field never fails a

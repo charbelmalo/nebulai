@@ -16,7 +16,7 @@
  *  inequality means "actually changed" and skipping on equality is what keeps
  *  an unrelated `set` from waking every subscriber of every signal.
  *
- *  One seam the split introduced: the eight state modules each take their own
+ *  One seam the split introduced: the state modules each take their own
  *  `appStore.getState()` snapshot to seed their signals, where the single file
  *  they came from took one snapshot for all of them. That is equivalent today —
  *  module evaluation is synchronous, nothing writes the store at import time,
@@ -28,6 +28,7 @@
 
 import { appStore } from "../../app/store";
 import { $appearance } from "./appearance";
+import { $behavior } from "./behavior";
 import {
   $axis,
   $channel,
@@ -72,6 +73,7 @@ appStore.subscribe((st) => {
   if (st.page !== $page.value) $page.value = st.page;
   if (st.snapshot !== $snapshot.value) $snapshot.value = st.snapshot;
   if (st.sessions !== $sessions.value) $sessions.value = st.sessions;
+  if (st.behavior !== $behavior.value) $behavior.value = st.behavior;
   if (st.interp !== $interp.value) $interp.value = st.interp;
   if (st.interpSelection !== $interpSelection.value)
     $interpSelection.value = st.interpSelection;

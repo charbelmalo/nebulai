@@ -75,9 +75,17 @@ def _run_tokens(args: argparse.Namespace) -> None:
     if args.source == "api":
         from .frontends.api_tokens import load_api_token_units
 
+        # Same rule as `compare`: an in-process encoder has no endpoint, so
+        # never resolve one — a discovery probe would fire and a LAN address
+        # would end up stamped into an artifact that never touched it.
+        from .backend import embed as _embed_mod
+
+        api_embed_host = (
+            _embed_mod.LOCAL_EMBED_HOST if args.embed_api == "local" else args.embed_host
+        )
         units = load_api_token_units(
             args.model,
-            embed_host=args.embed_host,
+            embed_host=api_embed_host,
             embed_model=args.embed_model,
             api=args.embed_api,
             api_key=os.environ.get("EMBED_API_KEY") or os.environ.get("OPENAI_API_KEY"),
@@ -87,7 +95,7 @@ def _run_tokens(args: argparse.Namespace) -> None:
         )
         print(
             f"[1/5] loaded {len(units)} token units from {args.model} via "
-            f"{args.embed_model}@{args.embed_host} — api text embeddings, "
+            f"{args.embed_model}@{units.meta['embed_host']} — api text embeddings, "
             f"NOT model-internal geometry (vocab {units.meta['vocab_size']}, "
             f"curated to {units.meta['kept']}) [{t()}]"
         )
@@ -1733,6 +1741,69 @@ def _run_rename(args: argparse.Namespace) -> None:
         print(f"  {r['id']:<52} {r['was']} -> {r['namer']}")
 
 
+def _run_route_b(args: argparse.Namespace, out_root: Path) -> None:
+    """`nebulai compare --route-b A B` — the raw-geometry alignment test.
+
+    Deliberately a mode of `compare` rather than its own verb: it answers the
+    same question ("how do these two models relate?") from the other end, and
+    keeping the two under one command is what makes the *choice* between them
+    visible. Route A works across tokenizers and never touches raw geometry;
+    Route B needs a shared tokenizer and touches nothing else.
+    """
+    from .backend.compare import RouteBError, route_b_procrustes
+
+    if len(args.models) != 2:
+        raise SystemExit(
+            f"--route-b takes exactly two models, got {len(args.models)}. A "
+            f"Procrustes alignment is defined between a pair; averaging several "
+            f"pairwise residuals into one figure would hide which pair aligned."
+        )
+    t = _timer()
+    try:
+        rep = route_b_procrustes(
+            args.models[0],
+            args.models[1],
+            max_tokens=args.route_b_max_tokens,
+            n_permutations=args.route_b_permutations,
+            holdout_fraction=args.route_b_holdout,
+            seed=args.seed,
+        )
+    except RouteBError as e:
+        raise SystemExit(f"route B refused this pair:\n  {e}") from e
+
+    cmp_dir = out_root / "compare"
+    cmp_dir.mkdir(parents=True, exist_ok=True)
+    slug = f"{args.models[0]}__{args.models[1]}".replace("/", "__")
+    path = cmp_dir / f"route_b__{slug}.json"
+    path.write_text(json.dumps(rep, indent=1), encoding="utf-8")
+
+    kind = "rotation" if rep["square_rotation"] else "semi-orthogonal projection"
+    print(f"  route B: {rep['model_a']} -> {rep['model_b']}  ({kind}) [{t()}]")
+    print(
+        f"    shared tokens      {rep['n_shared_tokens']} "
+        f"({rep['vocab_overlap']:.1%} of the larger vocabulary); "
+        f"{rep['dim_a']}d -> {rep['dim_b']}d"
+    )
+    print(f"    residual (fit)     {rep['residual_fit']:.4f} on {rep['n_fit']} tokens")
+    print(
+        f"    residual (held-out) {rep['residual_heldout']:.4f} on "
+        f"{rep['n_heldout']} tokens   <- the number that means something"
+    )
+    if rep["null_residual_mean"] is not None:
+        print(
+            f"    permutation null    mean {rep['null_residual_mean']:.4f}, "
+            f"best {rep['null_residual_min']:.4f} over "
+            f"{rep['n_permutations_effective']} shuffles"
+        )
+    print(f"    p                   {rep['p_value']}")
+    print(f"  wrote {path}")
+    print(
+        "\n  This says whether two models arrange a shared vocabulary the same "
+        "way up to a change of basis.\n  It says nothing about behaviour, and "
+        "it ranks neither model."
+    )
+
+
 def _run_compare(args: argparse.Namespace) -> None:
     import os
 
@@ -1741,6 +1812,10 @@ def _run_compare(args: argparse.Namespace) -> None:
     from .backend.viewer import write_viewer
 
     out_root = Path(args.out)
+
+    if getattr(args, "route_b", False):
+        _run_route_b(args, out_root)
+        return
 
     # `all` is not a convenience — hand-listing eleven dataset ids is how a
     # comparison silently ends up missing the front-ends it exists to contrast
@@ -1778,11 +1853,17 @@ def _run_compare(args: argparse.Namespace) -> None:
     # resolve_embed_host turns a discovery sentinel ("auto"/"m4"/...) — whether it
     # arrives via --embed-host or NEBULAI_EMBED_HOST — into the dynamically located
     # M4 URL, and passes any concrete URL (or None) through untouched.
-    embed_host = (
-        embed_mod.resolve_embed_host(args.embed_host)
-        or embed_mod.resolve_embed_host(os.environ.get(embed_mod.EMBED_HOST_ENV))
-        or args.ollama_host
-    )
+    if args.embed_api == "local":
+        # An in-process encoder has no endpoint. Resolving one anyway would
+        # fire the M4 discovery probe and, worse, stamp a LAN address into an
+        # artifact that never touched it.
+        embed_host = embed_mod.LOCAL_EMBED_HOST
+    else:
+        embed_host = (
+            embed_mod.resolve_embed_host(args.embed_host)
+            or embed_mod.resolve_embed_host(os.environ.get(embed_mod.EMBED_HOST_ENV))
+            or args.ollama_host
+        )
     try:
         comp = build_comparison(
             json_paths,
@@ -1821,7 +1902,16 @@ def _run_compare(args: argparse.Namespace) -> None:
     )
     print("\n  concept overlap (Jaccard):")
     for k, v in comp["stats"]["jaccard"].items():
-        print(f"    {k}: {v}")
+        print(f"    {k}: {'not measured' if v is None else v}")
+    unnamed = comp["stats"].get("unnamed_models") or []
+    if unnamed:
+        print(
+            f"\n  {len(unnamed)} of {len(comp['meta']['models'])} maps carry "
+            f"placeholder cluster titles, so every pair involving one reads\n"
+            f"  'not measured' above rather than a number: "
+            + ", ".join(unnamed)
+        )
+        print(f"  {comp['stats']['unnamed_reason']}.")
 
 
 def _add_llm_args(sp: argparse.ArgumentParser) -> None:
@@ -2215,10 +2305,14 @@ def main() -> None:
     )
     t.add_argument(
         "--embed-api",
-        choices=["ollama", "openai"],
+        choices=["ollama", "openai", "local"],
         default="ollama",
-        help="[--source api] transport: ollama /api/embed or OpenAI-compatible "
-        "/v1/embeddings (bearer key from EMBED_API_KEY or OPENAI_API_KEY)",
+        help="[--source api] transport: ollama /api/embed, OpenAI-compatible "
+        "/v1/embeddings (bearer key from EMBED_API_KEY or OPENAI_API_KEY), or "
+        "'local' to run a pinned fp32 sentence-transformers encoder in this "
+        "process (needs the optional behavior-local group; --embed-host is "
+        "ignored, and the pinned commit is stamped into the map so `nebulai "
+        "validate` can rebuild the vectors)",
     )
     t.add_argument(
         "--max-tokens",
@@ -2818,12 +2912,45 @@ def main() -> None:
     )
     c.add_argument(
         "--embed-api",
-        choices=["ollama", "openai"],
+        choices=["ollama", "openai", "local"],
         default="ollama",
-        help="ollama /api/embed, or any OpenAI-compatible /v1/embeddings",
+        help="ollama /api/embed, any OpenAI-compatible /v1/embeddings, or "
+        "'local' to run a pinned fp32 sentence-transformers encoder in this "
+        "process (needs the optional behavior-local group; --embed-model must "
+        "then be a pinned id or 'repo@<40-hex sha>', and --embed-host is "
+        "ignored)",
     )
     c.add_argument("--embed-model", default="mxbai-embed-large")
     c.add_argument("--seed", type=int, default=42)
+    c.add_argument(
+        "--route-b",
+        action="store_true",
+        help="instead of the concept-space comparison, fit an orthogonal "
+        "Procrustes alignment between exactly TWO same-tokenizer models' raw "
+        "token clouds and test it on held-out tokens against a permutation "
+        "null. Needs no embedder; reads the weights, not the built maps.",
+    )
+    c.add_argument(
+        "--route-b-max-tokens",
+        type=int,
+        default=None,
+        help="[--route-b] curate to the N most frequent tokens before aligning "
+        "(default: the full curated vocabulary, ~49.9k for the gpt2 family)",
+    )
+    c.add_argument(
+        "--route-b-permutations",
+        type=int,
+        default=200,
+        help="[--route-b] permutation-null size; the reported p can never be "
+        "smaller than 1/(B+1)",
+    )
+    c.add_argument(
+        "--route-b-holdout",
+        type=float,
+        default=0.5,
+        help="[--route-b] fraction of shared tokens held out of the fit and "
+        "used for the reported residual",
+    )
     c.set_defaults(fn=_run_compare)
 
     ivp = sub.add_parser(
@@ -3082,6 +3209,17 @@ def main() -> None:
     aal = absb_sub.add_parser("list", help="list studies and their verdicts")
     aal.add_argument("--out", default="out", help="output directory root")
     aal.set_defaults(fn=_run_absorbing_list)
+
+    # Behavioral divergence (docs/BEHAVIORAL-DIVERGENCE-PLAN.md) and generative
+    # variance (docs/GENERATIVE-VARIANCE-PLAN.md) are separate studies, not new
+    # front-ends: neither produces `Units`, so each owns its own subcommand
+    # group rather than threading options through `tokens`/`sae`/`neurons`.
+    # Imported here so the base CLI keeps its current import cost.
+    from .behavior.cli import add_behavior_parser
+    from .backend.variance_cli import add_variance_parser
+
+    add_behavior_parser(sub)
+    add_variance_parser(sub)
 
     args = p.parse_args()
     args.fn(args)

@@ -52,6 +52,18 @@ INSTRUMENT_FORMAT_VERSION = 1
 #: the wrong directory.
 EXAMPLE_ID_PREFIX = "example_"
 
+#: Ids reserved for the DRAFT instrument shipped under `docs/instruments/`.
+#: `docs/instruments/` exists so the human author of §10 items 1–2 starts from a
+#: complete straw man instead of a blank file — but a draft that can be frozen
+#: by running one command is a one-way door left ajar. `freeze` refuses this
+#: prefix for the same reason it refuses `example_`: choosing the real questions
+#: is the study's central decision and is gated on the human-agreement work in
+#: GENERATIVE-VARIANCE-PLAN.md §6.2–6.4, not on a convenient default.
+DRAFT_ID_PREFIX = "draft_"
+
+#: Every prefix `freeze` refuses, in the order it reports them.
+RESERVED_ID_PREFIXES = (EXAMPLE_ID_PREFIX, DRAFT_ID_PREFIX)
+
 _SCALE_KINDS = ("likert", "binary", "unit")
 
 
@@ -205,14 +217,21 @@ class QuestionSet:
                 f"{self.name} has no questions — an empty instrument would "
                 f"produce zero-width trial vectors and a study with nothing in it"
             )
-        example = [q.id for q in self.questions if q.id.startswith(EXAMPLE_ID_PREFIX)]
-        if example:
+        reserved = [
+            q.id
+            for q in self.questions
+            if q.id.startswith(RESERVED_ID_PREFIXES)
+        ]
+        if reserved:
             raise InstrumentError(
-                f"{self.name} still contains format-documentation questions "
-                f"({', '.join(example)}). The shipped template is a format "
-                f"example, not a validated instrument — choosing the real "
+                f"{self.name} still contains reserved-prefix questions "
+                f"({', '.join(reserved)}). The shipped template is a format "
+                f"example and `docs/instruments/` is an unvalidated DRAFT — "
+                f"neither is a validated instrument. Choosing the real "
                 f"questions is the study's central decision and is gated on the "
-                f"human-agreement work in GENERATIVE-VARIANCE-PLAN.md §6.2-6.4."
+                f"human-agreement work in GENERATIVE-VARIANCE-PLAN.md §6.2-6.4.\n"
+                f"  the draft exists to be edited and re-ided by a human, not "
+                f"to be frozen as it stands."
             )
         self.frozen_at = at
         self.frozen_hash = self.compute_hash()

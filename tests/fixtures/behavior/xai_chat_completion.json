@@ -1,0 +1,30 @@
+{
+  "_fixture_provenance": {
+    "status": "SYNTHESIZED, NOT CAPTURED",
+    "why": "No XAI_API_KEY exists on this machine (2026-09-11), so no live xAI response could be recorded. This file is hand-built to the OpenAI-compatible chat-completions response schema that api.x.ai documents, and it exists so the adapter's parsing, identity and provenance paths are covered by a test rather than by assertion. Replace it with a genuine captured response the first time the arm runs with credentials; until then no number derived from it is a measurement of Grok.",
+    "schema": "openai-compatible chat.completion",
+    "authored": "2026-09-11"
+  },
+  "id": "chatcmpl-fixture-0001",
+  "object": "chat.completion",
+  "created": 1788134400,
+  "model": "grok-4-0709",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "butter, toast, flour"
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 141,
+    "completion_tokens": 7,
+    "total_tokens": 148,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

@@ -5,14 +5,29 @@
  *  history is never spammed by exploration.
  *
  *  Format: `#page=interp&model=gpt2&feature=live-nebula&trace=<slug>` /
- *  `#page=map&model=gpt2&view=chord&dims=3`. Only keys meaningful for the
+ *  `#page=map&model=gpt2&view=chord&dims=3` /
+ *  `#page=behavior&bview=ranked&cue=daddy&q=kin`. Only keys meaningful for the
  *  active page are written, so links stay short and honest. The legacy
- *  `?view=` search param (e2e + `nebulai compare` handoff) is untouched. */
+ *  `?view=` search param (e2e + `nebulai compare` handoff) is untouched.
+ *
+ *  The Behavior keys are prefixed `b` where they would otherwise collide with
+ *  a map key of the same name but different meaning (`bview` is a cue
+ *  presentation, `view` is a driver). `cue` is NOT validated against a cue
+ *  list: the study artifact is fetched by the page, not by this module, so a
+ *  hash naming a cue absent from the published study opens the page with no
+ *  cue selected rather than being silently rewritten to something else. */
 
-import { APP_PAGES, appStore, type Page, type ViewMode } from "../app/store";
+import {
+  APP_PAGES,
+  appStore,
+  type BehaviorView,
+  type Page,
+  type ViewMode,
+} from "../app/store";
 import { requestViewMode } from "../app/actions";
 
 const VIEWS: readonly ViewMode[] = ["atlas", "chord", "hierarchy", "compare"];
+const BVIEWS: readonly BehaviorView[] = ["landscape", "ranked", "table"];
 
 /** The two Internals-only hash keys (`feature`, `trace`) can only be validated
  *  by things that live on Nebulai's side of the split: `feature` against the
@@ -55,7 +70,7 @@ export interface UrlState {
   trace?: string;
   view?: ViewMode;
   dims?: 2 | 3;
-  /** map-page keyword search query */
+  /** map-page keyword search query; also the Behavior page's cue search */
   q?: string;
   /** map-page channel lens: a channel id from the model's `channels.json` */
   channel?: string;
@@ -71,6 +86,10 @@ export interface UrlState {
   /** episode being played, and how far into it */
   episode?: string;
   step?: number;
+  /** Behavior: which cue is open */
+  cue?: string;
+  /** Behavior: landscape | ranked | table */
+  bview?: BehaviorView;
 }
 
 /** Parse the current hash. Unknown keys/values are dropped, never guessed. */
@@ -137,6 +156,10 @@ export function readUrlState(): UrlState {
     const step = Number(p.get("step") ?? "0");
     out.step = Number.isInteger(step) && step >= 0 ? step : 0;
   }
+  const cue = p.get("cue");
+  if (cue && cue.trim()) out.cue = cue;
+  const bview = p.get("bview");
+  if (bview && (BVIEWS as readonly string[]).includes(bview)) out.bview = bview as BehaviorView;
   return out;
 }
 
@@ -148,14 +171,21 @@ export function applyUrlState(u: UrlState): void {
   if (u.feature) st.setInterpFeature(u.feature);
   if (u.trace) st.setInterpTrace(u.trace);
   if (u.dims) st.setDims(u.dims);
-  // after the boot dataset load, so the labels to search are resident
-  if (u.q) st.setMapQuery(u.q);
+  // after the boot dataset load, so the labels to search are resident.
+  // One hash key, two pages: `q` is the map's label search and the Behavior
+  // page's cue search, and a permalink only ever names one page.
+  if (u.q) {
+    if (u.page === "behavior") st.setBehaviorQuery(u.q);
+    else st.setMapQuery(u.q);
+  }
   if (u.channel) st.setChannel(u.channel, u.crange ?? null);
   if (u.axis) {
     st.setAxisDirection(u.axis);
     st.setAxisT(u.axist ?? 1);
     if (u.axisnull === false) st.setAxisNull(false);
   }
+  if (u.bview) st.setBehaviorView(u.bview);
+  if (u.cue) st.setBehaviorCue(u.cue);
   if (u.page) st.setPage(u.page);
   if (u.view && u.view !== "atlas") requestViewMode(u.view);
   // last, because an episode step rewrites page, model, channel and selection:
@@ -187,6 +217,10 @@ function buildHash(): string {
       // opens with the null on, which is the only default R5 allows.
       if (!st.axis.showNull) p.set("axisnull", "0");
     }
+  } else if (st.page === "behavior") {
+    if (st.behavior.view !== "landscape") p.set("bview", st.behavior.view);
+    if (st.behavior.cue) p.set("cue", st.behavior.cue);
+    if (st.behavior.query.trim()) p.set("q", st.behavior.query);
   } else if (st.page === "interp") {
     p.set("feature", st.interp.featureId);
     // live traces exist only in this tab's memory — a permalink to one would

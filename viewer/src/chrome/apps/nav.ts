@@ -104,6 +104,7 @@ export const APP_CHROME: Record<AppId, AppChrome> = {
     tagline: "map what a model knows",
     nav: [
       { label: "Semantic map", page: "map" },
+      { label: "Behavior", page: "behavior" },
       { label: "Internals", page: "interp" },
       // the page id stays "guide" — APP_PAGES is the membership authority and
       // every deep link, drift guard and e2e route already spells it that way.
