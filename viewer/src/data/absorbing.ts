@@ -34,6 +34,8 @@
  *  silent disagreement between the file and the formula is worth seeing.
  */
 
+import { encodeSegment } from "./segment";
+
 /** Resolve the artifact root lazily — `data/base.ts` reads `location.href` at
  *  module scope, which is correct in a browser and absent under vitest. */
 async function dataBase(): Promise<string> {
@@ -341,7 +343,7 @@ export function verdictNote(study: AbsorbingStudy): string {
  *  network and a static deploy under a sub-path still resolves. */
 export async function loadStudy(studyId: string, base?: string): Promise<AbsorbingStudy> {
   const root = base ?? (await dataBase());
-  const res = await fetch(`${root}/absorbing/${encodeURIComponent(studyId)}/absorbing.json`);
+  const res = await fetch(`${root}/absorbing/${encodeSegment(studyId)}/absorbing.json`);
   if (!res.ok) throw new Error(`no absorbing study at ${studyId} (${res.status})`);
   return parseStudy(await res.json());
 }

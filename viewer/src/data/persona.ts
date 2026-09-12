@@ -25,6 +25,8 @@
  *  `verdictNote` keeps them apart, but neither is a pass.
  */
 
+import { encodeSegment } from "./segment";
+
 /** Resolve the artifact root lazily.
  *
  *  `data/base.ts` reads `location.href` at module scope, which is correct in a
@@ -206,7 +208,7 @@ export function verdictLabel(v: PersonaVerdict): string {
  *  network and a static deploy under a sub-path still resolves. */
 export async function loadSpace(spaceId: string, base?: string): Promise<PersonaSpace> {
   const root = base ?? (await dataBase());
-  const res = await fetch(`${root}/persona/${encodeURIComponent(spaceId)}/space.json`);
+  const res = await fetch(`${root}/persona/${encodeSegment(spaceId)}/space.json`);
   if (!res.ok) throw new Error(`no persona space at ${spaceId} (${res.status})`);
   return parseSpace(await res.json());
 }
