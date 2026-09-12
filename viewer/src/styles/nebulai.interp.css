@@ -1988,6 +1988,71 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ── travel along the intervention's own direction ──────────────────────────
+ *
+ *  Two kinds of line live here and they must not look alike: a measurement
+ *  (mono, tabular, the same weight as every other number on the rail) and a
+ *  refusal (ui font, faint, full sentences). A refusal set in the numeric style
+ *  would read as a value; a number set in the prose style would read as a claim.
+ */
+.steer-axis {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+.steer-axis-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.steer-axis-k {
+  flex: none;
+  font: 400 9.5px/1.35 var(--font-ui);
+  color: var(--text-faint);
+}
+.steer-axis-id {
+  margin-left: auto;
+  font: 500 9.5px/1.35 var(--font-mono);
+  color: var(--text-dim);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.steer-axis-travel {
+  margin: 0;
+  font: 500 11px/1.4 var(--font-mono);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.steer-axis-link {
+  align-self: flex-start;
+  padding: 3px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font: 500 10px/1.3 var(--font-ui);
+  cursor: pointer;
+}
+.steer-axis-link:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.steer-axis-refused {
+  margin: 0;
+  font: 400 10px/1.45 var(--font-ui);
+  color: var(--text-faint);
+  text-wrap: pretty;
+}
+/* the whole-section refusal stands where the section would have been, so it
+ *  carries the section's own rule above it */
+.steer-axis-refused.is-section {
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+
 .steer-claim {
   margin: 0;
   padding-top: 8px;

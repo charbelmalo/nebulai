@@ -275,9 +275,23 @@ inference-time hook, runs the same prompt twice, and exports the difference.
               "protocol": "<exactly what was done, at this strength>",
               "kl_bits_mean": 0.0, "kl_bits_max": 0.0,
               "identical_to_baseline": true,        // asserted PER ROW
+              // the row's mean of the same pair, or `axis_refused` instead
+              "axis": { "direction_id": …, "space": …, "layer": 8,
+                        "n_prompts": 2, "proj_mean_baseline": …,
+                        "proj_mean_intervened": …, "proj_mean_delta": …,
+                        "orth_mean_delta": … },
               "runs": [ { "prompt": "…", "kl_bits": 0.0,
                           "identical": true,
                           "resid_norm_baseline": …, "resid_norm_intervened": …,
+                          // add/ablate only; clamp/cap carry {"refused": "…"}
+                          "axis": { "direction_id": …, "space": "resid.L8",
+                                    "layer": 8, "resid_index": 9,
+                                    "observed_where": "…", "token": "last",
+                                    "proj_baseline": …, "proj_intervened": …,
+                                    "proj_delta": …,
+                                    "orth_norm_baseline": …,
+                                    "orth_norm_intervened": …,
+                                    "orth_norm_delta": …, "unit": "…" },
                           "baseline":    { "text": …, "tokens": […], "logprobs": […] },
                           "intervened":  { "text": …, "tokens": […], "logprobs": […] },
                           "targets": [ { "text": " the Golden Gate Bridge",
@@ -286,13 +300,13 @@ inference-time hook, runs the same prompt twice, and exports the difference.
   "claim": "Under this protocol — … — the intervention changed the next-token "
            "distribution by up to N bits of KL. That is a statement about what "
            "this intervention did, not about what the direction is.",
-  "notes": { "decoding": …, "control": …, "d6": … },
+  "notes": { "decoding": …, "control": …, "d6": …, "axis": … },
   "meta": { "revision": …, "digest": …, "hook_layer": 7,
             "sae_repo": …, "sae_hook": "blocks.8.hook_resid_pre",
             "sae_hook_layer": 8, "hook_layer_note": "…" } }
 ```
 
-Five rules, four of them refusals:
+Six rules, five of them refusals:
 
 1. **α = 0 is a control and the producer will not write the file without it.**
    At α = 0 NO hook is installed — not an identity hook, no hook at all — and
@@ -319,6 +333,33 @@ Five rules, four of them refusals:
    never restates it in stronger words, and never turns it into a sentence about
    what the feature or direction *is*.
 
+6. **The `axis` block is a measurement or a refusal sentence, never an
+   optional number.** For `add` / `ablate` the producer projects the last
+   token's residual stream at the intervention's hook layer onto the unit
+   direction, baseline and intervened, and reports the pair beside the norm of
+   the orthogonal remainder — the one thing the viewer needs to slide a placed
+   point along a phase-1 axis instead of only reporting that the logits moved.
+   The perpendicular number ships with it because a point that moved 1 along the
+   axis while its perpendicular part moved 40 did not travel along the axis in
+   any useful sense. For `clamp` and `cap` the block is `{"refused": "<why>"}`:
+   those verbs name no direction, and a projection would be onto whatever vector
+   happened to be in scope. `ablate` fires at every layer by construction, so
+   there is no single layer it *is* at; the projection is then taken at the layer
+   the DIRECTION's own space names and `observed_where` says so in words.
+   `intervene.py::axis_block` is the only place this is computed;
+   `viewer/src/scene/interp/steer.ts::steerAxis` is the only place it is read.
+
+   **Two independent gates, and the viewer must not merge them.** Whether the
+   intervention measured an axis is the producer's question, answered above.
+   Whether the loaded MAP can be laid out along that same direction is D2's
+   question, answered by `data/directions.ts::axisRefusal`. Both can fail for
+   unrelated reasons, and on the only direction-backed sweep this repo can
+   currently produce on gpt2 the second one does: `refusal-style-v1-L8` lives in
+   `resid.L8` while the gpt2 map's points are `W_E.centered` token embeddings, so
+   the numbers are real and the map link is refused in the same breath. A single
+   "axis unavailable" would hide which wall was hit.
+   `viewer/tests/unit/steer-axis.test.ts` pins that they never swap places.
+
 KL is `KL(baseline ‖ intervened)` in bits over all 50,257 logits at the final
 position, computed in 64-bit. It says how far the distribution moved and nothing
 about whether it moved where you wanted — that is what `targets` (teacher-forced
@@ -327,7 +368,18 @@ when it undercuts the headline. The shipped gpt2 sweep is exactly that case: SAE
 feature 17840 detects the Golden Gate Bridge cleanly and steers it not at all.
 
 Written to `out/<model>/interp/` beside the other bundles the viewer fetches,
-NOT to `out/<model>/`. Viewer: `loadIntervene()` in `data/interp.ts`,
+NOT to `out/<model>/`, and **listed in that directory's `index.json`** — a model
+may ship several sweeps (one per verb, one per experiment) and the manifest is
+the only thing that enumerates them. `nebulai intervene` adds its own file to
+the list, and `write_bundles` carries existing `intervene_*.json` entries over
+instead of rebuilding the list from what it alone just wrote. The viewer chooses
+between them on one property: `loadSteerBundle()` opens the first sweep whose
+rows carry an `axis` measurement, because that is what the rail's axis section
+reads, and falls back to the first that loads so an axis-less sweep still shows
+its own refusal rather than an empty panel. A manifest entry with no file behind
+it is skipped, not fatal.
+
+Viewer: `loadSteerBundle()` / `loadIntervene()` in `data/interp.ts`,
 `scene/interp/steer.ts` (all arithmetic, GPU-free and unit-tested),
 `SteerDriver.ts` (the stage) and `chrome/SteerRail.tsx` (the text half).
 

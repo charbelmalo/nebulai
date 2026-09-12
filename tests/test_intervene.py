@@ -704,3 +704,128 @@ def test_gpt2_refuses_a_kv_cache_it_does_not_have():
     m = _gpt2()
     with pytest.raises(NotImplementedError, match="no KV cache"):
         m.forward("hello", cache=object())
+
+
+# ------------------------------------------------------------------ the axis
+
+# `run()` reports that the logits moved. That is not enough to slide a placed
+# point along a phase-1 axis, which needs the prompt's position ON the direction
+# before and after. These pin the block that carries it — and, just as hard, the
+# refusals, because three of the four verbs have no axis and the shipped GPT-2
+# sweep is one of them.
+
+
+def test_add_moves_the_projection_by_exactly_alpha():
+    m = ToyModel()
+    v = _unit(3)
+    iv = IV.from_direction(_D(v, space="resid.L1"), verb="add", alpha=2.5, layer=1, n_layer=3)
+    out = IV.run(m, "hello", iv, max_tokens=1)
+    ax = out["axis"]
+    assert "refused" not in ax
+    assert ax["layer"] == 1
+    assert ax["resid_index"] == 2  # resid[L] enters block L; hook 1 is read at 2
+    assert ax["direction_id"] == "d-test"
+    assert ax["space"] == "resid.L1"
+    # the hook fires AT layer 1 and the projection is read at layer 1, so the
+    # whole of alpha lands on the axis and nothing lands off it
+    assert ax["proj_delta"] == pytest.approx(2.5, abs=1e-3)
+    assert ax["orth_norm_delta"] == pytest.approx(0.0, abs=1e-3)
+
+
+def test_ablate_drives_the_projection_to_zero_and_says_where_it_looked():
+    m = ToyModel()
+    iv = IV.from_direction(_D(_unit(2), space="resid.L1"), verb="ablate", alpha=1.0, n_layer=3)
+    out = IV.run(m, "hello", iv, max_tokens=1)
+    ax = out["axis"]
+    assert "refused" not in ax
+    # ablate fires at EVERY layer, so there is no single layer it "is" at; the
+    # projection is taken where the direction's own space says
+    assert ax["layer"] == 1
+    assert "every layer" in ax["observed_where"]
+    assert ax["proj_intervened"] == pytest.approx(0.0, abs=1e-5)
+
+
+def test_alpha_zero_leaves_the_point_exactly_where_it_was():
+    m = ToyModel()
+    iv = IV.from_direction(_D(_unit(1), space="resid.L1"), verb="add", alpha=0.0, layer=1, n_layer=3)
+    ax = IV.run(m, "hello", iv, max_tokens=1)["axis"]
+    assert ax["proj_baseline"] == ax["proj_intervened"]
+    assert ax["proj_delta"] == 0.0
+
+
+def test_clamp_and_cap_refuse_the_axis_and_name_their_verb():
+    m = ToyModel()
+    r = m.forward("hello").resid
+    for iv in (
+        IV.Intervention(verb="cap", layer=1, lo=-1.0, hi=1.0),
+        IV.Intervention(verb="clamp", layer=1, feature=3, value=5.0, alpha=1.0),
+    ):
+        ax = IV.axis_block(m, iv, r, r)
+        assert iv.verb in ax["refused"]
+        assert "no direction" in ax["refused"]
+        assert "proj_baseline" not in ax
+    # and through `run`, for the verb that does not need SAE tensors
+    ax = IV.run(m, "hello", IV.Intervention(verb="cap", layer=1, lo=-1.0, hi=1.0), max_tokens=1)["axis"]
+    assert "no direction" in ax["refused"]
+
+
+def test_a_direction_of_the_wrong_width_is_refused_not_projected():
+    m = ToyModel()
+    iv = IV.Intervention(
+        verb="ablate",
+        layer=1,
+        vector=np.ones(5) / np.sqrt(5),
+        direction_id="wrong-width",
+        space="resid.L1",
+        alpha=1.0,
+    )
+    ax = IV.axis_block(m, iv, *( [m.forward("hello").resid] * 2 ))
+    assert "not a projection" in ax["refused"]
+
+
+def test_a_spaceless_direction_is_refused_with_the_hook_layer_reason():
+    m = ToyModel()
+    iv = IV.Intervention(
+        verb="ablate",
+        layer=None,
+        vector=_unit(0),
+        direction_id="d",
+        space="W_E.centered",
+        alpha=1.0,
+    )
+    ax = IV.axis_block(m, iv, *( [m.forward("hello").resid] * 2 ))
+    assert "no layer" in ax["refused"]
+
+
+def test_a_sweep_row_carries_one_axis_pair_per_alpha():
+    m = ToyModel()
+    d = _D(_unit(4), space="resid.L1")
+    out = IV.sweep(
+        m,
+        ["hello", "world"],
+        lambda a: IV.from_direction(d, verb="add", alpha=a, layer=1, n_layer=3),
+        [0.0, 1.0, 2.0],
+        max_tokens=1,
+    )
+    for row, a in zip(out["rows"], [0.0, 1.0, 2.0]):
+        ax = row["axis"]
+        assert ax["n_prompts"] == 2
+        assert ax["direction_id"] == "d-test"
+        assert ax["proj_mean_delta"] == pytest.approx(a, abs=1e-3)
+    assert "axis" in out["notes"]
+
+
+def test_a_directionless_sweep_carries_the_refusal_on_every_row_and_no_axis():
+    # the only intervene bundle this repo ships is a `clamp` on an SAE feature;
+    # `cap` is the same shape of refusal and needs no SAE tensors to run
+    m = ToyModel()
+    out = IV.sweep(
+        m,
+        ["hello"],
+        lambda a: IV.Intervention(verb="cap", layer=1, lo=-a, hi=a),
+        [0.0, 1.0],
+        max_tokens=1,
+    )
+    for row in out["rows"]:
+        assert "axis" not in row
+        assert "no direction" in row["axis_refused"]

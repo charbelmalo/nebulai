@@ -585,9 +585,16 @@ def _run_intervene(args: argparse.Namespace) -> None:
     # intervention curve is read by a driver exactly like patch.json is.
     dest = out_dir / "interp"
     dest.mkdir(parents=True, exist_ok=True)
-    path = dest / (args.name or f"intervene_{args.verb}.json")
+    name = args.name or f"intervene_{args.verb}"
+    # `--name foo` used to write a file with no extension, which the viewer's
+    # fetch then missed; the suffix is added here rather than documented away
+    path = dest / (name if name.endswith(".json") else f"{name}.json")
     path.write_text(_json.dumps(bundle, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"[intervene] {path} ({t()})")
+    from .backend.interp.bundles import register_bundle
+
+    if register_bundle(dest, path.name):
+        print(f"[intervene] listed {path.name} in {dest / 'index.json'}")
     for r in bundle["rows"]:
         flag = " (control, no hook installed)" if r["is_identity"] else ""
         print(f"  alpha {r['alpha']:+8.3f}  KL mean {r['kl_bits_mean']:8.4f}  max {r['kl_bits_max']:8.4f}{flag}")
