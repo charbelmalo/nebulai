@@ -78,6 +78,12 @@ class Handler(BaseHTTPRequestHandler):
                     "allow_paid": self.allow_paid,
                     "out_dir": self.out_dir,
                     "studies": sorted(p.name for p in Path(self.out_dir).glob("*") if p.is_dir()),
+                    # Who holds each store's writer lock. A run started from a
+                    # terminal is invisible to this server's own `_STATE`, so
+                    # without this the page would offer to start a run that is
+                    # already in flight elsewhere and then report a refusal it
+                    # could have predicted.
+                    "writers": _writers(self.out_dir),
                 },
             )
             return
@@ -216,6 +222,28 @@ def _execute(m: Any, arm: str, out_dir: str, limit: int | None) -> None:
     finally:
         if store is not None:
             store.close()
+
+
+def _writers(out_dir: str) -> dict[str, dict]:
+    """Per-study writer-lock state, read-only and never fatal.
+
+    A store that cannot be opened (mid-creation, permissions, a directory with
+    no sqlite in it yet) is simply absent from the map rather than an error:
+    /health exists to be reachable.
+    """
+    out: dict[str, dict] = {}
+    for d in sorted(Path(out_dir).glob("*")):
+        f = d / "trials.sqlite"
+        if not f.exists():
+            continue
+        try:
+            with TrialStore(f) as s:
+                lock = s.writer_lock()
+        except Exception:
+            continue
+        if lock:
+            out[d.name] = lock
+    return out
 
 
 def serve(out_dir: str, *, host: str = "127.0.0.1", port: int = 8765, allow_paid: bool = False) -> None:

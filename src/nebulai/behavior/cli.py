@@ -688,6 +688,18 @@ def run_inspect(a: argparse.Namespace) -> None:
         by_status[c["status"]] = by_status.get(c["status"], 0) + 1
     for k, v in sorted(by_status.items(), key=lambda kv: -kv[1]):
         print(f"  {v:>5}  {k}")
+    #  A study being written right now is a study whose numbers are about to
+    #  change. Say so, rather than letting a reader quote a snapshot as final.
+    sq = Path(a.out) / a.study_id / "trials.sqlite"
+    if sq.exists():
+        with TrialStore(sq) as st:
+            lock = st.writer_lock()
+        if lock:
+            state = "collecting now" if lock.get("live") else "stale (holder gone)"
+            print(
+                f"  writer lock: pid {lock.get('pid')} on {lock.get('host')} — "
+                f"{state}: {lock.get('note') or '-'}"
+            )
 
 
 def run_serve(a: argparse.Namespace) -> None:

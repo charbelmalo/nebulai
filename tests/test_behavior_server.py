@@ -21,6 +21,7 @@ that had already queued the run would be a 402 that spent the money.
 
 import http.client
 import json
+import os
 import threading
 import time
 from http.server import ThreadingHTTPServer
@@ -272,6 +273,25 @@ def test_health_lists_the_studies_already_in_the_store(free_server, tmp_path):
     with TrialStore(tmp_path / "out" / "t_server" / "trials.sqlite"):
         pass
     assert free_server.get("/health")[1]["studies"] == ["t_server"]
+
+
+def test_health_names_the_process_writing_a_store(free_server, tmp_path):
+    """A run started from a terminal is invisible to this server's own _STATE.
+    Without /health reporting the store's writer lock the page would offer to
+    start a run that is already in flight and then surface a refusal it could
+    have predicted — so the lock state is part of health, not of the error path.
+    """
+    f = tmp_path / "out" / "t_writers" / "trials.sqlite"
+    with TrialStore(f) as s:
+        assert free_server.get("/health")[1]["writers"] == {}, "no lock, no entry"
+        s.claim_writer(note="behavior run --arm discovery")
+        w = free_server.get("/health")[1]["writers"]
+        assert list(w) == ["t_writers"]
+        assert w["t_writers"]["pid"] == os.getpid()
+        assert w["t_writers"]["live"] is True
+        assert "--arm discovery" in w["t_writers"]["note"]
+        s.release_writer()
+        assert free_server.get("/health")[1]["writers"] == {}
 
 
 # --------------------------------------------------------------------------
