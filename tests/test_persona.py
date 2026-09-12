@@ -427,3 +427,77 @@ def test_verify_refuses_a_layer_the_model_does_not_have(tiny, small_set) -> None
     s.layer = tiny.n_layer + 5
     with pytest.raises(PersonaError, match="does not exist in"):
         verify_space(s, tiny, control_n=5)
+
+
+# ── the index the viewer discovers spaces through ───────────────────────────
+
+
+def test_write_index_lists_every_well_formed_space_and_skips_the_rest(tmp_path: Path) -> None:
+    """`loadSpaceIndex` reads `<root>/index.json` and nothing else; a space
+    written without it is invisible, indistinguishable from no space at all.
+    A malformed directory is skipped whole rather than half-indexed."""
+    from nebulai.backend.persona import write_index
+
+    root = tmp_path / "persona"
+    (root / "b-space").mkdir(parents=True)
+    (root / "b-space" / "space.json").write_text(
+        json.dumps(
+            {
+                "meta": {"space_id": "b-space", "model": "m2", "revision": "r2", "layer": 20},
+                "control": {"verdict": "at_null"},
+            }
+        )
+    )
+    (root / "a-space").mkdir()
+    (root / "a-space" / "space.json").write_text(
+        json.dumps(
+            {
+                "meta": {"space_id": "a-space", "model": "m1", "revision": "r1", "layer": 19},
+                "control": {"verdict": "above_null"},
+            }
+        )
+    )
+    (root / "broken").mkdir()
+    (root / "broken" / "space.json").write_text('{"meta": {"space_id": "broken"')
+    (root / "not-a-space").mkdir()
+
+    path = write_index(root)
+    assert path == root / "index.json"
+    assert json.loads(path.read_text()) == {
+        "spaces": [
+            {"space_id": "a-space", "model": "m1", "revision": "r1", "layer": 19,
+             "verdict": "above_null"},
+            {"space_id": "b-space", "model": "m2", "revision": "r2", "layer": 20,
+             "verdict": "at_null"},
+        ]
+    }
+
+
+def test_write_index_defaults_a_missing_verdict_to_unknown(tmp_path: Path) -> None:
+    from nebulai.backend.persona import write_index
+
+    root = tmp_path / "persona"
+    (root / "s").mkdir(parents=True)
+    (root / "s" / "space.json").write_text(json.dumps({"meta": {"space_id": "s"}}))
+    doc = json.loads(write_index(root).read_text())
+    assert doc["spaces"][0]["verdict"] == "unknown"
+    assert doc["spaces"][0]["layer"] is None
+
+
+def test_write_index_on_an_empty_root_writes_an_empty_list(tmp_path: Path) -> None:
+    from nebulai.backend.persona import write_index
+
+    root = tmp_path / "persona"
+    assert json.loads(write_index(root).read_text()) == {"spaces": []}
+
+
+def test_write_space_also_writes_the_index(tmp_path: Path) -> None:
+    from nebulai.backend.persona import write_index
+
+    space = _space()
+    write_space(space, tmp_path)
+    idx = json.loads((tmp_path / "index.json").read_text())["spaces"]
+    assert [r["space_id"] for r in idx] == [space.space_id]
+    assert idx[0]["verdict"] == space.control.verdict
+    # derived, never edited: a rewrite from disk agrees with what write_space left
+    assert json.loads(write_index(tmp_path).read_text())["spaces"] == idx

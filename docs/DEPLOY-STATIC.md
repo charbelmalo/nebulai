@@ -95,28 +95,36 @@ Ship `out/` verbatim (the user chose "everything as-is"). `out/neuronpedia/`,
 never fetched by the browser — harmless to include, safe to omit if you want to
 trim (re-measure with `du -sh out/*/*.npz out/neuronpedia out/organisms` first).
 
-### 1.1 Blocking: `out/persona/index.json` does not exist
+### 1.1 `out/persona/index.json` is derived — never edit it by hand
 
-**Write it by hand before shipping `out/`.** `nebulai absorbing` writes its own
-`index.json`; **`nebulai persona build` does not** — `backend/persona.py` has a
-`list_spaces()` directory scan and no index writer. `viewer/src/data/persona.ts`
+`nebulai persona build` and `nebulai persona verify` both rewrite
+`out/persona/index.json` from the `space.json` files actually on disk
+(`backend/persona.py`'s `write_index`, the persona twin of
+`absorbing.write_index`). It is derived, never edited: a directory whose
+`space.json` is missing or malformed is skipped whole rather than half-indexed,
+and the rows are sorted by `space_id`. `viewer/src/data/persona.ts`
 (`loadSpaceIndex`) treats a missing or non-OK `persona/index.json` as *no
-spaces*, not as an error, and returns `[]`. The consequence on a static deploy
-is silent: the persona-space picker shows **"This deploy ships no persona
-space"** and the two built spaces are invisible, with nothing in the console.
+spaces*, not as an error — so a deploy whose spaces were built before the
+writer existed shows **"This deploy ships no persona space"** with nothing in
+the console. Refresh the index without running a model:
+
+```bash
+uv run python -c "from nebulai.backend.persona import write_index; write_index('out/persona')"
+```
 
 The file the loader reads is:
 
 ```json
-{"spaces": [{"space_id": "smollm2-135m-instruct@12fd25f77366.v1.L19"},
-            {"space_id": "smollm2-360m-instruct@a10cc1512eab.v1.L20"}]}
+{"spaces": [{"space_id": "smollm2-135m-instruct@12fd25f77366.v1.L19",
+             "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+             "revision": "12fd25f77366fa6b3b4b768ec3050bf629380bac",
+             "layer": 19, "verdict": "above_null"},
+            {"space_id": "smollm2-360m-instruct@a10cc1512eab.v1.L20", "…": "…"}]}
 ```
 
-One entry per directory under `out/persona/`. (`loadSpaceIndex` also accepts a
-bare array and a `spaceId` spelling, but `{"spaces": [{"space_id": …}]}` is the
-shape to write.) The real fix is a writer in `backend/persona.py` mirroring
-`absorbing.py`'s — until that lands, this step is manual and it is easy to
-forget.
+One entry per well-formed directory under `out/persona/`; the viewer only
+needs `space_id` (it also accepts a bare array and a `spaceId` spelling), the
+other fields are for a reader of the file. Ship it with the two space dirs.
 
 Seer, by contrast, boots with `window.__store.getState().datasets` empty and
 `dataset` null and makes **zero** requests under `out/` — proved by
@@ -384,7 +392,7 @@ Nebul.AI's data tree nested inside its own subtree only:
     │       ├── compare/compare.json + metrics.json
     │       ├── behavior/behavior.json
     │       ├── absorbing/index.json + <study_id>/absorbing.json
-    │       ├── persona/index.json + <space_id>/space.json   (§1.1 — hand-written)
+    │       ├── persona/index.json + <space_id>/space.json   (§1.1 — derived, rewritten by build/verify)
     │       └── … (every dataset in index.json, plus the two
     │              channels/directions-only model dirs)
     └── seer/
@@ -587,7 +595,8 @@ Then in a browser:
       `/out/` appears in DevTools' Network tab at any point.
 - [ ] Settings → "Projection" offers a **Persona space** rather than saying
       "This deploy ships no persona space". If it says that,
-      `out/persona/index.json` is missing — see §1.1. (This is the only place
+      `out/persona/index.json` is missing or stale — regenerate it with the
+      one-liner in §1.1 and re-rsync. (This is the only place
       Seer reads anything under `out/`, and it is a Settings-page fetch, not a
       boot fetch, so the zero-requests-at-boot check above still holds.)
 - [ ] The top bar's sibling link goes to `…/psychiX/nebulai-maps/`, and its

@@ -483,6 +483,46 @@ def write_space(space: PersonaSpace, root: Path | str = DEFAULT_OUT) -> Path:
     d.mkdir(parents=True, exist_ok=True)
     path = d / "space.json"
     path.write_text(json.dumps(space.to_dict(), indent=2) + "\n")
+    write_index(root)
+    return path
+
+
+def write_index(root: Path | str = DEFAULT_OUT) -> Path:
+    """Rewrite `index.json` from the spaces actually on disk.
+
+    The viewer discovers spaces through `<root>/index.json` and nothing else
+    (`loadSpaceIndex` in `viewer/src/data/persona.ts`); a space written without
+    it is invisible, indistinguishable from no space at all. Like the absorbing
+    study's index it is derived, never edited: writing a space rewrites it, and
+    a directory whose `space.json` is missing or malformed is skipped rather
+    than half-indexed, so a truncated write can never advertise a space the
+    viewer would then fail to load.
+    """
+    root = Path(root)
+    rows: list[dict[str, Any]] = []
+    for sd in sorted(root.glob("*")):
+        f = sd / "space.json"
+        if not f.is_file():
+            continue
+        try:
+            doc = json.loads(f.read_text())
+            meta = doc["meta"]
+            control = doc.get("control") or {}
+            rows.append(
+                {
+                    "space_id": str(meta.get("space_id") or sd.name),
+                    "model": meta.get("model"),
+                    "revision": meta.get("revision"),
+                    "layer": meta.get("layer"),
+                    "verdict": control.get("verdict") or "unknown",
+                }
+            )
+        except (ValueError, KeyError, TypeError, AttributeError):
+            continue
+    rows.sort(key=lambda r: r["space_id"])
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "index.json"
+    path.write_text(json.dumps({"spaces": rows}, indent=2) + "\n")
     return path
 
 
@@ -586,5 +626,6 @@ __all__ = [
     "space_dir",
     "verdict_for",
     "verify_space",
+    "write_index",
     "write_space",
 ]

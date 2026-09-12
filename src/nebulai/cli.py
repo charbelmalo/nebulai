@@ -2050,9 +2050,10 @@ def _run_persona_build(args) -> None:
 
 
 def _run_persona_verify(args) -> None:
-    from .backend.persona import read_space, verify_space
+    from .backend.persona import read_space, verify_space, write_index
 
-    space = read_space(args.space_id, Path(args.out) / "persona")
+    root = Path(args.out) / "persona"
+    space = read_space(args.space_id, root)
     # The space on disk already names its model and its commit, and `--model`
     # carries the 135M default for `build`'s sake. Left alone, that default would
     # point verify at the wrong checkpoint, so the space's own provenance wins
@@ -2070,6 +2071,9 @@ def _run_persona_verify(args) -> None:
           f"{space.control.pc1_evr_null_p95:.4f}  {space.control.verdict}")
     print(f"re-run    pc1_evr {got.pc1_evr:.4f}  null p95 "
           f"{got.pc1_evr_null_p95:.4f}  {got.verdict}")
+    # The index is derived from what is on disk, so refreshing it here costs
+    # nothing and repairs a deploy whose spaces were built before it existed.
+    write_index(root)
     if got.verdict != space.control.verdict:
         raise SystemExit(
             f"VERDICT MOVED: {space.control.verdict} -> {got.verdict}. The space "
