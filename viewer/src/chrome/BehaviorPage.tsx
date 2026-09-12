@@ -846,7 +846,9 @@ function Runs({ data }: { data: BehaviorData }) {
           <tbody>
             {data.runs.map((r) => (
               <tr key={r.run_id}>
-                <th scope="row">{r.run_id.slice(0, 10)}</th>
+                <th scope="row" title={r.run_id}>
+                  {r.arm ?? r.run_id.slice(0, 10)}
+                </th>
                 <td>{r.started}</td>
                 <td>{r.n_trials}</td>
                 <td>{r.n_completed}</td>

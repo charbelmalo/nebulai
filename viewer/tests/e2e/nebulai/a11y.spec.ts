@@ -31,7 +31,8 @@ test("axe: no serious or critical violations", async ({ page }) => {
 test("keyboard reaches the sidebar selects and legend radios", async ({ page }) => {
   await bootApp(page, "webgl");
   const seq: string[] = [];
-  for (let i = 0; i < 40; i++) {
+  // 60 stops: every top-nav pill (Behavior included) sits before the legend
+  for (let i = 0; i < 60; i++) {
     await page.keyboard.press("Tab");
     seq.push(
       await page.evaluate(() => {

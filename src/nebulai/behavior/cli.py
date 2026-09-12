@@ -225,6 +225,17 @@ def run_run(a: argparse.Namespace) -> None:
             print(f"  not_run {k}: {why}")
     if res.halted:
         print(f"  HALTED: {res.halted}")
+    # The store, not stdout, is what `analyze` reads: an arm that never ran
+    # and a run halted by its budget must reach the page with their reasons.
+    store.record_run(
+        m.study_id,
+        res.arm,
+        halted=res.halted,
+        not_run=res.not_run,
+        spent_usd=res.spent_usd,
+        completed=res.completed,
+        errors=res.errors,
+    )
     store.close()
 
 
@@ -319,7 +330,7 @@ def run_analyze(a: argparse.Namespace) -> None:
         "canary": A.canary_report(store.iter_trials(m.study_id), embedder),
         "reasoning_tokens_p95": m.reasoning_tokens_p95,
     }
-    runs = [store.progress(m.study_id)]
+    runs = store.runs(m.study_id)  # per-arm records, the page's `BehaviorRun` shape
     samples = _samples(trials, keys)
     coverage = _coverage(m, store, results, trials)
 

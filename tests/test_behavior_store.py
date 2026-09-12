@@ -464,3 +464,24 @@ def test_inspect_says_a_study_is_still_collecting_before_there_is_an_analysis():
             assert "--arm discovery" in line
             st.release_writer()
             assert _writer_note(str(out), "s1") is None
+
+
+def test_runs_are_per_arm_records_in_the_shape_the_page_declares(tmp_path):
+    """`viewer/src/data/behavior.ts` declares `BehaviorRun`; the exporter used to
+    ship the progress summary under that key and the Runs table crashed on
+    `run_id.slice` at boot. The keys below are that interface, verbatim."""
+    from nebulai.behavior.store import TrialStore
+
+    st = TrialStore(tmp_path / "t.sqlite")
+    sid = "s1"
+    assert st.runs(sid) == []
+    # an arm that never ran still gets a record — with its reason, no trials
+    st.record_run(sid, "discovery", not_run={"grok": "no XAI_API_KEY in the environment"})
+    (rec,) = st.runs(sid)
+    assert set(rec) >= {
+        "run_id", "started", "finished", "n_trials", "n_completed", "cost_usd", "halted", "not_run",
+    }
+    assert rec["n_trials"] == 0 and rec["started"] is None
+    assert rec["cost_usd"] is None  # no price was known: not $0
+    assert rec["not_run"] == {"grok": "no XAI_API_KEY in the environment"}
+    assert rec["halted"] is None

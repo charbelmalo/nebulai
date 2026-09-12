@@ -160,6 +160,8 @@ export interface BehaviorManifest {
 
 export interface BehaviorRun {
   run_id: string;
+  /** which arm this run collected (the exporter writes one record per arm) */
+  arm?: string;
   started: string;
   finished: string | null;
   n_trials: number;

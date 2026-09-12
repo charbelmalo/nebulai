@@ -46,6 +46,12 @@ from typing import Any, Iterator
 
 from .contract import TrialRecord
 
+
+def _utcnow() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
 SCHEMA_VERSION = 1
 
 
@@ -339,6 +345,82 @@ class TrialStore:
             (study_id,),
         ).fetchone()
         return float(row["s"])
+
+    # -- run records (what the Behavior page's "Runs" table reads) ---------
+    def record_run(
+        self,
+        study_id: str,
+        arm: str,
+        *,
+        halted: str = "",
+        not_run: dict[str, str] | None = None,
+        spent_usd: float = 0.0,
+        completed: int = 0,
+        errors: int = 0,
+    ) -> None:
+        """Persist what `Runner.run` knew and the trials table does not.
+
+        A trial row says what a model answered; it cannot say that an arm was
+        *never asked* (no credentials, a missing optional dependency) or that a
+        run was halted by its budget. Those two facts are the ones the page's
+        "arm never ran" banner and its Runs table are built from, and until a
+        run writes them here they existed only on the runner's stdout.
+        """
+        self.set_meta(
+            f"run:{study_id}:{arm}",
+            json.dumps(
+                {
+                    "finished": _utcnow(),
+                    "halted": halted or "",
+                    "not_run": dict(not_run or {}),
+                    "spent_usd": float(spent_usd),
+                    "completed": int(completed),
+                    "errors": int(errors),
+                }
+            ),
+        )
+
+    def runs(self, study_id: str) -> list[dict[str, Any]]:
+        """One record per arm that has run, in the shape `viewer/src/data/behavior.ts`
+        declares as `BehaviorRun`: `run_id`, `started`, `finished`, `n_trials`,
+        `n_completed`, `cost_usd`, `halted`, `not_run`.
+
+        `cost_usd` is None when no trial of the arm carried a price — "no price
+        was known" is not $0, and the page prints the two differently. `started`
+        and `finished` come from the trials themselves (first and last `created`),
+        so a run that never wrote a trial reports them as null rather than as
+        the moment somebody looked.
+        """
+        rows = self.db.execute(
+            "SELECT arm, COUNT(*) n, SUM(error='') done, MIN(created) t0, "
+            "MAX(created) t1, SUM(cost_usd) cost, COUNT(cost_usd) priced "
+            "FROM trials WHERE study_id=? GROUP BY arm ORDER BY arm",
+            (study_id,),
+        ).fetchall()
+        by_arm = {r["arm"]: r for r in rows}
+        recorded = {
+            k[len(f"run:{study_id}:") :]: json.loads(v)
+            for k, v in self.db.execute(
+                "SELECT key, value FROM meta WHERE key LIKE ?", (f"run:{study_id}:%",)
+            ).fetchall()
+        }
+        out: list[dict[str, Any]] = []
+        for arm in sorted(set(by_arm) | set(recorded)):
+            r, meta = by_arm.get(arm), recorded.get(arm, {})
+            out.append(
+                {
+                    "run_id": f"{study_id}:{arm}",
+                    "arm": arm,
+                    "started": (r["t0"] or None) if r else None,
+                    "finished": meta.get("finished") or ((r["t1"] or None) if r else None),
+                    "n_trials": int(r["n"]) if r else 0,
+                    "n_completed": int(r["done"] or 0) if r else 0,
+                    "cost_usd": float(r["cost"]) if r and int(r["priced"] or 0) > 0 else None,
+                    "halted": meta.get("halted") or None,
+                    "not_run": dict(meta.get("not_run") or {}),
+                }
+            )
+        return out
 
     def progress(self, study_id: str) -> dict[str, Any]:
         """Counts the runner's health endpoint and the CLI both report."""

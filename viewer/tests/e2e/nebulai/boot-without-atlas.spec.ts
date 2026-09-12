@@ -64,6 +64,7 @@ test("no dataset index: the chrome mounts anyway and reports the absence", async
   // holds labels only, APP_PAGES holds membership — see app-pages.test.ts)
   expect(await page.locator(".topnav-pill").allInnerTexts()).toEqual([
     "Semantic map",
+    "Behavior",
     "Internals",
     "Episodes",
   ]);
