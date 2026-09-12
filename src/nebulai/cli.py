@@ -1193,6 +1193,16 @@ def _run_persona_verify(args) -> None:
     from .backend.persona import read_space, verify_space
 
     space = read_space(args.space_id, Path(args.out) / "persona")
+    # The space on disk already names its model and its commit, and `--model`
+    # carries the 135M default for `build`'s sake. Left alone, that default would
+    # point verify at the wrong checkpoint, so the space's own provenance wins
+    # unless the operator overrode it on the command line — and the substitution
+    # is printed, because a run that silently picked its own model is not a check.
+    if args.model == _PERSONA_DEFAULT_MODEL and space.model != args.model:
+        print(f"--model not given; using the space's own {space.model}")
+        args.model = space.model
+    if args.revision == "main" and space.revision:
+        args.revision = space.revision
     model = _persona_model(args)
     got = verify_space(space, model, control_n=args.control_n)
     print(f"space_id  {space.space_id}")
@@ -1222,10 +1232,13 @@ def _run_persona_list(args) -> None:
               f"null_p95={s.control.pc1_evr_null_p95:.4f}  {s.control.verdict}")
 
 
+_PERSONA_DEFAULT_MODEL = "HuggingFaceTB/SmolLM2-135M-Instruct"
+
+
 def _add_persona_model_args(q) -> None:
     q.add_argument(
         "--model",
-        default="HuggingFaceTB/SmolLM2-135M-Instruct",
+        default=_PERSONA_DEFAULT_MODEL,
         help="instruct model the space is built in (default: SmolLM2-135M-Instruct)",
     )
     q.add_argument(

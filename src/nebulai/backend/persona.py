@@ -507,7 +507,36 @@ def verify_space(space: PersonaSpace, model: Any, *, control_n: int = CONTROL_N)
     Raises if the prompt set's bytes no longer hash to what the space recorded:
     a space is only a fixed coordinate system if the thing that fixed it has
     not moved.
+
+    Raises, too, if `model` is not the model the space was built in. A space id
+    carries the model and the revision precisely so that the two cannot drift
+    apart, and the CLI's `--model` defaults to the 135M checkpoint — so verifying
+    a 360M space without passing `--model` would otherwise read layer 20 of a
+    576-wide residual stream, re-run the control on activations that have nothing
+    to do with the space on disk, and print either a false "verdict reproduced"
+    or a false "VERDICT MOVED". A check that can pass for the wrong reason is not
+    a check.
     """
+    if getattr(model, "model_id", None) != space.model:
+        raise PersonaError(
+            f"{space.space_id} was built in {space.model!r}, but the model handed "
+            f"to verify is {getattr(model, 'model_id', None)!r}. Re-running the "
+            f"control against a different model measures that other model, not "
+            f"this space — pass --model/--revision/--local-dir for the model the "
+            f"space names."
+        )
+    got_rev = getattr(model, "revision", None)
+    if got_rev != space.revision:
+        raise PersonaError(
+            f"{space.space_id} pins revision {space.revision} and the model in "
+            f"front of it resolved to {got_rev}. A space is pinned to a commit, "
+            f"never to a branch; verify the commit the space names or rebuild."
+        )
+    if space.layer >= getattr(model, "n_layer", space.layer + 1):
+        raise PersonaError(
+            f"{space.space_id} reads layer {space.layer}, which does not exist in "
+            f"a {getattr(model, 'n_layer', None)}-layer model."
+        )
     doc, sha = load_prompt_set(space.prompt_set["id"])
     if sha != space.prompt_set["sha256"]:
         raise PersonaError(

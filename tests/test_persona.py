@@ -395,3 +395,35 @@ def test_verify_reproduces_the_control(tiny, small_set) -> None:
     assert again.verdict == s.control.verdict
     assert np.isclose(again.pc1_evr, s.control.pc1_evr, atol=1e-5)
     assert np.isclose(again.pc1_evr_null_p95, s.control.pc1_evr_null_p95, atol=1e-5)
+
+
+def test_verify_refuses_a_different_model(tiny, small_set) -> None:
+    """The 42-minute bug this guard exists for.
+
+    `persona verify <360M space>` with no `--model` resolved the CLI's 135M
+    default, so the control was about to be re-run against a model the space has
+    nothing to do with — reading a layer index out of a different residual stream
+    and printing a verdict about it. Nothing in the old code looked at the name.
+    """
+    s = build_space(tiny, prompt_set_id="personas.test", layer=1, control_n=5)
+    s.model = "HuggingFaceTB/SmolLM2-135M-Instruct"
+    with pytest.raises(PersonaError, match="measures that other model"):
+        verify_space(s, tiny, control_n=5)
+
+
+def test_verify_refuses_a_different_revision(tiny, small_set) -> None:
+    # a space is pinned to a commit; "the same repo at some other commit" is a
+    # different model for every purpose this space has
+    s = build_space(tiny, prompt_set_id="personas.test", layer=1, control_n=5)
+    s.revision = "0" * 40
+    with pytest.raises(PersonaError, match="pinned to a commit"):
+        verify_space(s, tiny, control_n=5)
+
+
+def test_verify_refuses_a_layer_the_model_does_not_have(tiny, small_set) -> None:
+    # the shape in which the wrong-model bug would have surfaced if the names had
+    # happened to match: layer 20 of a 30-layer model is fine, of a 3-layer one is not
+    s = build_space(tiny, prompt_set_id="personas.test", layer=1, control_n=5)
+    s.layer = tiny.n_layer + 5
+    with pytest.raises(PersonaError, match="does not exist in"):
+        verify_space(s, tiny, control_n=5)

@@ -214,6 +214,15 @@ over more directions, and the only thing that decides whether a space is usable
 is its own null, never a comparison of `pc1_evr` across models. The unstratified
 `cross_check` came in `below_null` at both sizes, for the reason its note gives.
 
+**`nebulai persona verify <space_id>` re-runs the control and refuses a mismatch.**
+It checks three things before it measures anything: that `prompts/<set>.json` still
+hashes to the `prompt_set.sha256` in the file, that the live model's id and resolved
+revision are the `model` and `revision` the space records, and that `layer` exists in
+that model. `--model` defaults to the 135M checkpoint for `build`'s sake, so `verify`
+takes the model from the space itself when the flag is absent and prints that it did.
+A verification that can be run against the wrong checkpoint reports on the wrong
+model, and its "verdict reproduced" would mean nothing.
+
 ### `<store>/runs/<run_id>/placement.json` — as written by `seer place`
 
 ```jsonc
