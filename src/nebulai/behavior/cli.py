@@ -185,7 +185,25 @@ def run_run(a: argparse.Namespace) -> None:
             )
         budget.approve()
 
-    runner = Runner(m, store, budget=budget, progress=_print_progress if a.verbose else None)
+    # A paid arm is never batched. The estimate, the identity check and the
+    # spend ceiling are all per-request quantities, and a hosted endpoint has
+    # no equivalent of "sample sixteen sequences in one forward pass" that
+    # preserves them. Batching exists for the local arms, where the alternative
+    # is re-reading 6 GB of weights once per generated token.
+    batch = 1 if est.n_paid_trials else max(1, int(a.batch))
+    if batch > 1:
+        # Recorded, not assumed: a reader of this store has to be able to see
+        # that execution order was grouped, because `batch_plan` reorders
+        # inside a block and a replay at batch 1 will not reproduce these exact
+        # samples (it reproduces the same schedule and the same seeds).
+        store.set_meta("batch_size", str(batch))
+    runner = Runner(
+        m,
+        store,
+        budget=budget,
+        batch_size=batch,
+        progress=_print_progress if a.verbose else None,
+    )
     res = runner.run(a.arm, limit=a.limit)
     print(
         f"arm {res.arm}: {res.completed} new, {res.skipped_existing} already "
@@ -569,6 +587,16 @@ def add_behavior_parser(sub: argparse._SubParsersAction) -> None:
     r.add_argument("--manifest", required=True)
     r.add_argument("--arm", default="discovery", help="discovery | R | G | canary")
     r.add_argument("--limit", type=int, default=None)
+    r.add_argument(
+        "--batch",
+        type=int,
+        default=1,
+        help=(
+            "sample this many trials per request on an unpaid local arm "
+            "(default 1). Groups only within one collection block and one "
+            "(model, frame); paid arms ignore it."
+        ),
+    )
     r.add_argument("--approve", action="store_true", help="approve the printed paid estimate")
     r.add_argument("--verbose", action="store_true")
     r.add_argument("--out", default=DEFAULT_OUT)

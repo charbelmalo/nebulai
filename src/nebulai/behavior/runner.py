@@ -126,6 +126,62 @@ def build_schedule(m: Manifest, arm: str) -> list[ScheduledTrial]:
     return ordered
 
 
+def batch_plan(
+    todo: list[ScheduledTrial], batch_size: int
+) -> list[list[ScheduledTrial]]:
+    """Group a schedule into units that can be issued in one request.
+
+    Batching is a change of *execution order*, so it has to say exactly what it
+    is allowed to move. Two rules, both of them about what the statistics read:
+
+    - **Never across a collection block.** The within-block permutation test
+      (§6.4) conditions on the block label, so that label has to keep meaning
+      "collected in this window". Reordering inside a block is free — the
+      schedule already shuffles there, and the test is invariant to it — while
+      moving a trial between blocks would make the label a lie.
+    - **Never all of one model first.** Batches are emitted round-robin across
+      the (model, frame) groups present in the block, so each model still
+      appears throughout the block rather than in one contiguous run. The clump
+      size is `batch_size` trials, not the whole arm.
+
+    Grouping is by (model, frame) because those two fix the sampler settings —
+    a batch shares one `stop` sequence and one token budget.
+
+    `batch_size == 1` returns the schedule unchanged, one trial per group. That
+    is the default and the only mode a paid arm ever runs in.
+    """
+    if batch_size <= 1:
+        return [[t] for t in todo]
+    by_block: dict[int, list[ScheduledTrial]] = {}
+    block_order: list[int] = []
+    for t in todo:
+        if t.block not in by_block:
+            by_block[t.block] = []
+            block_order.append(t.block)
+        by_block[t.block].append(t)
+
+    out: list[list[ScheduledTrial]] = []
+    for b in block_order:
+        groups: dict[tuple[str, str], list[ScheduledTrial]] = {}
+        key_order: list[tuple[str, str]] = []
+        for t in by_block[b]:
+            key = (t.model_key, t.frame_id)
+            if key not in groups:
+                groups[key] = []
+                key_order.append(key)
+            groups[key].append(t)
+        chunks = {
+            k: [groups[k][i : i + batch_size] for i in range(0, len(groups[k]), batch_size)]
+            for k in key_order
+        }
+        depth = max((len(c) for c in chunks.values()), default=0)
+        for i in range(depth):
+            for k in key_order:
+                if i < len(chunks[k]):
+                    out.append(chunks[k][i])
+    return out
+
+
 def canary_schedule(m: Manifest) -> list[ScheduledTrial]:
     """One canary trial per model per block (§5.5.1) — required either way."""
     return [
@@ -246,12 +302,18 @@ class Runner:
         adapters: dict[str, Adapter] | None = None,
         budget: RunBudget | None = None,
         max_retries: int = 3,
+        batch_size: int = 1,
         progress: Callable[[dict[str, Any]], None] | None = None,
     ):
         manifest.require_frozen()
         self.m = manifest
         self.store = store
         self.max_retries = max_retries
+        # 1 means "one prompt per request", which is the only thing a hosted
+        # arm can do and the default everywhere. A local arm may sample many
+        # sequences in one forward pass; see `batch_plan` for what that is
+        # allowed to reorder and what it is not.
+        self.batch_size = max(1, int(batch_size))
         self.progress = progress
         self.budget = budget or RunBudget(manifest.max_cost_usd, label="behavior")
         self.not_run: dict[str, str] = {}
@@ -288,9 +350,11 @@ class Runner:
 
         res = RunResult(self.m.study_id, arm, len(todo), 0, skipped, 0)
         pending: list[TrialRecord] = []
-        for i, t in enumerate(todo):
-            ref = self.m.model(t.model_key)
-            adapter = self.adapters.get(t.model_key)
+        groups = batch_plan(todo, self.batch_size)
+        issued = 0
+        for group in groups:
+            model_key = group[0].model_key
+            adapter = self.adapters.get(model_key)
             if adapter is None:
                 # The arm has no reachable backend. It is recorded as not_run
                 # with a reason — never silently dropped (§5.5). `setdefault`,
@@ -300,23 +364,26 @@ class Runner:
                 # "no adapter", and the run report would lose the only sentence
                 # that says what to do about it.
                 res.not_run.setdefault(
-                    t.model_key, self.not_run.get(t.model_key, "no adapter")
+                    model_key, self.not_run.get(model_key, "no adapter")
                 )
+                issued += len(group)
                 continue
             try:
-                rec = self._one(t, adapter)
+                recs = self._group(group, adapter)
             except BudgetError as exc:
                 res.halted = str(exc)
                 break
             except AdapterError as exc:
-                self.not_run.setdefault(t.model_key, str(exc))
-                res.not_run.setdefault(t.model_key, str(exc))
-                self.adapters.pop(t.model_key, None)
+                self.not_run.setdefault(model_key, str(exc))
+                res.not_run.setdefault(model_key, str(exc))
+                self.adapters.pop(model_key, None)
+                issued += len(group)
                 continue
-            pending.append(rec)
-            res.completed += 1
-            res.errors += int(bool(rec.error))
-            if len(pending) >= 25 or i == len(todo) - 1:
+            pending.extend(recs)
+            res.completed += len(recs)
+            res.errors += sum(int(bool(r.error)) for r in recs)
+            issued += len(group)
+            if len(pending) >= 25 or issued >= len(todo):
                 self.store.record_many(pending)
                 pending = []
                 if self.progress:
@@ -337,7 +404,45 @@ class Runner:
         res.not_run |= self.not_run
         return res
 
-    def _one(self, t: ScheduledTrial, adapter: Adapter) -> TrialRecord:
+    def _group(
+        self, group: list[ScheduledTrial], adapter: Adapter
+    ) -> list[TrialRecord]:
+        """Execute one batch. Falls back to one-at-a-time whenever the batch
+        cannot be trusted to be equivalent: a single trial, an adapter with no
+        batch entry point, or a batch call that failed. The fallback matters —
+        a batch that dies on one malformed prompt must not lose the other
+        fifteen trials, and a retry loop around the whole batch would re-sample
+        the ones that were already fine."""
+        if len(group) == 1:
+            return [self._one(group[0], adapter)]
+        batch = getattr(adapter, "complete_batch", None)
+        if batch is None:
+            return [self._one(t, adapter) for t in group]
+
+        prepared = [self._prepare(t) for t in group]
+        settings = prepared[0][2]
+        prompts = [pr[1] for pr in prepared]
+        seeds = [pr[3] for pr in prepared]
+        try:
+            comps = batch(prompts, settings, trial_seeds=seeds)
+        except (BudgetError, AdapterError):
+            raise
+        except Exception:
+            return [self._one(t, adapter) for t in group]
+        if len(comps) != len(group):
+            return [self._one(t, adapter) for t in group]
+        return [
+            self._finish(rec, t, c)
+            for (rec, _p, _s, _seed), t, c in zip(prepared, group, comps, strict=True)
+        ]
+
+    def _prepare(
+        self, t: ScheduledTrial
+    ) -> tuple[TrialRecord, str, SamplerSettings, int]:
+        """Everything that is decided before a token is generated: the prompt,
+        the sampler settings, the trial's own seed and the empty record. Split
+        out of `_one` so a batch can prepare many trials and still produce the
+        identical rows a one-at-a-time run would."""
         frame = self.m.frame(t.frame_id)
         if t.arm == "discovery" and frame.role == "heldout":
             raise RunnerError(
@@ -369,6 +474,10 @@ class Runner:
             prompt_sha=prompt_sha(prompt),
             created=datetime.now(UTC).isoformat(timespec="seconds"),
         )
+        return rec, prompt, settings, trial_seed
+
+    def _one(self, t: ScheduledTrial, adapter: Adapter) -> TrialRecord:
+        rec, prompt, settings, trial_seed = self._prepare(t)
 
         last: Exception | None = None
         for attempt in range(self.max_retries):
@@ -386,6 +495,14 @@ class Runner:
             rec.error = f"{type(last).__name__}: {last}"
             return rec
 
+        return self._finish(rec, t, c)
+
+    def _finish(
+        self, rec: TrialRecord, t: ScheduledTrial, c: Any
+    ) -> TrialRecord:
+        """Fill one record from one completion. Shared by the single and the
+        batched path so a batched run cannot drift into recording something
+        subtly different from what the same trial alone would record."""
         rec.raw_output = c.text
         rec.requested_model = c.requested_model
         rec.served_model = c.served_model
@@ -409,7 +526,10 @@ class Runner:
         rec.invalid_reason = parsed.reason
         rec.parser_version = parsed.parser_version
         marks = detect(
-            parsed, cue=t.cue, prompt=prompt, exemplar_answers=EXEMPLAR_ANSWERS
+            # `rec.prompt` rather than a local: it is the string that was
+            # actually sent and hashed into `prompt_sha`, so the echo marks are
+            # computed against the evidence rather than against a re-render.
+            parsed, cue=t.cue, prompt=rec.prompt, exemplar_answers=EXEMPLAR_ANSWERS
         )
         # The marks ride in `usage` rather than replacing anything: raw evidence
         # is append-only, and a mark is a derived observation about it.
