@@ -22,6 +22,7 @@ from ..llm import BudgetError, RunBudget
 from . import analyze as A
 from . import cues as C
 from . import export as X
+from . import report as R
 from . import stats as S
 from .contract import CANARY_CUE, Cue, Manifest, ModelRef, load_manifest
 from .embed import DEFAULT_EMBEDDER_ID, DEFAULT_EMBEDDER_REVISION, resolve_embedder
@@ -473,14 +474,26 @@ def run_calibrate(a: argparse.Namespace) -> None:
         if t.valid:
             block_counts.setdefault((t.cue, t.model_key), {}).setdefault(t.block, 0)
             block_counts[(t.cue, t.model_key)][t.block] += 1
-    worst_floor = 0.0
+    #  The floor is PER CUE, because the block structure is per cue: a cue
+    #  collected 6 trials deep and a cue collected 192 deep have floors seven
+    #  orders of magnitude apart. Reporting only the worst made a study's whole
+    #  calibration read as failed the moment one partially-collected cue
+    #  appeared in the store, which is both wrong and the kind of wrong that
+    #  gets a real constraint ignored. So: every cue's floor, the best and worst
+    #  of them, and the names of the ones that cannot clear q at the depth they
+    #  were collected to.
+    per_cue_floor: dict[str, float] = {}
     for cue in {c for c, _ in block_counts}:
         sizes = []
         for k in keys:
             bc = block_counts.get((cue, k), {})
             sizes.append([bc.get(b, 0) for b in range(m.n_time_blocks)])
         if len(sizes) == 2:
-            worst_floor = max(worst_floor, S.p_floor(sizes[0], sizes[1]))
+            per_cue_floor[cue] = S.p_floor(sizes[0], sizes[1])
+    floors = sorted(per_cue_floor.values())
+    worst_floor = floors[-1] if floors else 0.0
+    best_floor = floors[0] if floors else 0.0
+    above_q = sorted(c for c, v in per_cue_floor.items() if v >= m.q_threshold)
 
     pc = A.positive_control_report(trials, threshold=a.control_threshold)
     report = {
@@ -496,8 +509,17 @@ def run_calibrate(a: argparse.Namespace) -> None:
         # blocks that actually have valid trials in them.
         "p_floor_design": m.p_floor,
         "p_floor_empirical_worst": worst_floor,
+        "p_floor_empirical_best": best_floor,
+        "p_floor_per_cue": dict(sorted(per_cue_floor.items())),
+        "p_floor_cues_total": len(per_cue_floor),
+        # Named, not counted away: a cue in this list cannot be called
+        # significant at the depth it was collected to, whatever its effect.
+        "p_floor_cues_above_q": above_q,
         "q_threshold": m.q_threshold,
-        "p_floor_clears_q": bool(worst_floor < m.q_threshold),
+        "p_floor_clears_q": bool(best_floor > 0.0 and best_floor < m.q_threshold),
+        "p_floor_clears_q_all_cues": bool(
+            per_cue_floor and worst_floor < m.q_threshold
+        ),
         "aa_controls": aa,
         "aa_false_positive_rate_mean": (sum(fprs) / len(fprs)) if fprs else None,
         "positive_control": pc,
@@ -507,9 +529,37 @@ def run_calibrate(a: argparse.Namespace) -> None:
     out = d / "calibration.json"
     out.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"wrote {out}")
+
+    #  The JSON is the record; the Markdown is the thing a person reads before
+    #  deciding whether to trust a single Δ̂ out of this study. The p-floor vs q
+    #  comparison in particular spans orders of magnitude, which a column of
+    #  decimals hides and a log axis shows, so the figure ships beside it.
+    md = d / "calibration.md"
+    fig = d / R.FIGURE_NAME
+    fig.write_text(
+        R.p_floor_figure(
+            p_floor_design=report["p_floor_design"],
+            p_floor_best=report["p_floor_empirical_best"] or None,
+            p_floor_worst=report["p_floor_empirical_worst"] or None,
+            q=report["q_threshold"],
+            n_cues=report["p_floor_cues_total"] or None,
+        ),
+        encoding="utf-8",
+    )
+    md.write_text(R.calibration_markdown(report), encoding="utf-8")
+    print(f"wrote {md} and {fig}")
     print(f"  bandwidth (frozen from here on): {bw:.6f}")
-    print(f"  p-floor design {m.p_floor:.3g} / empirical worst {worst_floor:.3g} vs q={m.q_threshold}")
-    print(f"  clears q with margin: {report['p_floor_clears_q']}")
+    print(
+        f"  p-floor design {m.p_floor:.3g} / as collected "
+        f"{best_floor:.3g}–{worst_floor:.3g} over {len(per_cue_floor)} cues "
+        f"vs q={m.q_threshold}"
+    )
+    print(f"  at least one cue clears q: {report['p_floor_clears_q']}")
+    if above_q:
+        print(
+            f"  {len(above_q)} cue(s) cannot clear q at their collected depth: "
+            f"{', '.join(above_q[:6])}{' …' if len(above_q) > 6 else ''}"
+        )
     if report["aa_false_positive_rate_mean"] is not None:
         print(f"  A/A false-positive rate at 0.05: {report['aa_false_positive_rate_mean']:.3f}")
     for k, r in pc["pass_rate"].items():
