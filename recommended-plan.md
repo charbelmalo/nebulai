@@ -160,6 +160,71 @@ which is itself the finding. Comparison happens in label space, not logit
 space, so nothing about the four models' different vocabularies or output
 transforms needs reconciling.
 
+## Track 2b — result
+
+Measured 2026-09-12. Every number below comes from
+`scripts/we_wu_overlap.py`, over the **same curated vocabulary, at the same
+token count and the same pinned revision** as each model's shipped W_E map.
+The cluster columns read the two shipped artifacts in `out/` rather than
+re-deriving a partition, so they are the agreement between two maps a
+reader can open.
+
+**What the measurement is.** For each token, take its *k*=50 nearest
+neighbours in W_E and in W_U (cosine, on the raw rows, before any
+reduction) and report the size of the intersection over *k*. This is a
+geometric agreement score between a model's input and output token spaces.
+It is not a quality score, it ranks no model, and a low value is not a
+defect — an untied model is *allowed* to read tokens differently from how
+it writes them, and whether it does is the entire question.
+
+### Neighbourhood overlap (k = 50)
+
+| model | tokens | mean overlap | median | chance | ×chance | zero-overlap tokens |
+|---|---:|---:|---:|---:|---:|---:|
+| Mistral-Nemo-Instruct-2407 | 5000 | **0.3419** | 0.3400 | 0.010002 | 34.2× | 6 |
+| Ling-2.6-flash | 50000 | **0.5254** | 0.5400 | 0.001000 | 525.4× | 0 |
+| gemma-4-26b-a4b-it (**tied — control**) | 50000 | **1.0000** | 1.0000 | 0.001000 | 1000.0× | 0 |
+
+### Cluster-level agreement (the shipped maps' own partitions)
+
+| model | ARI(W_E, W_U) | mean title Jaccard | tokens clustered in both | noise frac W_E | noise frac W_U |
+|---|---:|---:|---:|---:|---:|
+| Mistral-Nemo-Instruct-2407 | 0.0919 | 0.2817 | 1764 | 0.3406 | 0.5204 |
+| Ling-2.6-flash | 0.0496 | 0.1323 | 15781 | 0.5432 | 0.3544 |
+| gemma-4-26b-a4b-it (**tied — control**) | 1.0000 | 1.0000 | 31633 | 0.3673 | 0.3673 |
+
+### Which token families diverge most
+
+| model | alphanumeric | cjk | latin_word | non_latin_script | numeral | other | punctuation |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Mistral-Nemo-Instruct-2407 | — | 0.2725 <sub>n=229</sub> | 0.3388 <sub>n=3667</sub> | 0.3365 <sub>n=782</sub> | 0.4367 <sub>n=12</sub> | 0.3768 <sub>n=124</sub> | 0.4804 <sub>n=186</sub> |
+| Ling-2.6-flash | — | 0.5290 <sub>n=17021</sub> | 0.5213 <sub>n=31334</sub> | 0.5136 <sub>n=245</sub> | 0.5738 <sub>n=26</sub> | 0.5518 <sub>n=309</sub> | 0.5824 <sub>n=1065</sub> |
+| gemma-4-26b-a4b-it (**tied — control**) | 1.0000 <sub>n=12</sub> | 1.0000 <sub>n=1846</sub> | 1.0000 <sub>n=35744</sub> | 1.0000 <sub>n=10906</sub> | 1.0000 <sub>n=44</sub> | 1.0000 <sub>n=172</sub> | 1.0000 <sub>n=1276</sub> |
+
+### Validation of the new W_U maps (`nebulai validate`)
+
+| map | points | trustworthiness | seed ARI | silhouette | null silhouette | margin | noise |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `mistralai__Mistral-Nemo-Instruct-2407__unembed` | 5000 | 0.6876 | 0.4926 | 0.4741 | 0.2805 | +0.1936 | 0.5204 |
+| `inclusionAI__Ling-2.6-flash__unembed` | 50000 | 0.6489 | 0.5463 | 0.5629 | 0.3805 | +0.1824 | 0.3544 |
+| `google__gemma-4-26b-a4b-it` | 50000 | 0.6718 | 0.4791 | 0.5270 | 0.3821 | +0.1449 | 0.3673 |
+
+The last row is not a new artifact: `google__gemma-4-26b-a4b-it` is the model's single tied map, listed because the control's W_U column *is* that map and its metrics are what the control is calibrated against. Both genuinely new W_U maps clear their null floors by about +0.18, wider than any of the five original token maps managed (+0.06 to +0.15) — which is not a claim that a W_U map is better drawn: the two also sit at the low end of the corpus for trustworthiness (0.69 and 0.65), so their layouts are less faithful to the space they came from than their cluster separation on its own would suggest.
+
+### What it says
+
+**The control passes exactly.** Gemma-4's embeddings are tied, so W_U *is* W_E, and every statistic above returns the degenerate value: mean overlap 1.0000, 50000/50000 tokens at full overlap, ARI 1.0000, title Jaccard 1.0000, and 1.0000 in every one of the seven token families. That is the only calibration the untied numbers have. A pipeline that scored 0.98 on a copy of its own input would make every row below it unreadable, because there would be no way to tell measurement noise from a real difference.
+
+**Both untied models separate their two spaces, and neither separates them completely.** Nemo sits at 0.3419 (34.2x chance) and Ling at 0.5254 (525.4x chance). Read each against its own chance baseline and against the control, **not against each other**: Nemo is measured over 5000 tokens and Ling over 50000, so their chance baselines differ by a factor of ten and the two mean overlaps answer questions of different difficulty. What is comparable is the shape of the answer, and it is the same shape in both - roughly a third to a half of each token's fifty nearest neighbours survive the move from W_E to W_U, hundreds of times what shuffling would give, and nowhere near the 1.0 a tied model returns.
+
+**The cluster agreement is much weaker than the neighbourhood agreement, and that is the finding with consequences.** ARI is 0.0919 for Nemo and 0.0496 for Ling - near-zero on a scale where 0 is chance - while the mean Jaccard between the two cluster *titles* a token sits under is 0.2817 and 0.1323. So local geometry is largely preserved and the partition over it is not. HDBSCAN's boundaries move even where the neighbours do not, which is what you would expect of a density partition over a space whose densities shifted; the noise fractions moving in opposite directions between the two models (W_E 0.3406 to W_U 0.5204 for Nemo, 0.5432 to 0.3544 for Ling) says the same thing. **The practical consequence: a cluster title read off a W_E map is not transferable to W_U.** A neighbourhood claim partly survives the move; a territory claim does not.
+
+**Which families diverge most.** The per-family columns order almost the same way in both models: punctuation agrees most (0.4804 Nemo, 0.5824 Ling) and `cjk` (Nemo) / `non_latin_script` (Ling) agrees least (0.2725 over n=229 and 0.5136 over n=245 respectively). The direction is consistent; the spread between the extremes is 0.21 in Nemo and only 0.07 in Ling, and 1 of the seven buckets carries fewer than fifty tokens in Nemo's curated slice, so read the per-family column as a direction to look in rather than a measured effect. `byte_fragment` and `whitespace` are empty in both slices - the curation these maps ship with removes them - so this table cannot speak about the family it would most want to.
+
+**Muse-Glimmer-30B is not measured here.** Its W_U map is the remaining Track 2b build; the overlap on top of that needs both of its `[202048, 6656]` matrices re-read as fp32 over HTTP ranges (~690 MB each at the measured 0.4 MB/s single-stream CDN rate). This is a **bandwidth** gap and nothing else - not a refusal, not a model that cannot be read. It is marked missing rather than estimated: the two untied numbers above do not license a guess about a third model, and Glimmer is the one map in the corpus whose own clustering barely clears its null (+0.009), so its ARI column in particular would be the worst one to invent.
+
+**What none of this shows.** These are geometric agreement scores between two weight matrices. They say nothing about what either matrix *does* to the model's behaviour, they are not a ranking, and a model with lower overlap is not worse at anything. The one claim they support is the qualifier this track was opened to settle: **"the model's token geometry" is not one thing in an untied model, and a finding read off a W_E map has to say which of the two spaces it came from.**
+
 ## Track 3 — The instrument
 
 The namer is the pipeline's quality bottleneck. It is now also the only place
