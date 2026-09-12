@@ -43,6 +43,7 @@ from ..contract import (
 )
 from ..taxonomy import classify_command, classify_tool
 from .base import BaseAdapter
+from .patches import FileEdit, parse_apply_patch
 
 #: Things the app-server reports and `exec --json` does not. Emitted as an
 #: adapter note at session start so a run captured this way is never mistaken
@@ -73,6 +74,10 @@ class CodexExecAdapter(BaseAdapter):
         super().__init__(**kw)
         self._thread_id: str | None = None
         self._started = False
+        #: path → per-file extents already emitted from an `apply_patch` shell
+        #: command, waiting to be claimed by a `file_change` item describing the
+        #: same patch. Consume-once: see `_file_change`.
+        self._patch_extents: dict[str, list[FileEdit]] = {}
 
     # ── entry point ──────────────────────────────────────────────────────
 
@@ -300,12 +305,50 @@ class CodexExecAdapter(BaseAdapter):
             ]
 
         ok = exit_code == 0
-        return [
+        events: list[Event] = []
+
+        # `apply_patch` run through the shell is the only place Codex states an
+        # edit's size. `exec --json`'s own `file_change` item carries {path,
+        # kind} and no counts at all, so without this every Codex run reported
+        # `edit_churn` as missing. The counts come out of the patch body, which
+        # is why they are DETERMINISTIC and not an estimate.
+        edits = parse_apply_patch(cmd) if ok else []
+        for edit in edits:
+            self._patch_extents.setdefault(edit.path, []).append(edit)
+            events.append(
+                self.event(
+                    EventType.FILE_CHANGED,
+                    span_id=span_id,
+                    action=Action.EDIT,
+                    effect=Effect.STATE_CHANGED,
+                    fidelity=Fidelity.DETERMINISTIC,
+                    native_type="item.command_execution.apply_patch",
+                    source_event_id=item_id,
+                    payload={"via": "apply_patch", **edit.payload()},
+                )
+            )
+            self.novelty.note_edit(edit.path)
+
+        if edits:
+            effect: Effect | None = Effect.STATE_CHANGED
+            extra: dict[str, Any] = {}
+        else:
+            # The fallback for a clean exit is STATE_CHANGED, which is *our*
+            # inference from exit_code == 0 and not something Codex said — so
+            # the ledger is allowed to replace it when a rule actually fires.
+            effect, extra = self.decide_effect(
+                action=action,
+                fallback=Effect.STATE_CHANGED,
+                command=cmd,
+                output=out,
+                allow=ok,
+            )
+        events.append(
             self.event(
                 EventType.TOOL_COMPLETED if ok else EventType.TOOL_FAILED,
                 span_id=span_id,
                 action=action,
-                effect=Effect.STATE_CHANGED if ok else Effect.FAILED,
+                effect=effect if ok else Effect.FAILED,
                 native_type="item.command_execution",
                 source_event_id=item_id,
                 payload={
@@ -313,9 +356,12 @@ class CodexExecAdapter(BaseAdapter):
                     "exit_code": exit_code,
                     "output_chars": len(out),
                     "status": status,
+                    **({"n_patch_files": len(edits)} if edits else {}),
+                    **extra,
                 },
             )
-        ]
+        )
+        return events
 
     def _file_change(self, item, span_id, done, item_id) -> list[Event]:
         if not done:
@@ -337,22 +383,43 @@ class CodexExecAdapter(BaseAdapter):
             changes = [{"path": p, **(v if isinstance(v, dict) else {"kind": v})}
                        for p, v in changes.items()]
         paths = [c.get("path") for c in changes if isinstance(c, dict)]
-        events = [
-            self.event(
-                EventType.FILE_CHANGED,
-                span_id=span_id,
-                action=Action.EDIT,
-                effect=Effect.STATE_CHANGED,
-                native_type="item.file_change",
-                source_event_id=item_id,
-                payload={
-                    "path": c.get("path"),
-                    "kind": c.get("kind"),
-                },
+        events: list[Event] = []
+        deduped = 0
+        for c in changes:
+            if not isinstance(c, dict):
+                continue
+            path = c.get("path")
+            # If a shell `apply_patch` already reported this exact file, this
+            # item is Codex describing the same edit a second time — with less
+            # information, since it carries no counts. Claim the pending extent
+            # and emit nothing, so `edit_churn` sees one edit rather than an
+            # exact one plus a blind duplicate. Consume-once, so a genuinely
+            # later edit to the same file is unaffected.
+            pending = self._patch_extents.get(str(path))
+            if pending:
+                pending.pop(0)
+                deduped += 1
+                continue
+            events.append(
+                self.event(
+                    EventType.FILE_CHANGED,
+                    span_id=span_id,
+                    action=Action.EDIT,
+                    effect=Effect.STATE_CHANGED,
+                    native_type="item.file_change",
+                    source_event_id=item_id,
+                    payload={
+                        "path": path,
+                        "kind": c.get("kind"),
+                        # `exec --json` states which file changed and never by
+                        # how much. Absent, not zero — `Reducer._file_stat`
+                        # leaves `line_data` false and `edit_churn` reports the
+                        # gap rather than a ratio over an invented 0.
+                        "lines_fidelity": Fidelity.MISSING.value,
+                    },
+                )
             )
-            for c in changes
-            if isinstance(c, dict)
-        ]
+            self.novelty.note_edit(path)
         events.append(
             self.event(
                 EventType.TOOL_COMPLETED,
@@ -361,7 +428,11 @@ class CodexExecAdapter(BaseAdapter):
                 effect=Effect.STATE_CHANGED if paths else Effect.NO_STATE_CHANGE,
                 native_type="item.file_change",
                 source_event_id=item_id,
-                payload={"paths": paths, "n_changes": len(paths)},
+                payload={
+                    "paths": paths,
+                    "n_changes": len(paths),
+                    **({"n_deduped": deduped} if deduped else {}),
+                },
             )
         )
         return events
@@ -395,14 +466,27 @@ class CodexExecAdapter(BaseAdapter):
         ]
 
     def _web_search(self, item, span_id, done, item_id) -> list[Event]:
+        query = item.get("query")
+        effect: Effect | None = None
+        extra: dict[str, Any] = {}
+        if done:
+            # The item carries the query and no results, so the only rule that
+            # can fire here is R-A: the same query searched twice. R-C needs a
+            # result body this item does not have.
+            effect, extra = self.decide_effect(
+                action=Action.SEARCH,
+                fallback=None,
+                target=f"web_search:{query}" if query else None,
+            )
         return [
             self.event(
                 EventType.TOOL_COMPLETED if done else EventType.TOOL_STARTED,
                 span_id=span_id,
                 action=Action.SEARCH,
+                effect=effect,
                 native_type="item.web_search",
                 source_event_id=item_id,
-                payload={"query": item.get("query")},
+                payload={"query": query, **extra},
             )
         ]
 

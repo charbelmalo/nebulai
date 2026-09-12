@@ -16,6 +16,20 @@ dependencies = [
     "anthropic",
 ]
 
+# ── Attractors P5 (D1b): the only part of this project that needs torch ──────
+# `pip install nebulai` must stay torch-free. Every map, every direction, every
+# Seer capture and the whole numpy forward pass run without it; training a model
+# organism does not, and that one capability is not allowed to put a 2 GB wheel
+# in front of everybody else. tests/test_no_torch_in_base.py enforces it by
+# importing the CLIs with `torch` made unimportable.
+[project.optional-dependencies]
+organisms = [
+    "torch",
+    "transformers",
+    "peft",
+    "datasets",
+]
+
 [project.scripts]
 nebulai = "nebulai.cli:main"
 seer = "nebulai.seer.cli:main"

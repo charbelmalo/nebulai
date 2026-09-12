@@ -61,6 +61,16 @@ _PALETTE = [
     [0.95, 0.75, 0.85],  # blush
     [0.55, 0.45, 0.30],  # umber
     [0.80, 0.95, 0.40],  # chartreuse
+    # 25-32: Track 2b's W_U maps (the unembedding beside every embedding) took
+    # the roster from 24 to 28 in one merge; same guard, same fix.
+    [0.25, 0.45, 0.85],  # cobalt
+    [0.90, 0.30, 0.30],  # brick
+    [0.35, 0.70, 0.35],  # fern
+    [0.70, 0.35, 0.60],  # plum
+    [0.85, 0.85, 0.85],  # ash
+    [0.55, 0.75, 0.55],  # sage
+    [0.95, 0.50, 0.50],  # coral
+    [0.40, 0.40, 0.75],  # indigo
 ]
 
 

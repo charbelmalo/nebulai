@@ -324,6 +324,41 @@ class SeerState:
         events = list(self.store.read(run_id))
         return analyze(reduce_run(run_id, events), events)
 
+    def placement(self, run_id: str) -> dict[str, Any] | None:
+        """The run's `placement.json`, or None if it was never placed.
+
+        Read from disk on every request rather than cached: `seer place` writes
+        it from a separate process, and a viewer holding a stale placement while
+        the file on disk has been recomputed against a different space is the
+        one failure mode a cache would buy us.
+        """
+        from .place import read_placement
+
+        p = read_placement(self.store, run_id)
+        return p.to_dict() if p is not None else None
+
+    def ensemble(self, ensemble_id: str) -> dict[str, Any] | None:
+        """The fan over one `run --repeat`, or None if the id is unknown.
+
+        Recomputed from the runs' own logs on every request, like `analysis`
+        and unlike anything cached: the manifest records *which* runs were one
+        experiment, and that is the only part of a fan that cannot be derived.
+        A run deleted since the repeat ran therefore drops out of the
+        statistics and is named in the document's `missing`, rather than a
+        stale document continuing to report an n that no longer exists.
+        """
+        from .ensemble import build_ensemble, read_manifest
+
+        manifest = read_manifest(self.store, ensemble_id)
+        if manifest is None:
+            return None
+        return build_ensemble(self.store, manifest).to_dict()
+
+    def ensembles(self, limit: int = 50) -> list[dict[str, Any]]:
+        from .ensemble import list_ensembles
+
+        return list_ensembles(self.store, limit)
+
     def annotate(self, req: dict[str, Any]) -> dict[str, Any]:
         """Append a human note to the run's own log.
 
@@ -481,11 +516,56 @@ class _Handler(BaseHTTPRequestHandler):
                     return
                 self._send(200, doc)
                 return
+            # ── Attractors P2 (D5): the run's placement in a persona space ──
+            # Two different 404s on purpose. "Unknown run" is a typo; "not
+            # placed" is a run that exists and has never been through
+            # `seer place`, and a viewer that cannot tell those apart will
+            # render a real run as a missing one. The document is served
+            # verbatim — including its `verdict`, its skipped list and its
+            # split of `dropped_by_policy` from `missing` — because the
+            # control travels with every drawing of the space (R5).
+            if tail == "placement":
+                if st.store.get_run(run_id) is None:
+                    self._send(404, {"error": f"unknown run {run_id!r}"})
+                    return
+                doc = st.placement(run_id)
+                if doc is None:
+                    self._send(404, {
+                        "error": f"run {run_id!r} has no placement",
+                        "run_exists": True,
+                        "hint": "seer place <run_id> --space <space_id>",
+                    })
+                    return
+                self._send(200, doc)
+                return
             view = st.view(run_id)
             if view is None:
                 self._send(404, {"error": f"unknown run {run_id!r}"})
                 return
             self._send(200, view)
+            return
+
+        # ── Attractors P3: the fan over N runs of one protocol ──────────
+        if path == "/seer/ensembles":
+            self._send(200, {
+                "ensembles": st.ensembles(int((q.get("limit") or ["50"])[0]))
+            })
+            return
+
+        if path.startswith("/seer/ensemble/"):
+            ensemble_id = path[len("/seer/ensemble/"):].partition("/")[0]
+            doc = st.ensemble(ensemble_id)
+            if doc is None:
+                # Same shape as the placement 404: an id that does not resolve
+                # must not render as an ensemble with nothing in it, because
+                # "no runs" is a real and different state a fan can be in.
+                self._send(404, {
+                    "error": f"unknown ensemble {ensemble_id!r}",
+                    "hint": "seer ensemble  (no id) lists them; an ensemble is "
+                            "created by `seer run <agent> <prompt> --repeat N`",
+                })
+                return
+            self._send(200, doc)
             return
 
         if path == "/seer/compare":

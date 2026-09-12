@@ -42,6 +42,7 @@ from ..contract import (
 from ..spool import SpoolLine
 from ..taxonomy import classify_command, classify_tool, edit_extent
 from .base import BaseAdapter
+from .novelty import lookup_path, lookup_target
 
 #: What each agent's hook surface cannot report, in the words the data-quality
 #: panel and the comparability gate both read. Wrong entries here are worse than
@@ -92,6 +93,15 @@ class _OpenTool:
     #: Carried across to the Post hook because that is where we learn the edit
     #: actually landed.
     extent: dict[str, int] | None = None
+    #: the novelty ledger's key for this call, and the command it ran — both
+    #: live in the Pre hook's `tool_input` and are needed in the Post hook,
+    #: where the result finally exists to compare against.
+    target: str | None = None
+    command: str | None = None
+    #: the one file this lookup read, when it named one — what an edit
+    #: invalidates. `None` means the call ranges over something we cannot
+    #: bound, and any edit retires it.
+    read_path: str | None = None
 
 
 class HookAdapter(BaseAdapter):
@@ -236,6 +246,11 @@ class HookAdapter(BaseAdapter):
                 else None
             ),
             extent=edit_extent(name, inp) if name in _EDIT_TOOLS else None,
+            target=lookup_target(name, inp),
+            read_path=lookup_path(name, inp),
+            command=(
+                str(inp["command"]) if isinstance(inp.get("command"), str) else None
+            ),
         )
         self._open_tools.setdefault(key, []).append(open_tool)
         return [
@@ -267,6 +282,7 @@ class HookAdapter(BaseAdapter):
         fidelity = Fidelity.HEURISTIC if guessed else self.timing_fidelity
         out: list[Event] = []
         if started and started.path and not failed:
+            self.novelty.note_edit(started.path)
             out.append(
                 self.hook_event(
                     EventType.FILE_CHANGED,
@@ -281,13 +297,24 @@ class HookAdapter(BaseAdapter):
                     },
                 )
             )
+        effect, extra = self.decide_effect(
+            action=action,
+            fallback=Effect.FAILED if failed else _effect_for(action),
+            target=started.target if started else None,
+            path=started.read_path if started else None,
+            command=started.command if started else None,
+            # The hook hands us the whole response, so R-B and R-C have real
+            # text to work with here even though only its size is ever stored.
+            output=_response_text(line.payload),
+            allow=not failed,
+        )
         out.append(
             self.hook_event(
                 EventType.TOOL_FAILED if failed else EventType.TOOL_COMPLETED,
                 line,
                 span_id=span_id,
                 action=action,
-                effect=Effect.FAILED if failed else _effect_for(action),
+                effect=effect,
                 fidelity=fidelity,
                 payload={
                     "tool": line.payload.get("tool_name"),
@@ -296,6 +323,7 @@ class HookAdapter(BaseAdapter):
                     # is what the churn and progress analyses actually use
                     "output_chars": _response_chars(line.payload),
                     **({"paired_by": "name-order"} if guessed else {}),
+                    **extra,
                 },
             )
         )
@@ -759,9 +787,34 @@ def hook_events(agent: str) -> tuple[str, ...]:
 
 
 def _effect_for(action: Action | None) -> Effect:
+    """The fallback effect, before the novelty ledger sees the response.
+
+    `UNKNOWN` survives unless one of the ledger's three rules fires; it is
+    never upgraded to `NEW_INFORMATION`, which no payload can establish.
+    """
     if action in (Action.EDIT, Action.VCS):
         return Effect.STATE_CHANGED
     return Effect.UNKNOWN
+
+
+def _response_text(payload: dict[str, Any]) -> str | None:
+    """The tool response as text, for comparison only — never stored.
+
+    Mirrors `_response_chars`'s key order so the string we compare and the
+    length we record describe the same field. A `dict`/`list` response is
+    rendered with `str()`, which is stable for a given payload and is all an
+    equality test needs.
+    """
+    for key in ("tool_response", "response", "result", "output"):
+        v = payload.get(key)
+        if isinstance(v, str):
+            return v
+        if isinstance(v, (dict, list)):
+            # `str()` of an empty container is `"{}"` / `"[]"`, which would
+            # compare equal across two unrelated empty responses. An empty
+            # container carried no output, so it reads as absent.
+            return str(v) if v else None
+    return None
 
 
 def _response_chars(payload: dict[str, Any]) -> int | None:

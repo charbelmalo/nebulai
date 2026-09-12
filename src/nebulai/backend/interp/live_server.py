@@ -273,6 +273,119 @@ def live_intervene(
     )
     return out
 
+# ── BEGIN /live/place (Attractors P2, §3.4) ─────────────────────────────────
+# Everything this endpoint needs lives between these two markers, including its
+# own lazy model cache, so that merging a sibling endpoint into this file is a
+# mechanical insertion rather than a three-way reconciliation.
+#
+# `POST /live/place {space_id, texts}` -> `{space_id, layer, coords, fidelity}`.
+# The persona model is a *different* model from the GPT-2 the rest of this
+# server runs, so it gets its own cache: loaded on the first place request and
+# kept resident, exactly like the SAE weights above.
+
+#: The out-root persona spaces are read from, and an optional local weights
+#: directory for a space whose revision is "local". Both set by `serve()`.
+_place_root: str = "out"
+_place_local_dir: str | None = None
+
+#: `{(model_id, revision): LlamaNumpy}` — one entry in practice, but keyed so a
+#: server asked for two spaces at different model sizes does not silently serve
+#: the second from the first's weights.
+_place_models: dict[tuple[str, str], Any] = {}
+#: `{space_id: PersonaSpace}`
+_place_spaces: dict[str, Any] = {}
+
+#: A place request is one prompt per point; cap the batch so a single request
+#: cannot occupy the server for minutes. Disclosed in the response.
+MAX_PLACE_TEXTS = 64
+MAX_PLACE_TOKENS = 512
+
+
+def _place_space(space_id: str):
+    from ..persona import read_space
+
+    if space_id not in _place_spaces:
+        from pathlib import Path
+
+        _place_spaces[space_id] = read_space(space_id, Path(_place_root) / "persona")
+    return _place_spaces[space_id]
+
+
+def _place_model(space):
+    from .llama_numpy import LlamaNumpy
+
+    key = (space.model, space.revision)
+    if key not in _place_models:
+        t0 = time.perf_counter()
+        print(f"[live] loading persona model {space.model} @ {space.revision}…")
+        if space.revision == "local":
+            if not _place_local_dir:
+                raise ValueError(
+                    f"space {space.space_id} was built from local weights and this "
+                    f"server was not told where they are; start it with "
+                    f"--persona-local-dir. Substituting the hub's copy of "
+                    f"{space.model!r} would be a different set of bytes under the "
+                    f"same name."
+                )
+            m = LlamaNumpy(space.model, local_dir=_place_local_dir)
+        else:
+            m = LlamaNumpy(space.model, revision=space.revision)
+            if m.revision != space.revision:
+                raise ValueError(
+                    f"asked for {space.model} @ {space.revision}, got {m.revision}"
+                )
+        print(f"[live] persona model resident in {time.perf_counter() - t0:.1f}s")
+        _place_models[key] = m
+    return _place_models[key]
+
+
+def live_place(space_id: Any, texts: Any) -> dict[str, Any]:
+    """Place free text into a built persona space. Pure function, HTTP-free.
+
+    Each text is rendered through the model's own chat template as a *user*
+    turn with no system prompt, run to its last token, read at the space's
+    pinned layer, and projected through the space's fixed basis. That is
+    deterministic end to end — no sampling, no fitted reducer — which is why
+    the fidelity is `deterministic` and not an estimate.
+    """
+    if not isinstance(space_id, str) or not space_id:
+        raise ValueError('body must be {"space_id": "<id>", "texts": ["…"]}')
+    if not isinstance(texts, list) or not texts or not all(
+        isinstance(t, str) and t for t in texts
+    ):
+        raise ValueError("`texts` must be a non-empty list of non-empty strings")
+    if len(texts) > MAX_PLACE_TEXTS:
+        raise ValueError(f"{len(texts)} texts exceeds the per-request cap of {MAX_PLACE_TEXTS}")
+
+    space = _place_space(space_id)
+    model = _place_model(space)
+    rendered = [
+        model.apply_chat_template([{"role": "user", "content": t}]) for t in texts
+    ]
+    ids = [model.encode(r)[-MAX_PLACE_TOKENS:] for r in rendered]
+    t0 = time.perf_counter()
+    acts = model.capture_resid(ids, [space.layer], batch_size=8)[space.layer]
+    coords = space.project(acts)[:, :2]
+    return {
+        "space_id": space.space_id,
+        "model": space.model,
+        "revision": space.revision,
+        "layer": space.layer,
+        "coords": [[round(float(x), 5), round(float(y), 5)] for x, y in coords],
+        "fidelity": "deterministic",
+        # The verdict travels with every placement: a point drawn in a space
+        # whose PC1 did not clear its null is still a real projection, but the
+        # card that shows it has to say so, and it cannot be the default frame.
+        "verdict": space.control.verdict,
+        "pc1_evr": round(space.control.pc1_evr, 6),
+        "pc1_evr_null_p95": round(space.control.pc1_evr_null_p95, 6),
+        "ms": round((time.perf_counter() - t0) * 1000.0, 1),
+        "max_texts": MAX_PLACE_TEXTS,
+    }
+
+
+# ── END /live/place ─────────────────────────────────────────────────────────
+
 
 class _Handler(BaseHTTPRequestHandler):
     m: GPT2Numpy  # set by serve()
@@ -319,7 +432,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": f"unknown path {self.path}"})
 
     def do_POST(self) -> None:
-        if self.path not in ("/live/forward", "/live/trace", "/live/sae", "/live/intervene"):
+        if self.path not in ("/live/forward", "/live/trace", "/live/sae", "/live/intervene", "/live/place"):
             self._send(404, {"error": f"unknown path {self.path}"})
             return
         try:
@@ -331,6 +444,15 @@ class _Handler(BaseHTTPRequestHandler):
                     out = live_intervene(self.m, req, directions=self.directions)
                 self._send(200, out)
                 return
+            # ── BEGIN /live/place dispatch ───────────────────────────────
+            # Its body is {space_id, texts}, not {text}, so it branches before
+            # the shared prompt validation below.
+            if self.path == "/live/place":
+                with self.lock:
+                    out = live_place(req.get("space_id"), req.get("texts"))
+                self._send(200, out)
+                return
+            # ── END /live/place dispatch ────────────────────────────────
             text = req.get("text", "")
             if not isinstance(text, str) or not text:
                 self._send(400, {"error": "body must be {\"text\": \"<non-empty prompt>\"}"})
@@ -384,7 +506,14 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8123,
     directions_path: str | None = None,
+    *,
+    persona_root: str = "out",
+    persona_local_dir: str | None = None,
 ) -> None:
+    # ── BEGIN /live/place wiring ───────────────────────────────────────
+    global _place_root, _place_local_dir
+    _place_root, _place_local_dir = persona_root, persona_local_dir
+    # ── END /live/place wiring ─────────────────────────────────────────
     t0 = time.perf_counter()
     print(f"[live] loading {model_id} weights (float32, resident)…")
     m = GPT2Numpy(model_id)
@@ -396,7 +525,7 @@ def serve(
     print(
         f"[live] serving on http://{host}:{port}  "
         "(health: /live/health, forward: POST /live/forward, trace: POST /live/trace, "
-        "sae: POST /live/sae, intervene: POST /live/intervene)"
+        "sae: POST /live/sae, intervene: POST /live/intervene, place: POST /live/place)"
     )
     srv.serve_forever()
 
@@ -412,5 +541,26 @@ if __name__ == "__main__":
         help="path to a directions.json; /live/intervene's add and ablate "
         "verbs resolve ids against it and refuse anything not in it",
     )
+    # ── BEGIN /live/place flags ────────────────────────────────────────
+    ap.add_argument(
+        "--persona-root",
+        default="out",
+        help="output root holding persona/<space_id>/space.json (default: out)",
+    )
+    ap.add_argument(
+        "--persona-local-dir",
+        default=None,
+        help="weights directory for a persona space whose revision is 'local'; "
+        "without it such a space is refused rather than served from a "
+        "same-named hub checkout",
+    )
+    # ── END /live/place flags ──────────────────────────────────────────
     a = ap.parse_args()
-    serve(a.model, a.host, a.port, a.directions)
+    serve(
+        a.model,
+        a.host,
+        a.port,
+        a.directions,
+        persona_root=a.persona_root,
+        persona_local_dir=a.persona_local_dir,
+    )

@@ -1042,3 +1042,517 @@
   color: var(--text-dim);
   font-weight: 600;
 }
+
+/* ── absorbing-state readout (Attractors P3) ───────────────────────────────
+   The Waluigi study. Laid out so the conditional, the base rate and the null
+   are on ONE shared 0–100% axis: the comparison is the finding, and three
+   numbers in three boxes make the reader do the comparison in their head,
+   which is where it goes wrong. */
+.absorb {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 4;
+  width: 340px;
+  max-height: calc(100% - 28px);
+  overflow-y: auto;
+  padding: 12px 13px 13px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--bg-raise);
+  box-shadow: var(--shadow-card);
+}
+.absorb-fab {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 4;
+  padding: 6px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: var(--bg-raise);
+  color: var(--text-dim);
+  font: 650 10.5px/1.2 var(--font-ui);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.absorb-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.absorb-title {
+  margin: 0;
+  font: 650 12.5px/1.3 var(--font-ui);
+  color: var(--text);
+}
+.absorb-collapse {
+  border: 0;
+  background: none;
+  color: var(--text-faint);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.absorb-subtitle {
+  margin: 0 0 4px;
+  font: 650 10px/1.2 var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.absorb-sep {
+  height: 1px;
+  margin: 11px 0;
+  background: var(--hairline);
+}
+.absorb-pick {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font: 500 10px/1.2 var(--font-ui);
+  color: var(--text-faint);
+}
+.absorb-pick select {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 5px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-form-ctl);
+  background: var(--bg);
+  color: var(--text-dim);
+  font: 400 10px/1.3 var(--font-mono);
+}
+.absorb-prov,
+.absorb-rule,
+.absorb-judge,
+.absorb-caption,
+.absorb-null {
+  margin: 7px 0 0;
+  font: 400 10.5px/1.55 var(--font-ui);
+  color: var(--text-dim);
+}
+.absorb-judge,
+.absorb-caption {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+.absorb-prov code,
+.absorb-rule code {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.absorb-null {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.absorb-warn {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  border-left: 2px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+  font: 400 10px/1.5 var(--font-ui);
+  color: var(--text-dim);
+}
+.absorb-error {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  border-left: 2px solid var(--danger);
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  font: 400 10px/1.5 var(--font-ui);
+  color: var(--text-dim);
+}
+
+/* one rate: the INTERVAL is the bar, the point estimate is a tick inside it */
+.absorb-rate {
+  margin-top: 9px;
+}
+.absorb-rate-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.absorb-rate-label {
+  font: 500 10px/1.3 var(--font-ui);
+  color: var(--text-dim);
+}
+.absorb-rate-accent .absorb-rate-label {
+  font-weight: 650;
+  color: var(--text);
+}
+.absorb-rate-n {
+  font: 400 9.5px/1.3 var(--font-mono);
+  color: var(--text-faint);
+}
+.absorb-axis {
+  position: relative;
+  height: 12px;
+  margin: 4px 0 3px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.absorb-band {
+  position: absolute;
+  inset-block: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
+}
+.absorb-rate-accent .absorb-band {
+  background: color-mix(in srgb, var(--accent) 62%, transparent);
+}
+/* n = 0: no band at all, hatched, because a full-width band would read as
+   "measured, and it could be anything" rather than "nothing was measured" */
+.absorb-noband {
+  position: absolute;
+  inset-block: 2px;
+  inset-inline: 0;
+  border-radius: 2px;
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--text) 10%, transparent) 0 3px,
+    transparent 3px 6px
+  );
+}
+.absorb-point {
+  position: absolute;
+  inset-block: 0;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--text);
+}
+/* the base rate, carried onto the conditional's own axis */
+.absorb-marker {
+  position: absolute;
+  inset-block: -2px;
+  width: 1px;
+  background: var(--text-faint);
+}
+.absorb-rate-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  font: 400 10px/1.3 var(--font-ui);
+  color: var(--text-dim);
+}
+.absorb-ci {
+  font: 400 9.5px/1.3 var(--font-mono);
+  color: var(--text-faint);
+}
+.absorb-span {
+  margin: 9px 0 0;
+  font: 500 10px/1.5 var(--font-ui);
+}
+.absorb-span-null {
+  color: var(--warn);
+}
+.absorb-span-clear {
+  color: var(--accent);
+}
+
+.absorb-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font: 400 10px/1.35 var(--font-ui);
+  color: var(--text-dim);
+}
+.absorb-matrix caption {
+  margin-bottom: 5px;
+  font: 400 9.5px/1.45 var(--font-ui);
+  color: var(--text-faint);
+  text-align: left;
+}
+.absorb-matrix th,
+.absorb-matrix td {
+  padding: 4px 5px;
+  border: 1px solid var(--hairline);
+  text-align: right;
+}
+.absorb-matrix thead th,
+.absorb-matrix tbody th {
+  font: 500 9.5px/1.3 var(--font-ui);
+  color: var(--text-faint);
+  text-align: left;
+}
+.absorb-matrix td b {
+  display: block;
+  font: 600 11px/1.2 var(--font-mono);
+  color: var(--text);
+}
+.absorb-cell-share {
+  font: 400 9px/1.3 var(--font-mono);
+  color: var(--text-faint);
+}
+
+.absorb-verdict {
+  margin: 0;
+  font: 650 11px/1.3 var(--font-ui);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.absorb-verdict-absorbing_above_null {
+  color: var(--accent);
+}
+.absorb-verdict-above_base_rate_explained_by_heterogeneity,
+.absorb-verdict-not_absorbing {
+  color: var(--warn);
+}
+.absorb-verdict-unknown {
+  color: var(--text-faint);
+}
+
+/* ── Attractors P3: the fan (chrome/EnsemblePanel.tsx) ─────────────────────
+ *
+ * The band is the drawing. Everything here is sized so the envelope reads as
+ * the primary mark and the median as a line inside it — the reverse of the
+ * usual chart, and deliberately so: a median drawn boldly over a faint band is
+ * a picture that tells the reader to read the median.
+ */
+
+.ens-panel {
+  margin-top: 18px;
+  padding: 14px 16px 16px;
+  background: var(--bg-raise);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+}
+
+.ens-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.ens-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.ens-toggle {
+  background: none;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 11px;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.ens-toggle:hover {
+  color: inherit;
+}
+
+.ens-provenance {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+  word-break: break-all;
+}
+
+.ens-mono {
+  font-family: var(--font-mono);
+}
+.ens-dim {
+  color: var(--text-faint);
+}
+
+.ens-note {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+.ens-note-warn {
+  color: var(--warn);
+}
+.ens-note-missing {
+  color: var(--danger);
+}
+
+.ens-block {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+.ens-block-alarm {
+  border-top-color: var(--danger);
+}
+
+.ens-h {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ── the fan ─────────────────────────────────────────────────────────────── */
+
+.ens-fan {
+  margin-top: 10px;
+}
+
+.ens-fan-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.ens-fan-band {
+  fill: var(--accent);
+  fill-opacity: 0.28;
+  stroke: var(--accent);
+  stroke-opacity: 0.45;
+  stroke-width: 1;
+}
+
+/* thin on purpose: the median is a summary of the band, not the result */
+.ens-fan-median {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.25;
+  stroke-opacity: 0.9;
+}
+
+.ens-fan-n {
+  fill: var(--text-faint);
+}
+
+/* ── rates ───────────────────────────────────────────────────────────────── */
+
+.ens-rate {
+  margin-top: 12px;
+}
+
+.ens-rate-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.ens-rate-label {
+  color: inherit;
+}
+
+.ens-rate-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.ens-rate-underpowered .ens-rate-value {
+  color: var(--warn);
+}
+
+.ens-missing {
+  color: var(--danger);
+}
+
+.ens-rate-track {
+  position: relative;
+  height: 10px;
+  margin-top: 4px;
+  border: 1px solid var(--hairline);
+  border-radius: 2px;
+  background: transparent;
+  overflow: hidden;
+}
+
+/* the INTERVAL is the bar */
+.ens-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+.ens-rate-underpowered .ens-band {
+  background: var(--warn);
+  opacity: 0.45;
+}
+
+/* the point estimate is a tick inside its interval, never the bar itself */
+.ens-tick {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+}
+
+/* n = 0 is a hatch, not a full-width band: "nothing was measured" and "it
+   could be anything" are different facts and must not share a mark */
+.ens-noband {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent 0 3px,
+    var(--hairline) 3px 5px
+  );
+}
+
+.ens-rate-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+/* ── reliability ─────────────────────────────────────────────────────────── */
+
+.ens-terms {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ens-terms > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+}
+
+.ens-term-label {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.ens-term-value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.ens-dropped,
+.ens-missing-list {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+.ens-block-alarm .ens-missing-list {
+  color: var(--danger);
+}
