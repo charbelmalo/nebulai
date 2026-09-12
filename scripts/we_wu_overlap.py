@@ -309,20 +309,41 @@ def main() -> int:
     E, labels, ids, meta_e = load_vectors(
         args.model, "input", args.max_tokens, args.revision, cache
     )
+
+    # The two weight matrices are never needed at the same time: each is read
+    # once, by knn_indices, and everything after that works off the (n,k) int32
+    # neighbour tables and the token strings. Holding both anyway costs four
+    # copies of an (n,d) float32 -- the two matrices plus the unit-normalised
+    # copy knn_indices makes of each -- which at Muse-Glimmer-30B's 6656
+    # dimensions and n=50000 is 5.3 GB and got this script SIGKILLed twice on a
+    # 16 GB machine, after it had already spent 11 minutes fetching W_E. So the
+    # untied path computes W_E's table, frees W_E, and only then fetches W_U:
+    # same numbers, half the peak, and the expensive download is not repeated
+    # because load_vectors caches it.
+    t0 = time.time()
     if args.control:
+        # The tied control keeps the old shape on purpose. It copies W_E and
+        # runs knn_indices a second, independent time, so "1.0000" is evidence
+        # that the pipeline returns identity on identical input rather than
+        # evidence that a table compared to itself equals itself. That is the
+        # whole job of a degenerate control, and it is worth the second copy --
+        # a tied model's matrix is the only one that has to be held twice.
         U, labels_u, meta_u = E.copy(), labels, dict(meta_e)
         print("  CONTROL: W_U is W_E (tied). Any score below 1.000 is a bug.")
+        nn_e = knn_indices(E, args.k)
+        nn_u = knn_indices(U, args.k)
+        del U
     else:
+        nn_e = knn_indices(E, args.k)
+        del E
         U, labels_u, _ids_u, meta_u = load_vectors(
             args.model, "output", args.max_tokens, args.revision, cache
         )
         if labels_u != labels:
             print("REFUSED: the two loads curated different token sets.", file=sys.stderr)
             return 2
-
-    t0 = time.time()
-    nn_e = knn_indices(E, args.k)
-    nn_u = knn_indices(U, args.k)
+        nn_u = knn_indices(U, args.k)
+        del U
     ov = overlap_per_token(nn_e, nn_u)
     n = len(labels)
     chance = args.k / (n - 1)
