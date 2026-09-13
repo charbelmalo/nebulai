@@ -349,6 +349,7 @@ export class AtlasDriver implements SceneDriver {
       this.axisBuffer = null;
       this.points.setAxis(null, this.dataset.columns.pos2);
       this.points.setAxisT(0);
+      this.applyGhostVisibility();
       this.cameraDirty = true;
       if (id && directionsLoaded(s.datasetId) && channelsLoaded(s.datasetId)) {
         // only drop an id this map genuinely cannot draw — not one whose
@@ -377,7 +378,23 @@ export class AtlasDriver implements SceneDriver {
     }
     this.points.setAxisT(s.axis.t);
     this.points.setGhost(s.axis.showNull);
+    this.applyGhostVisibility();
     this.cameraDirty = true;
+  }
+
+  /** Take the null cloud out of the draw list whenever its own opacity gate is
+   *  shut.
+   *
+   *  `createGhostMesh`'s opacityNode ends in `.mul(uAxis).mul(uGhost)`, so with
+   *  no axis engaged — the default for every map — all 49,385 instances shade
+   *  to alpha 0. The GPU still runs their vertex stage and still blends a
+   *  screen's worth of transparent, depth-test-off, additive fragments: at
+   *  1280x800 DPR 2 that measured 1.51 ms of the 4.00 ms scene pass (38%),
+   *  every frame, for nothing on screen. `visible = false` skips the draw
+   *  outright and the mesh comes straight back when the axis engages. */
+  private applyGhostVisibility(): void {
+    if (!this.ghost) return;
+    this.ghost.visible = this.axisT > 0 && appStore.getState().axis.showNull;
   }
 
   /** The live axis blend, 0 when no direction is engaged (exposed for tests
@@ -507,6 +524,7 @@ export class AtlasDriver implements SceneDriver {
     // them; it is invisible until an axis is engaged (its opacity is gated on
     // the same uAxis the blend uses, so it cannot outlive the claim)
     this.ghost = this.points.createGhostMesh();
+    this.ghost.visible = false; // applyAxis() below raises it if an axis is engaged
     this.scene.add(this.ghost);
 
     this.idPicker = new IdPicker(this.renderer, this.points.createIdMesh());

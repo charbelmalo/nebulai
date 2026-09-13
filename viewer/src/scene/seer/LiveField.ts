@@ -204,7 +204,11 @@ export class LiveField {
     this.h = Math.max(1, h);
     this.dpr = dpr;
     if (!this.renderer) return;
-    this.renderer.setPixelRatio(dpr);
+    // Cap at 2 like every other driver in the repo. This one is fragment-bound
+    // (one full-viewport additive sprite), so cost scales with the pixel count:
+    // a 3x display was rendering 2.25x the fragments of the capped path for a
+    // difference no one can see on a glow field.
+    this.renderer.setPixelRatio(Math.min(dpr, 2));
     this.renderer.setSize(this.w, this.h, false);
     // Pixel space, y down, matching the 2D canvas exactly: (0,0) top-left.
     this.camera.left = 0;
