@@ -15,10 +15,16 @@ transcripts in `~/.claude/projects`:
   nothing about the task) and "huggingface-cli" (a compound a substring grep
   would have scored);
 * line 12 is a line kind this module has no rule for, and must surface as
-  `unclassified` rather than vanish.
+  `unclassified` rather than vanish;
+* lines 13-15 are one queued message filed three times — the client's queue
+  ledger writes it on `enqueue` and again on `remove`, and only the middle line
+  delivers it to the model;
+* line 16 arrives in the same shape as a queued message but is a background-task
+  notification the harness wrote, and line 17 is one sent by another session —
+  neither is the operator's word and neither may be counted as such.
 
-The arithmetic those traps produce is the whole test: 10 counted occurrences out
-of 36 raw matches in 2.9 KB.
+The arithmetic those traps produce is the whole test: 13 counted occurrences out
+of 42 raw matches in 4.2 KB.
 """
 
 from __future__ import annotations
@@ -41,6 +47,7 @@ from nebulai.seer.sessionlog import (
     classify,
     discover_sessions,
     enabled_channels,
+    refine_attachment,
     refine_line_type,
     resolve_project,
     scan,
@@ -71,19 +78,19 @@ def sense_regex(body: str) -> Sense:
 
 
 def test_counts_only_the_text_that_reached_the_model_once(report):
-    """10 counted, from 36 raw substring matches in the file."""
+    """13 counted, from 42 raw substring matches in the file."""
     raw = TRANSCRIPT.read_text().lower().count("face")
-    assert raw == 35, f"fixture drifted: {raw} raw substring matches"
-    assert report.total == 10
+    assert raw == 42, f"fixture drifted: {raw} raw substring matches"
+    assert report.total == 13
 
 
 def test_origin_rollup_is_the_diagnosis(report):
     assert report.by_origin == {
         "standing": 2,      # CLAUDE.md + the invoked skill's body
-        "human": 1,         # the operator's own turn
+        "human": 2,         # the operator's own turn, and their queued message
         "model": 3,         # prose, thinking, tool argument
-        "environment": 2,   # the tool result and the attached file
-        "harness": 2,       # the skill listing and the system prompt
+        "environment": 3,   # tool result, attached file, the peer's message
+        "harness": 3,       # skill listing, system prompt, task notification
     }
 
 
@@ -99,8 +106,8 @@ def test_every_counted_occurrence_names_a_known_channel(report):
 def test_rendered_copy_is_suppressed_not_counted(report):
     """Every attachment stores its payload twice; counting both doubles it."""
     assert "meta.rendered_copy" not in report.by_channel
-    # one per attachment line that mentions the word: lines 1, 5, 6, 7, 10, 11
-    assert report.suppressed["meta.rendered_copy"] == 6
+    # one per attachment line that mentions the word: 1, 5, 6, 7, 10, 11, 16
+    assert report.suppressed["meta.rendered_copy"] == 7
 
 
 def test_the_rendered_copy_is_caught_twice_over(ref):
@@ -117,11 +124,15 @@ def test_the_rendered_copy_is_caught_twice_over(ref):
     louder = scan("face", [ref],
                   channels=enabled_channels(include=["meta.rendered_copy"]))
     assert louder.stats.duplicate_fields_folded == 6   # 5 rendered + 1 tool result
-    # The one survivor is the reminder line, whose own channel is off by
-    # default: with nothing left to fold against, its rendered twin stands
-    # alone. Every rendered copy of an ENABLED channel folded away.
-    assert louder.by_channel["meta.rendered_copy"] == 1
-    assert louder.total == report_total(ref) + 1
+    # Two survive, and neither is a double-count. One is the reminder line,
+    # whose own channel is off by default, so with nothing left to fold against
+    # its rendered twin stands alone. The other is the task notification, whose
+    # rendered copy wraps the text in a "NOT USER INPUT" banner close enough to
+    # the match to change the snippet — different bytes are not a duplicate, and
+    # the fold is right to keep both. Every rendered copy that really was the
+    # same sentence as an enabled channel's folded away.
+    assert louder.by_channel["meta.rendered_copy"] == 2
+    assert louder.total == report_total(ref) + 2
 
 
 def report_total(ref) -> int:
@@ -156,16 +167,16 @@ def test_identical_text_from_the_same_path_is_kept(ref, tmp_path):
 def test_the_project_path_in_cwd_is_never_counted(report):
     """`cwd` repeats the project path on every message line."""
     assert "meta.cwd" not in report.by_channel
-    assert report.suppressed["meta.cwd"] == 9
+    assert report.suppressed["meta.cwd"] == 10
 
 
 def test_a_term_that_lives_only_in_cwd_counts_zero_and_says_why(ref):
     rep = scan("Developer", [ref])
     assert rep.total == 0
-    assert rep.suppressed["meta.cwd"] == 9
+    assert rep.suppressed["meta.cwd"] == 10
     payload = rep.to_dict()
     assert payload["totals"]["counted"] == 0
-    assert payload["totals"]["suppressed"] == 9
+    assert payload["totals"]["suppressed"] == 10
 
 
 def test_base64_signature_is_classified_as_opaque(report):
@@ -176,7 +187,66 @@ def test_harness_reminders_are_off_by_default(report):
     assert report.suppressed["harness.reminder"] == 1
 
 
-# ── trap 4: substrings lie ───────────────────────────────────────────────────
+# ── trap 4: the queue files one message three times ──────────────────────────
+
+
+def test_a_queued_message_is_counted_once_where_it_reached_the_model(report):
+    """Enqueue, deliver, remove — three lines, one message, one count."""
+    assert report.by_channel["human.queued"] == 1
+    assert report.suppressed["meta.queue_ledger"] == 2
+    queued = [o for o in report.occurrences if o.channel == "human.queued"]
+    assert "keep the face unblocked" in queued[0].snippet
+    assert queued[0].path == ".attachment.prompt"
+
+
+def test_counting_the_queue_ledger_trebles_the_message(ref):
+    """Why the ledger is a suppressed channel and not a per-line fold.
+
+    The three copies are on three *different* lines, so `_fold_duplicate_fields`
+    — which only ever looks within one line — cannot see them. Turning the
+    ledger on is the measurement that proves it: the same sentence is counted
+    three times over.
+    """
+    louder = scan("face", [ref],
+                  channels=enabled_channels(include=["meta.queue_ledger"]))
+    assert louder.by_channel["meta.queue_ledger"] == 2
+    assert louder.total == scan("face", [ref]).total + 2
+    assert louder.stats.duplicate_fields_folded == 1   # unchanged: not one line
+
+
+def test_a_background_notification_is_the_harness_not_the_operator(report):
+    """It arrives as a queued message. The operator did not write it."""
+    assert report.by_channel["harness.task_notification"] == 1
+    hit = next(o for o in report.occurrences
+               if o.channel == "harness.task_notification")
+    assert hit.origin is Origin.HARNESS
+    assert "Background command" in hit.snippet
+
+
+def test_a_peer_sessions_message_is_not_the_operators_either(report):
+    assert report.by_channel["env.peer_message"] == 1
+    hit = next(o for o in report.occurrences if o.channel == "env.peer_message")
+    assert hit.origin is Origin.ENVIRONMENT
+
+
+def test_refine_attachment_splits_the_queue_by_who_sent_it():
+    def q(**att):
+        return refine_attachment({"attachment": {"type": "queued_command", **att}})
+    assert q(commandMode="prompt", origin={"kind": "human"}) == "queued_command"
+    assert q(commandMode="prompt") == "queued_command"
+    assert q() == "queued_command"
+    assert q(commandMode="task-notification") == "queued_command:notification"
+    assert q(commandMode="hook-event") == "queued_command:notification"
+    assert q(commandMode="prompt", origin={"kind": "peer"}) == "queued_command:peer"
+    # An author this module has never seen is not quietly the operator's.
+    assert q(commandMode="prompt", origin={"kind": "future"}) == "queued_command:peer"
+    # Any other attachment type passes through untouched.
+    assert refine_attachment({"attachment": {"type": "file"}}) == "file"
+    assert refine_attachment({"attachment": None}) is None
+    assert refine_attachment({}) is None
+
+
+# ── trap 5: substrings lie ───────────────────────────────────────────────────
 
 
 def test_word_boundary_rejects_compounds_and_reports_them(report):
@@ -199,7 +269,7 @@ def test_regex_mode_uses_the_term_verbatim(ref):
 
 def test_case_sensitivity_is_honoured(ref):
     assert scan("Face", [ref], case_sensitive=True).total == 1   # "Hugging Face"
-    assert scan("Face", [ref], case_sensitive=False).total == 10
+    assert scan("Face", [ref], case_sensitive=False).total == 13
 
 
 # ── who wrote it ─────────────────────────────────────────────────────────────
@@ -209,7 +279,7 @@ def test_a_tool_result_is_not_attributed_to_the_operator(report):
     """Claude Code files tool results under `type: "user"`. Counting them as the
     operator's words would put the machine's output in their mouth."""
     human = [o for o in report.occurrences if o.origin is Origin.HUMAN]
-    assert len(human) == 1
+    assert {o.channel for o in human} == {"human.prompt", "human.queued"}
     assert "keep the face visible" in human[0].snippet
 
 
@@ -284,7 +354,7 @@ def test_exclude_reports_exactly_what_it_removed(ref):
     import re
     rep = scan("face", [ref], excludes=[("idiom", re.compile("face value"))])
     assert rep.excluded == {"idiom": 1}
-    assert rep.total == 9
+    assert rep.total == 12
     assert rep.to_dict()["totals"]["excluded"] == 1
 
 
@@ -437,8 +507,8 @@ def test_an_unparsable_line_is_counted_not_fatal(tmp_path):
 
 def test_the_prefilter_examines_only_lines_that_could_match(ref):
     rep = scan("face", [ref])
-    assert rep.stats.lines == 12
-    assert rep.stats.lines_prefiltered == 12  # this fixture is dense on purpose
+    assert rep.stats.lines == 17
+    assert rep.stats.lines_prefiltered == 17  # this fixture is dense on purpose
     quiet = scan("tarantula", [ref])
     assert quiet.stats.lines_prefiltered == 0
 

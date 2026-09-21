@@ -40,7 +40,18 @@ count wrong by more than it is right:
    every line from `cwd` alone. Those channels are classified and suppressed by
    name, never silently skipped: `channels_suppressed` reports what they held.
 
-3. **Words are polysemous and substrings lie.** Measured on one 131 MB session,
+3. **A queued message is filed three times, and most queued messages are
+   not the operator's.** The client writes a queued message's text to its own
+   queue ledger on `enqueue` and again on `remove`; only the third line, the
+   `queued_command` attachment, is the copy the model was handed. Measured over
+   75 transcripts: 1,186 enqueue lines and 662 remove lines against 251 actual
+   deliveries. Worse, 202 of those 251 deliveries are background-task
+   notifications the harness wrote and one is a message from another session —
+   so counting the channel naively credits the operator with 81% of text they
+   never typed. The ledger is bookkeeping (suppressed, and reported), and the
+   delivery is split by who actually sent it.
+
+4. **Words are polysemous and substrings lie.** Measured on one 131 MB session,
    a substring search for `face` returned 1236 hits of which the plurality were
    *prism faces*, *face-normals* and *Hugging Face* — the human face was a
    minority. So matching is word-boundary by default, the distinct surface forms
@@ -148,7 +159,8 @@ CHANNELS: dict[str, Channel] = {ch.id: ch for ch in (
     _c("human.prompt", "your prompt", Origin.HUMAN,
        "text you typed as a turn"),
     _c("human.queued", "your queued message", Origin.HUMAN,
-       "a message you queued while the agent was working"),
+       "a message you queued while the agent was working, counted once where "
+       "the harness handed it to the model"),
     _c("human.prompt_echo", "your prompt (second copy)", Origin.HUMAN,
        "`last-prompt` re-records the prompt already counted as human.prompt",
        default=False),
@@ -176,6 +188,10 @@ CHANNELS: dict[str, Channel] = {ch.id: ch for ch in (
        "stdout and added context from your configured hooks"),
     _c("harness.environment", "environment block", Origin.HARNESS,
        "working directory, platform, shell and scratchpad notes"),
+    _c("harness.task_notification", "background-task notification", Origin.HARNESS,
+       "a background task or hook finished and the harness announced it through "
+       "the message queue — it arrives where a queued message would, but you "
+       "did not write it"),
     _c("harness.reminder", "harness reminder", Origin.HARNESS,
        "token budget, batching and mode reminders — thousands per session",
        default=False),
@@ -197,6 +213,9 @@ CHANNELS: dict[str, Channel] = {ch.id: ch for ch in (
        "patch hunks and before/after strings of file edits"),
     _c("env.file_attachment", "attached file contents", Origin.ENVIRONMENT,
        "a file the harness attached, or an edited file's snippet"),
+    _c("env.peer_message", "message from another agent", Origin.ENVIRONMENT,
+       "another session on this machine sent this through the queue — neither "
+       "your words nor this agent's own"),
     _c("env.file_path", "file paths", Origin.ENVIRONMENT,
        "paths of files read, written or referenced — a name, not content",
        default=False),
@@ -209,6 +228,13 @@ CHANNELS: dict[str, Channel] = {ch.id: ch for ch in (
        "`wireToolInputs` repeats the tool arguments already counted as "
        "model.tool_input — a third duplicate, found by this module's own "
        "`unclassified` tally on 47 real transcripts", default=False),
+    _c("meta.queue_ledger", "queued-message ledger copy", Origin.METADATA,
+       "the client's own record of its message queue, which writes a queued "
+       "message's text when it is queued and again when it leaves the queue. "
+       "Counting it would treble every queued message; the copy that reached "
+       "the model is counted at delivery instead. A message queued and then "
+       "cancelled appears only here — it never entered the context",
+       default=False),
     _c("meta.cwd", "working directory", Origin.METADATA,
        "the project path, repeated on every message line", default=False),
     _c("meta.opaque", "base64 / schema", Origin.METADATA,
@@ -262,6 +288,7 @@ _RULES: tuple[_Rule, ...] = (
                                 ".thinkingSignature")),
     _Rule("meta.rendered_copy", contains=(".rendered[]",)),
     _Rule("meta.wire_copy", contains=(".wireToolInputs.",)),
+    _Rule("meta.queue_ledger", line_types=("queue-operation",)),
     _Rule("meta.title", line_types=("custom-title", "ai-title")),
     _Rule("meta.other", line_types=(
         "atis-latch", "bridge-session", "frame-link", "cost-state",
@@ -274,8 +301,13 @@ _RULES: tuple[_Rule, ...] = (
 
     # ── human ────────────────────────────────────────────────────────────────
     _Rule("human.prompt_echo", line_types=("last-prompt",)),
-    _Rule("human.queued", line_types=("queue-operation",)),
     _Rule("human.prompt", line_types=("user-prompt",)),
+    # The delivery of a queued message, split by who sent it. `refine_attachment`
+    # has already read the attachment's own `commandMode` and `origin.kind`, so
+    # these three rules are a plain lookup rather than a guess from the text.
+    _Rule("harness.task_notification", attachments=("queued_command:notification",)),
+    _Rule("env.peer_message", attachments=("queued_command:peer",)),
+    _Rule("human.queued", attachments=("queued_command",)),
 
     # ── standing instructions ────────────────────────────────────────────────
     _Rule("env.file_path", attachments=("instructions",), suffix=(".path",)),
@@ -304,7 +336,6 @@ _RULES: tuple[_Rule, ...] = (
         "remote_session_change", "ultra_effort_enter", "plan_mode",
         "plan_mode_exit", "task_status", "command_permissions", "directory",
     )),
-    _Rule("human.queued", attachments=("queued_command",)),
 
     # ── what the machine told it ─────────────────────────────────────────────
     _Rule("env.file_path", attachments=("compact_file_reference",
@@ -375,6 +406,35 @@ def refine_line_type(obj: dict[str, Any]) -> str:
             if isinstance(block, dict) and block.get("type") == "tool_result":
                 return "user-result"
     return "user-prompt"
+
+
+def refine_attachment(obj: dict[str, Any]) -> str | None:
+    """The attachment's type, split where one type carries several authors.
+
+    `queued_command` is the only such type today and it is the reason this
+    function exists: the queue is a delivery mechanism, not an author. The
+    operator's own queued message, a background-task notification the harness
+    generated, and a message from another session all arrive as a
+    `queued_command`, and the attachment says which it is — `commandMode` and
+    `origin.kind` are recorded in the line. Reading them here, once, keeps the
+    rules table a lookup and keeps 202 harness notifications out of a channel
+    labelled "your queued message".
+    """
+    att = obj.get("attachment")
+    if not isinstance(att, dict):
+        return None
+    kind = att.get("type")
+    if kind != "queued_command":
+        return kind
+    if att.get("commandMode") not in (None, "prompt"):
+        return "queued_command:notification"
+    origin = att.get("origin")
+    who = origin.get("kind") if isinstance(origin, dict) else None
+    if who not in (None, "human"):
+        # `peer` today. An unknown author is NOT quietly counted as the
+        # operator: it goes to the peer channel, which says it is not theirs.
+        return "queued_command:peer"
+    return "queued_command"
 
 
 @dataclass
@@ -725,7 +785,7 @@ def scan_session(
             line_type = refine_line_type(obj)
             attachment = None
             if obj.get("type") == "attachment":
-                attachment = (obj.get("attachment") or {}).get("type")
+                attachment = refine_attachment(obj)
             ts = obj.get("timestamp") if isinstance(obj.get("timestamp"), str) else None
 
             candidates: list[tuple[str, Occurrence]] = []
