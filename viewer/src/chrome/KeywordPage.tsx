@@ -491,7 +491,7 @@ function PatternRows({
         type="button"
         onClick={() => (rows.value = [...list, { name: "", pattern: "" }])}
       >
-        + add a {singular}
+        + add {/^[aeiou]/.test(singular) ? "an" : "a"} {singular}
       </button>
     </div>
   );
