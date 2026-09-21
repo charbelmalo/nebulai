@@ -574,6 +574,32 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _stream_file(self, path: Path, ctype: str) -> None:
+        """Send a file without first loading it into memory.
+
+        The largest transcript on this machine is 125 MB. `_send_bytes` would
+        hold it as one `bytes` and hand a copy to the socket writer; a picker
+        that lets you click any session must not need a quarter of a gigabyte
+        of headroom to open the interesting one. Content-Length is taken from
+        the stat so the browser can show real progress on the read.
+        """
+        size = path.stat().st_size
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(size))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        # A transcript is appended to while a session is live, so what was just
+        # served is a snapshot of a growing file and must never be cached as
+        # the whole of it.
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        with path.open("rb") as fh:
+            while True:
+                chunk = fh.read(1 << 20)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -720,7 +746,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_bytes(200, body, ctype, filename)
             return
 
-        if path == "/seer/keyword/projects":
+        # `/seer/projects` is the name for this now: the transcripts on disk are
+        # not the keyword scan's private business, and the Sessions plotter asks
+        # the same question. The old path stays because it is what a running
+        # viewer build calls.
+        if path in ("/seer/projects", "/seer/keyword/projects"):
             from . import sessionlog as sl
             base = Path((q.get("root") or [""])[0]).expanduser() \
                 if (q.get("root") or [""])[0] else sl.DEFAULT_PROJECTS_ROOT
@@ -731,6 +761,54 @@ class _Handler(BaseHTTPRequestHandler):
                 })
             except sl.SessionLogError as e:
                 self._send(404, {"error": str(e)})
+            return
+
+        # Every transcript in one project, so a page can offer them by name
+        # instead of asking the operator to find the file in Finder. Metadata
+        # only: `bytes` and `modified` come from the stat, `title` from the
+        # sidecar the client writes beside the log. Nothing is read.
+        if path == "/seer/transcripts":
+            from . import sessionlog as sl
+            name = (q.get("project") or [""])[0]
+            if not name:
+                self._send(400, {"error": "project is required",
+                                 "hint": "GET /seer/projects lists them"})
+                return
+            root = (q.get("root") or [""])[0]
+            try:
+                proj = sl.resolve_project(
+                    name, Path(root).expanduser() if root else None)
+            except sl.SessionLogError as e:
+                self._send(404, {"error": str(e)})
+                return
+            refs = sl.discover_sessions(proj.path)
+            self._send(200, {
+                "project": {"slug": proj.slug, "path": str(proj.path),
+                            "matched_how": proj.matched_how},
+                "transcripts": [r.to_dict() for r in refs],
+            })
+            return
+
+        # One transcript, verbatim. The viewer parses it with the same code that
+        # parses a file dropped from Finder — there is one parser for a session
+        # and it lives in the page, so this endpoint deliberately does no
+        # analysis. It exists because a browser cannot open `~/.claude` itself.
+        if path == "/seer/transcript":
+            from . import sessionlog as sl
+            name = (q.get("project") or [""])[0]
+            session = (q.get("session") or [""])[0]
+            if not name or not session:
+                self._send(400, {"error": "project and session are required"})
+                return
+            root = (q.get("root") or [""])[0]
+            try:
+                proj = sl.resolve_project(
+                    name, Path(root).expanduser() if root else None)
+                ref = sl.find_session(proj.path, session)
+            except sl.SessionLogError as e:
+                self._send(404, {"error": str(e)})
+                return
+            self._stream_file(ref.path, "application/x-ndjson")
             return
 
         if path == "/seer/keyword/channels":

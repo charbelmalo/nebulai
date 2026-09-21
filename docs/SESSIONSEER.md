@@ -517,11 +517,20 @@ never collapse. That is the same rule as "a namer with `n_labeled == 0` says so"
 
 ## 7. UI
 
-Its own app entry (`viewer/seer.html` → `viewer/src/seer-main.ts`), with three
-pages: Live (`#page=seer`), Transcripts (`#page=sessions`), Topics
-(`#page=snapshot`). `SeerPage.tsx` and `SeerLive.tsx` render the live view.
-Transcripts stays as the drop-a-transcript forensic view; Live is the live and
-comparative one.
+Its own app entry (`viewer/seer.html` → `viewer/src/seer-main.ts`), with four
+pages: Live (`#page=seer`), Transcripts (`#page=sessions`), Keywords
+(`#page=keyword`), Topics (`#page=snapshot`). `SeerPage.tsx` and `SeerLive.tsx`
+render the live view. Transcripts stays the per-transcript forensic view and
+Live the live, comparative one.
+
+Transcripts and Topics both read a transcript, and both can now take it either
+way: dropped or pasted as before, or picked from the sessions already on this
+machine (`chrome/LocalSessionPicker.tsx` over `/seer/projects`,
+`/seer/transcripts`, `/seer/transcript` — the same `~/.claude/projects` tree the
+Keywords scan reads). The server serves bytes and the browser parses them, so
+each page keeps its one parser; a picked transcript therefore travels from the
+collector to the browser over loopback, which those pages say instead of
+claiming nothing is transmitted.
 
 The panels:
 

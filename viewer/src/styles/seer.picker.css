@@ -1,0 +1,163 @@
+/* seer.picker.css — the local-session picker (chrome/LocalSessionPicker.tsx).
+
+   Its own partial, and its own `lsp-*` namespace, because the component is
+   mounted by two pages whose side rails name their blocks differently
+   (`.sessions-side-block`, `.snapshot-side-block`). Borrowing either page's
+   class would have made the picker look right on one page and unstyled on the
+   other, and moving the card treatment into a shared primitive would have
+   meant re-pointing both rails at it — a wider change than this feature needs.
+   The card rules below are therefore a deliberate, small duplication of those
+   two identical blocks; the rest is the picker's own.
+
+   Imported before the page partials so a page can still override it, which is
+   the same order the rest of this barrel keeps. */
+
+.lsp {
+  /* the two rails' identical block treatment; see the note above */
+  padding: 20px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--bg-raise);
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lsp h3 {
+  margin: 0;
+  font: 650 10.5px/1.2 var(--font-ui);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lsp-count {
+  font-size: 10px;
+  letter-spacing: 0;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.lsp-hint {
+  margin: 0;
+  font: 400 11px/1.6 var(--font-ui);
+  color: var(--text-dim);
+}
+
+.lsp-hint code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.lsp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.lsp-field > span {
+  font: 600 10px/1.2 var(--font-ui);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* the shared primitive caps itself at 148px, which truncates every project
+   label; a rail column is 328px and the select should use it */
+.lsp-field .ctl-select {
+  max-width: none;
+  width: 100%;
+}
+
+.lsp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* about seven rows, then scroll: a project with 47 sessions must not push
+     the session list and the persistence note off the rail */
+  max-height: 268px;
+  overflow-y: auto;
+}
+
+.lsp-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 11px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-ctl);
+  background: color-mix(in srgb, var(--bg) 50%, transparent);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  opacity: 0.82;
+  transition:
+    opacity var(--t-fast) var(--ease-out),
+    border-color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+
+.lsp-item:hover:not(:disabled) {
+  opacity: 1;
+  border-color: var(--hairline-strong);
+  background: var(--bg-pill);
+}
+
+.lsp-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A pick in flight disables every row, so the disabled look has to read as
+   "wait", not as "unavailable" — the rows are still legible. */
+.lsp-item:disabled {
+  cursor: progress;
+  opacity: 0.55;
+}
+
+.lsp-item.is-loaded {
+  opacity: 1;
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.lsp-item-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 500 12px/1.3 var(--font-ui);
+}
+
+.lsp-item-meta {
+  font: 400 10.5px/1.3 var(--font-mono);
+  color: var(--text-faint);
+}
+
+.lsp-tag {
+  font: 600 9px/1.2 var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--text-dim);
+}
+
+.lsp-error {
+  margin: 0;
+  font: 400 11px/1.45 var(--font-ui);
+  color: var(--danger);
+}

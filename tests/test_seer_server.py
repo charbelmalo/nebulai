@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -457,3 +458,120 @@ def test_reindex_route_rebuilds_from_the_log(live_server, fake_agent, tmp_path):
 
     assert post(base, "/seer/reindex", {})["reindexed"] == r.n_events
     assert get(base, f"/seer/run/{r.run_id}")["agent"] == "codex"
+
+
+# ── transcript discovery ─────────────────────────────────────────────────────
+#
+# The Sessions plotter could only be fed by dragging a file out of Finder, while
+# `seer keyword` had been reading `~/.claude/projects` all along. These three
+# routes close that gap: list the projects, list one project's transcripts, hand
+# one over. The last one takes an id from a URL and turns it into a path, so the
+# traversal test below is the point of the section.
+
+
+@pytest.fixture
+def projects_root(tmp_path):
+    """Two projects, the shape Claude Code actually writes on disk."""
+    root = tmp_path / "projects"
+    a = root / "-Users-x-Developer-alpha"
+    b = root / "-Users-x-Developer-beta"
+    for d in (a, b):
+        d.mkdir(parents=True)
+    (a / "ses-old.jsonl").write_text('{"type":"user","message":{"content":"hi"}}\n')
+    (a / "ses-new.jsonl").write_text(
+        '{"type":"user","message":{"content":"the newer, smaller one"}}\n')
+    # A title lives in a sidecar directory beside the log, not in it.
+    side = a / "ses-old"
+    side.mkdir()
+    (side / "custom-title.json").write_text(json.dumps({"customTitle": "Alpha work"}))
+    (b / "ses-b.jsonl").write_text('{"type":"user","message":{"content":"b"}}\n')
+    # Something the picker must never offer as a session.
+    (root / "secret.jsonl").write_text("not in a project\n")
+    import os
+    os.utime(a / "ses-old.jsonl", (1_700_000_000, 1_700_000_000))
+    os.utime(a / "ses-new.jsonl", (1_800_000_000, 1_800_000_000))
+    return root
+
+
+def test_projects_route_lists_what_is_on_disk(live_server, projects_root):
+    base, _ = live_server
+    body = get(base, f"/seer/projects?root={projects_root}")
+    slugs = [p["slug"] for p in body["projects"]]
+    assert slugs == ["-Users-x-Developer-alpha", "-Users-x-Developer-beta"]
+    alpha = body["projects"][0]
+    assert alpha["sessions"] == 2
+    assert alpha["titled"] == 1
+    # the newest transcript in the project, so a picker can offer the project
+    # you were last working in rather than the fattest one
+    assert alpha["modified"] == 1_800_000_000
+
+
+def test_the_old_keyword_scoped_path_still_answers(live_server, projects_root):
+    """A viewer build in a browser tab predates any rename."""
+    base, _ = live_server
+    assert get(base, f"/seer/projects?root={projects_root}") == \
+        get(base, f"/seer/keyword/projects?root={projects_root}")
+
+
+def test_transcripts_route_names_each_session_and_when_it_changed(
+        live_server, projects_root):
+    base, _ = live_server
+    body = get(base, f"/seer/transcripts?project=-Users-x-Developer-alpha"
+                     f"&root={projects_root}")
+    assert body["project"]["matched_how"] == "directory name"
+    by_id = {t["session_id"]: t for t in body["transcripts"]}
+    assert set(by_id) == {"ses-old", "ses-new"}
+    assert by_id["ses-old"]["title"] == "Alpha work"
+    assert by_id["ses-new"]["title"] is None
+    assert by_id["ses-new"]["modified"] == 1_800_000_000
+    assert by_id["ses-old"]["bytes"] > 0
+
+
+def test_transcripts_route_needs_a_project(live_server):
+    base, _ = live_server
+    with pytest.raises(urllib.error.HTTPError) as e:
+        get(base, "/seer/transcripts")
+    assert e.value.code == 400
+
+
+def test_transcript_route_serves_the_file_verbatim(live_server, projects_root):
+    """Byte-for-byte: the page parses this with the same code that parses a
+    dropped file, so anything done to it here would be a second parser."""
+    base, _ = live_server
+    url = (f"{base}/seer/transcript?project=-Users-x-Developer-alpha"
+           f"&session=ses-new&root={projects_root}")
+    with urllib.request.urlopen(url, timeout=5) as r:
+        raw = r.read()
+        assert r.headers["Content-Type"] == "application/x-ndjson"
+        # a live session is still being appended to; a cached copy would be a
+        # silently truncated one
+        assert r.headers["Cache-Control"] == "no-store"
+        assert int(r.headers["Content-Length"]) == len(raw)
+    assert raw == (projects_root / "-Users-x-Developer-alpha"
+                   / "ses-new.jsonl").read_bytes()
+
+
+@pytest.mark.parametrize("session", [
+    "../secret",
+    "../../../../etc/passwd",
+    "ses-new/../../secret",
+    "ses-missing",
+])
+def test_a_session_id_can_never_escape_its_project(live_server, projects_root,
+                                                   session):
+    """The id comes off a URL. It is matched against the ids found on disk and
+    never concatenated into a path, so an id that is really a path is simply an
+    id that does not exist."""
+    base, _ = live_server
+    with pytest.raises(urllib.error.HTTPError) as e:
+        get(base, f"/seer/transcript?project=-Users-x-Developer-alpha"
+                  f"&session={urllib.parse.quote(session)}&root={projects_root}")
+    assert e.value.code == 404
+
+
+def test_transcript_route_rejects_an_unknown_project(live_server, projects_root):
+    base, _ = live_server
+    with pytest.raises(urllib.error.HTTPError) as e:
+        get(base, f"/seer/transcript?project=nope&session=ses-new"
+                  f"&root={projects_root}")
+    assert e.value.code == 404

@@ -7,14 +7,21 @@
  *
  *  This supersedes the keyword Snapshot Map for large sessions: it keeps the
  *  token accounting, tool sequence, task lifecycle, and file touches the
- *  keyword map throws away. Everything runs client-side; raw transcript text is
- *  parsed in memory and never stored or transmitted. */
+ *  keyword map throws away.
+ *
+ *  Transcripts can also be picked straight off this machine — the same
+ *  `~/.claude/projects` tree the Keywords page reads — instead of being found
+ *  in Finder first. Parsing is client-side either way and raw text is never
+ *  stored; a picked transcript does travel from the local collector to the
+ *  browser over loopback, which is not the same claim as "never transmitted",
+ *  so the page no longer makes that one. */
 
 import { signal, useSignal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
 import { appStore } from "../app/store";
 import { AbsorbingPanel } from "./AbsorbingPanel";
 import { EnsemblePanel } from "./EnsemblePanel";
+import { LocalSessionPicker } from "./LocalSessionPicker";
 import {
   buildAgentGraph,
   CATEGORY_ORDER,
@@ -331,9 +338,10 @@ function SessionsSide(props: { dragOver: boolean; setDragOver: (v: boolean) => v
         onDragLeave={() => props.setDragOver(false)}
         onDrop={onDrop}
       >
-        <h3>Load session</h3>
+        <h3>Drop a file</h3>
         <p class="sessions-hint">
-          Claude&nbsp;Code transcript <code>.jsonl</code>. Parsed locally — never uploaded.
+          Claude&nbsp;Code transcript <code>.jsonl</code> from anywhere. Parsed in the
+          browser — a dropped file is never uploaded.
         </p>
         <input
           ref={fileRef}
@@ -373,6 +381,12 @@ function SessionsSide(props: { dragOver: boolean; setDragOver: (v: boolean) => v
         </button>
         {errorMsg.value && <p class="sessions-error">{errorMsg.value}</p>}
       </section>
+
+      <LocalSessionPicker
+        hint="Your own Claude Code sessions, read from disk by the local collector — newest first. Picking one again re-reads it, which is how you refresh a session that is still running."
+        loadedIds={sess.analyses.map((a) => a.id)}
+        onPick={(text, label, id) => doParse(text, label, errorMsg, id)}
+      />
 
       {sess.analyses.length > 0 && (
         <section class="sessions-side-block">
@@ -1150,9 +1164,15 @@ function shortModel(m: string): string {
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-function doParse(raw: string, name: string, errorMsg: { value: string }) {
+/** The one ingest point: drop, paste, sample and picker all arrive here.
+ *
+ *  `id` is passed only by the picker, and passing it is what makes re-picking a
+ *  session refresh it in place — `addSessionAnalysis` de-dups by id, and the
+ *  IndexedDB row is keyed by it too, so the grown transcript overwrites the
+ *  stale one rather than appearing beside it. */
+function doParse(raw: string, name: string, errorMsg: { value: string }, id?: string) {
   try {
-    const a = parseSessionTranscript(raw, cleanName(name));
+    const a = parseSessionTranscript(raw, cleanName(name), id);
     if (a.turns.length === 0) {
       errorMsg.value = "no model responses found — is this a Claude Code .jsonl transcript?";
       return;

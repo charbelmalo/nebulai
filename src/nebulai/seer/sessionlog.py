@@ -445,6 +445,12 @@ class SessionRef:
     session_id: str
     title: str | None
     bytes: int
+    #: `st_mtime`, epoch seconds — sent to the client as the number the
+    #: filesystem gave us rather than a formatted date, because the only
+    #: question a picker asks of it is "which of these is the one I just ran",
+    #: and that is an ordering, not a rendering. Defaults to 0 so a hand-built
+    #: ref (every test in this suite) stays a four-argument construction.
+    modified: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -452,6 +458,7 @@ class SessionRef:
             "title": self.title,
             "path": str(self.path),
             "bytes": self.bytes,
+            "modified": self.modified,
         }
 
 
@@ -472,10 +479,19 @@ def session_title(path: Path) -> str | None:
 
 
 def discover_sessions(project_dir: Path) -> list[SessionRef]:
-    """Every transcript in a project directory, largest first."""
+    """Every transcript in a project directory, largest first.
+
+    Largest first, not newest first, and that order is load-bearing:
+    `--max-sessions N` takes the first N, and for a scan the biggest
+    transcripts are the ones with the most in them. A picker that wants the
+    most recent session sorts by `modified` itself — the field is right here —
+    rather than having this function change its promise underneath the scan.
+    """
     refs = []
     for p in sorted(project_dir.glob("*.jsonl")):
-        refs.append(SessionRef(p, p.stem, session_title(p), p.stat().st_size))
+        st = p.stat()
+        refs.append(SessionRef(p, p.stem, session_title(p), st.st_size,
+                               st.st_mtime))
     refs.sort(key=lambda r: -r.bytes)
     return refs
 
@@ -503,6 +519,9 @@ def list_projects(root: Path | None = None) -> list[dict[str, Any]]:
             "sessions": len(refs),
             "bytes": sum(r.bytes for r in refs),
             "titled": sum(1 for r in refs if r.title),
+            #: the newest transcript in it, so a picker can offer the project
+            #: you were last working in instead of merely the fattest one.
+            "modified": max((r.modified for r in refs), default=0.0),
         })
     out.sort(key=lambda r: -r["bytes"])
     return out
@@ -562,6 +581,24 @@ def resolve_project(name: str, root: Path | None = None) -> ProjectRef:
 
 class SessionLogError(RuntimeError):
     """A scan could not be set up. Never raised for "no hits"."""
+
+
+def find_session(project_dir: Path, session_id: str) -> SessionRef:
+    """One transcript, by the id it is filed under.
+
+    Deliberately a lookup in `discover_sessions` rather than
+    `project_dir / f"{session_id}.jsonl"`. The id arrives over HTTP, and any
+    arithmetic on an untrusted string to build a path is a directory traversal
+    waiting to happen — `../../../../etc/passwd` is a perfectly good session id
+    if you are willing to concatenate. Matching against the ids actually found
+    on disk cannot escape the directory, because nothing outside it is ever a
+    candidate.
+    """
+    for ref in discover_sessions(project_dir):
+        if ref.session_id == session_id:
+            return ref
+    raise SessionLogError(
+        f"no transcript {session_id!r} in {project_dir.name}")
 
 
 # ── the scan ─────────────────────────────────────────────────────────────────
