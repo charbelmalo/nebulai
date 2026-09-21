@@ -12,7 +12,7 @@
  *  and a page in APP_PAGES with no pill is reachable only by hand-editing the
  *  hash.
  *
- *  Also pinned: the seven pages are partitioned, not merely covered. Every page
+ *  Also pinned: the eight pages are partitioned, not merely covered. Every page
  *  belongs to exactly one instrument — the whole point of the split is that
  *  neither app can render the other's pages, and a page listed under both
  *  would put it back in the shared bundle by way of both renderPage switches.
@@ -33,6 +33,7 @@ const ALL_PAGES: Page[] = [
   "interp",
   "guide",
   "sessions",
+  "keyword",
   "seer",
 ];
 

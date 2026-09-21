@@ -124,6 +124,7 @@ export const APP_CHROME: Record<AppId, AppChrome> = {
     nav: [
       { label: "Live", page: "seer" },
       { label: "Transcripts", page: "sessions" },
+      { label: "Keywords", page: "keyword" },
       { label: "Topics", page: "snapshot" },
     ],
     sibling: {

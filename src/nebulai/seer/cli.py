@@ -49,6 +49,7 @@ from .redaction import ContentLevel, parse_level
 from .reconcile import reconcile_codex
 from .reducer import Measured, RunView, reduce_run
 from .runner import Runner
+from .sessionlog import CHANNELS, KeywordReport
 from .store import DEFAULT_ROOT, EventStore
 
 # ── printing ─────────────────────────────────────────────────────────────────
@@ -892,6 +893,223 @@ def _cmd_import(args: argparse.Namespace, store: EventStore) -> int:
             sys.stderr.write(f"{r.run_id}: {w}\n")
     return 0
 
+def _kv(spec: str, what: str) -> tuple[str, "re.Pattern[str]"]:
+    """`name=regex` → a named pattern. A bare regex is named after itself."""
+    import re as _re
+    name, sep, body = spec.partition("=")
+    if not sep:
+        name, body = spec, spec
+    try:
+        return name, _re.compile(body, _re.IGNORECASE)
+    except _re.error as e:
+        raise SystemExit(f"bad {what} regex {body!r}: {e}")
+
+
+def _bar(n: int, total: int, width: int = 18) -> str:
+    if total <= 0:
+        return " " * width
+    filled = max(1, round(width * n / total)) if n else 0
+    return "█" * filled + "·" * (width - filled)
+
+
+def _print_keyword(rep: "KeywordReport") -> None:
+    d = rep.to_dict()
+    sc, tot = d["scanned"], d["totals"]
+    proj = d["project"]
+    print(f"\n{d['term']}   pattern {d['pattern']}"
+          f"{'' if d['case_sensitive'] else '   (case-insensitive)'}")
+    if proj:
+        print(f"{proj['slug']}   — matched by {proj['matched_how']}")
+    print(f"scanned {sc['sessions']} sessions · {sc['bytes'] / 1e6:.1f} MB · "
+          f"{sc['lines']:,} lines · {sc['lines_examined']:,} examined · "
+          f"{sc['elapsed_s']}s")
+
+    if not tot["counted"]:
+        print("\nno counted occurrences.")
+        if tot["suppressed"]:
+            print(f"  {tot['suppressed']} hit(s) landed only in suppressed "
+                  f"channels — see below, and --channel to count them.")
+        if d["compounds_rejected_by_word_boundary"]:
+            forms = " · ".join(f"{k} {v}" for k, v in
+                               list(d["compounds_rejected_by_word_boundary"].items())[:8])
+            print(f"  a substring search would have matched: {forms}")
+        if not tot["suppressed"] and not d["compounds_rejected_by_word_boundary"]:
+            print("  the word does not appear in these transcripts at all.")
+        return
+
+    # The headline. This ordering is the finding: who put the word there.
+    print(f"\nWHO PUT IT THERE                                   {tot['counted']} counted")
+    order = ["human", "standing", "harness", "model", "environment"]
+    gloss = {
+        "human": "you typed it",
+        "standing": "your standing instructions (CLAUDE.md, skills)",
+        "harness": "harness boilerplate — says nothing about the task",
+        "model": "the agent's own words",
+        "environment": "what it read off this machine",
+    }
+    for o in order:
+        n = d["by_origin"].get(o, 0)
+        if not n:
+            continue
+        pct = 100 * n / tot["counted"]
+        print(f"  {o:<12} {_bar(n, tot['counted'])} {n:>6}  {pct:4.0f}%  {gloss[o]}")
+
+    print("\nBY CHANNEL")
+    for cid, n in d["by_channel"].items():
+        ch = CHANNELS[cid]
+        print(f"  {n:>6}  {ch.label:<32} {ch.origin.value}")
+
+    if len(d["by_sense"]) > 1 or "unclassified" not in d["by_sense"]:
+        print("\nBY SENSE   (your regexes — heuristic, not stated by the transcript)")
+        for name, n in sorted(d["by_sense"].items(), key=lambda kv: -kv[1]):
+            print(f"  {n:>6}  {name}")
+
+    forms = " · ".join(f"{k} {v}" for k, v in d["surface_forms"].items())
+    print(f"\nSURFACE FORMS      {forms}")
+    if d["compounds_rejected_by_word_boundary"]:
+        rej = " · ".join(f"{k} {v}" for k, v in
+                         list(d["compounds_rejected_by_word_boundary"].items())[:10])
+        print(f"REJECTED COMPOUNDS {rej}")
+        print("                   (a substring grep would have counted these as hits)")
+        uw = d["compounds_unwordlike"]
+        if uw["hits"]:
+            print(f"                   + {uw['hits']} more in {uw['forms']} strings "
+                  "too long to be words (base64, signatures)")
+    if d["inflections_rejected"]:
+        infl = " · ".join(f"{k} {v}" for k, v in d["inflections_rejected"].items())
+        alt = "|".join([d["term"], *d["inflections_rejected"]])
+        print(f"\nNOTE  these are inflections of your term, not other words: {infl}")
+        print(f"      to count them too:  --regex '\\b({alt})\\b'")
+        print("      spellings that drop a letter of the term (face -> facing) "
+              "are not in")
+        print("      that tally and were never read — name them in --regex to "
+              "count them")
+
+    if d["suppressed_channels"] or sc["duplicate_fields_folded"]:
+        print("\nNOT COUNTED")
+        if sc["duplicate_fields_folded"]:
+            print(f"  {sc['duplicate_fields_folded']:>6}  the same text recorded twice on "
+                  f"one line (folded)")
+        for row in d["suppressed_channels"]:
+            print(f"  {row['hits']:>6}  {row['label']:<32} {row['why']}")
+    if d["excluded_by_rule"]:
+        print("\nEXCLUDED BY YOUR RULES")
+        for name, n in sorted(d["excluded_by_rule"].items(), key=lambda kv: -kv[1]):
+            print(f"  {n:>6}  {name}")
+
+    hits = [s for s in d["sessions"] if s["occurrences"]]
+    print(f"\nSESSIONS WITH HITS   {len(hits)} of {sc['sessions']}")
+    for s in hits[:12]:
+        origins = " ".join(f"{k[:4]}:{v}" for k, v in
+                           sorted(s["by_origin"].items(), key=lambda kv: -kv[1]))
+        print(f"  {s['occurrences']:>6}  {s['session_id'][:8]}  "
+              f"{(s['title'] or '(untitled)')[:44]:<44} {origins}")
+    if len(hits) > 12:
+        print(f"         … and {len(hits) - 12} more")
+
+    print("\nSAMPLES")
+    for s in d["samples"]:
+        print(f"  [{s['origin']}/{s['channel']}] {s['session_id'][:8]} L{s['line']}"
+              f"{'' if s['sense'] == 'unclassified' else '  sense=' + s['sense']}")
+        print(f"      …{s['snippet']}…")
+
+
+def _cmd_keyword(args: argparse.Namespace, store: EventStore) -> int:
+    """`seer keyword` — where a word entered the context, attributed by origin.
+
+    The `store` argument is unused on purpose: this command reads Claude Code's
+    own transcripts on disk and writes nothing to the event store. Nothing here
+    is imported as a run, because a text occurrence is not an event and
+    laundering one into the canonical contract would put a fidelity on it that
+    it has not earned.
+    """
+    from . import sessionlog as sl
+
+    root = Path(args.projects_root).expanduser() if args.projects_root else None
+
+    if args.list_projects:
+        base = root or sl.DEFAULT_PROJECTS_ROOT
+        if not base.is_dir():
+            sys.stderr.write(f"no projects directory at {base}\n")
+            return 2
+        rows = sl.list_projects(base)
+        print(f"{len(rows)} projects with transcripts under {base}\n")
+        for r in rows:
+            print(f"  {r['bytes'] / 1e6:>9.1f} MB  {r['sessions']:>4} sessions  "
+                  f"{r['slug']}")
+        return 0
+
+    if args.list_channels:
+        print("channel                          origin       on  why")
+        for cid, ch in sl.CHANNELS.items():
+            print(f"  {cid:<30} {ch.origin.value:<12} "
+                  f"{'yes' if ch.default else ' no'}  {ch.why}")
+        return 0
+
+    if not args.term:
+        sys.stderr.write("a search term is required (or --list-projects / --list-channels)\n")
+        return 2
+
+    try:
+        project = sl.resolve_project(args.project, root) if args.project else None
+    except sl.SessionLogError as e:
+        sys.stderr.write(f"{e}\n")
+        return 2
+
+    if project is None:
+        sys.stderr.write("--project is required (try --list-projects)\n")
+        return 2
+
+    refs = sl.discover_sessions(project.path)
+    if args.session:
+        wanted = set(args.session)
+        refs = [r for r in refs
+                if r.session_id in wanted
+                or any(r.session_id.startswith(w) for w in wanted)
+                or (r.title and any(w.lower() in r.title.lower() for w in wanted))]
+        if not refs:
+            sys.stderr.write(
+                f"no session in {project.slug} matches {', '.join(args.session)}\n")
+            return 2
+    if args.max_sessions:
+        refs = refs[: args.max_sessions]
+    if not refs:
+        sys.stderr.write(f"no transcripts in {project.path}\n")
+        return 2
+
+    try:
+        channels = sl.enabled_channels(include=args.channel or (),
+                                       only=args.only_channel or ())
+    except sl.SessionLogError as e:
+        sys.stderr.write(f"{e}\n")
+        return 2
+
+    senses = [sl.Sense(*_kv(s, "sense")) for s in (args.sense or [])]
+    excludes = [_kv(x, "exclude") for x in (args.exclude or [])]
+
+    rep = sl.scan(
+        args.term, refs, project=project, regex=args.regex,
+        case_sensitive=args.case_sensitive, channels=channels,
+        senses=senses, excludes=excludes, window=args.window,
+        samples_per_channel=args.samples,
+    )
+
+    if args.json:
+        payload = json.dumps(rep.to_dict(), indent=2)
+        if args.json == "-":
+            print(payload)
+        else:
+            out = Path(args.json).expanduser()
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(payload + "\n")
+            _print_keyword(rep)
+            print(f"\nreport written to {out}")
+        return 0
+
+    _print_keyword(rep)
+    return 0
+
+
 # ── wiring ───────────────────────────────────────────────────────────────────
 #
 # `_add_subcommands` is the one place the sub-subcommand table is declared.
@@ -1232,6 +1450,49 @@ def _add_subcommands(p: argparse.ArgumentParser) -> None:
     im = s.add_parser("import-spool", help="import the whole spool once, after the fact")
     im.add_argument("--idle-timeout", type=float, default=60.0)
     im.set_defaults(seer_fn=_cmd_import_spool)
+
+
+    kw = s.add_parser(
+        "keyword",
+        help="where a word entered the context: your prompt, CLAUDE.md, the "
+             "harness, the agent itself, or a file it read",
+    )
+    kw.add_argument("term", nargs="?", help="the word to trace")
+    kw.add_argument("--project", default=None,
+                    help="project name, working directory or transcript-dir slug")
+    kw.add_argument("--projects-root", default=None,
+                    help="where Claude Code keeps its project dirs "
+                         "(default ~/.claude/projects)")
+    kw.add_argument("--session", action="append", default=None,
+                    help="restrict to a session id, id prefix, or title "
+                         "substring. Repeatable")
+    kw.add_argument("--max-sessions", type=int, default=None,
+                    help="scan only the N largest transcripts")
+    kw.add_argument("--regex", action="store_true",
+                    help="treat the term as a regex instead of a literal word")
+    kw.add_argument("--case-sensitive", action="store_true")
+    kw.add_argument("--sense", action="append", default=None, metavar="NAME=REGEX",
+                    help="classify a hit by what its surroundings say, e.g. "
+                         "human='(head|chin|selfie)'. Unmatched hits stay "
+                         "visible as `unclassified`. Repeatable")
+    kw.add_argument("--exclude", action="append", default=None, metavar="NAME=REGEX",
+                    help="drop hits whose snippet matches. The count removed is "
+                         "always reported. Repeatable")
+    kw.add_argument("--channel", action="append", default=None,
+                    help="also count a channel that is off by default. Repeatable")
+    kw.add_argument("--only-channel", action="append", default=None,
+                    help="count only these channels. Repeatable")
+    kw.add_argument("--window", type=int, default=120,
+                    help="characters of context kept either side of a match")
+    kw.add_argument("--samples", type=int, default=4,
+                    help="samples printed per channel and sense")
+    kw.add_argument("--json", default=None, metavar="PATH",
+                    help="write the full report as JSON; `-` for stdout")
+    kw.add_argument("--list-projects", action="store_true",
+                    help="what transcript directories exist, and how big")
+    kw.add_argument("--list-channels", action="store_true",
+                    help="every channel, its origin, and whether it counts")
+    kw.set_defaults(seer_fn=_cmd_keyword)
 
     p.set_defaults(fn=run)
 

@@ -314,7 +314,9 @@ export function seerBase(): string {
   return (appStore.getState().seer.serverUrl || "").replace(/\/+$/, "");
 }
 
-async function getJSON<T>(path: string): Promise<T> {
+/** Exported for `keyword.ts`: the same server, the same `{error}` body
+ *  contract, and no reason for a second copy of this. */
+export async function getJSON<T>(path: string): Promise<T> {
   const base = seerBase();
   if (!base) throw new Error("no seer server configured");
   const res = await fetch(base + path);
@@ -331,7 +333,7 @@ async function getJSON<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-async function postJSON<T>(path: string, body: unknown): Promise<T> {
+export async function postJSON<T>(path: string, body: unknown): Promise<T> {
   const base = seerBase();
   if (!base) throw new Error("no seer server configured");
   const res = await fetch(base + path, {

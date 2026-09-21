@@ -24,6 +24,7 @@ import argparse
 import json
 import math
 import queue
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -115,6 +116,13 @@ class SeerState:
                 f"{r['n_events']} events — capture process is gone, "
                 "recorded as interrupted"
             )
+        #: Keyword scans over Claude Code's own transcripts, keyed by job id.
+        #: A scan of a gigabyte takes minutes, so it cannot be answered inside
+        #: one request: the job carries its own progress and the page polls it.
+        #: Nothing here is written to the event store — a text occurrence in a
+        #: transcript is not an event and must not be given a fidelity.
+        self.keyword_jobs: dict[str, dict[str, Any]] = {}
+        self._kw_lock = threading.Lock()
         self.collector: SpoolCollector | None = None
         if watch:
             self.collector = SpoolCollector(
@@ -405,6 +413,119 @@ class SeerState:
         self._on_event(e)
         return {"ok": True, "event_id": e.event_id, "ts": e.ts}
 
+    # ── keyword scans over Claude Code transcripts ───────────────────────
+
+    def keyword_start(self, req: dict[str, Any]) -> dict[str, Any]:
+        """Set the scan up here, run it on a thread, hand back a job id.
+
+        Everything that can fail cheaply — an unknown project, an unknown
+        channel, a bad regular expression, a term nobody typed — fails inside
+        this call, so the page gets a 400 with a reason instead of a job that
+        dies half a minute later.
+        """
+        from . import sessionlog as sl
+
+        term = str(req.get("term") or "").strip()
+        if not term:
+            raise ValueError("a search term is required")
+
+        root = Path(str(req["projects_root"])).expanduser() \
+            if req.get("projects_root") else None
+        project = sl.resolve_project(str(req.get("project") or ""), root)
+        refs = sl.discover_sessions(project.path)
+        if not refs:
+            raise ValueError(f"no transcripts in {project.path}")
+
+        wanted = [str(w) for w in (req.get("sessions") or []) if str(w).strip()]
+        if wanted:
+            refs = [r for r in refs
+                    if r.session_id in wanted
+                    or any(r.session_id.startswith(w) for w in wanted)
+                    or (r.title and any(w.lower() in r.title.lower()
+                                        for w in wanted))]
+            if not refs:
+                raise ValueError(
+                    f"no session in {project.slug} matches "
+                    f"{', '.join(wanted)}")
+        n_max = int(req.get("max_sessions") or 0)
+        if n_max > 0:
+            refs = refs[:n_max]
+
+        channels = sl.enabled_channels(
+            include=[str(c) for c in (req.get("channels") or [])],
+            only=[str(c) for c in (req.get("only_channels") or [])],
+        )
+        # compiled here, inside the request, so a bad sense regex is a 400
+        # with the offending pattern in it and not a job that dies on a thread
+        senses = [sl.Sense(str(name), re.compile(str(pat), re.IGNORECASE))
+                  for name, pat in (req.get("senses") or {}).items()]
+        excludes = [(str(name), re.compile(str(pat), re.IGNORECASE))
+                    for name, pat in (req.get("excludes") or {}).items()]
+        regex = bool(req.get("regex"))
+        case_sensitive = bool(req.get("case_sensitive"))
+        window = max(20, min(600, int(req.get("window") or sl.DEFAULT_WINDOW)))
+        samples = max(1, min(40, int(req.get("samples")
+                                     or sl.DEFAULT_SAMPLES_PER_CHANNEL)))
+        # compiled here so a bad pattern is a 400 on this request
+        sl.build_pattern(term, regex=regex, case_sensitive=case_sensitive)
+
+        job_id = f"kw-{int(time.time() * 1000):x}-{len(self.keyword_jobs)}"
+        job: dict[str, Any] = {
+            "job_id": job_id,
+            "state": "running",
+            "term": term,
+            "project": project.slug,
+            "matched_how": project.matched_how,
+            "started": time.time(),
+            "sessions_total": len(refs),
+            "bytes_total": sum(r.bytes for r in refs),
+            "sessions_done": 0,
+            "bytes_done": 0,
+            "hits_so_far": 0,
+            "reading": refs[0].title or refs[0].session_id[:8],
+            "report": None,
+            "error": None,
+        }
+        with self._kw_lock:
+            self.keyword_jobs[job_id] = job
+
+        def _progress(done: int, ref: sl.SessionRef, st: Any) -> None:
+            with self._kw_lock:
+                job["sessions_done"] = done
+                job["bytes_done"] = st.bytes_read
+                nxt = refs[done] if done < len(refs) else None
+                job["reading"] = (
+                    (nxt.title or nxt.session_id[:8]) if nxt else "finishing"
+                )
+
+        def _go() -> None:
+            try:
+                rep = sl.scan(
+                    term, refs, project=project, regex=regex,
+                    case_sensitive=case_sensitive, channels=channels,
+                    senses=senses, excludes=excludes, window=window,
+                    samples_per_channel=samples, on_progress=_progress,
+                )
+                with self._kw_lock:
+                    job["report"] = rep.to_dict()
+                    job["hits_so_far"] = rep.total
+                    job["state"] = "done"
+            except Exception as e:  # noqa: BLE001 — reported, never swallowed
+                with self._kw_lock:
+                    job["error"] = f"{type(e).__name__}: {e}"
+                    job["state"] = "error"
+            finally:
+                with self._kw_lock:
+                    job["finished"] = time.time()
+
+        threading.Thread(target=_go, name=f"seer-{job_id}", daemon=True).start()
+        return {k: v for k, v in job.items() if k != "report"}
+
+    def keyword_job(self, job_id: str) -> dict[str, Any] | None:
+        with self._kw_lock:
+            job = self.keyword_jobs.get(job_id)
+            return dict(job) if job else None
+
     def comparison(self, run_ids: list[str]) -> dict[str, Any]:
         views = []
         for rid in run_ids:
@@ -599,6 +720,43 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_bytes(200, body, ctype, filename)
             return
 
+        if path == "/seer/keyword/projects":
+            from . import sessionlog as sl
+            base = Path((q.get("root") or [""])[0]).expanduser() \
+                if (q.get("root") or [""])[0] else sl.DEFAULT_PROJECTS_ROOT
+            try:
+                self._send(200, {
+                    "root": str(base),
+                    "projects": sl.list_projects(base),
+                })
+            except sl.SessionLogError as e:
+                self._send(404, {"error": str(e)})
+            return
+
+        if path == "/seer/keyword/channels":
+            from . import sessionlog as sl
+            self._send(200, {
+                "channels": [
+                    {"id": cid, "label": ch.label, "origin": ch.origin.value,
+                     "on_by_default": ch.default, "why": ch.why}
+                    for cid, ch in sl.CHANNELS.items()
+                ],
+                "origins": [o.value for o in sl.Origin],
+            })
+            return
+
+        if path.startswith("/seer/keyword/job/"):
+            job = st.keyword_job(path[len("/seer/keyword/job/"):])
+            if job is None:
+                # An id that does not resolve must not render as a finished
+                # scan with no hits: "nothing matched" is a real answer and
+                # this is not it.
+                self._send(404, {"error": "unknown keyword job",
+                                 "hint": "POST /seer/keyword starts one"})
+                return
+            self._send(200, job)
+            return
+
         if path == "/seer/live":
             self._sse((q.get("run_id") or [None])[0])
             return
@@ -658,6 +816,14 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 self._send(200, self.state.annotate(req))
             except ValueError as e:
+                self._send(400, {"error": str(e)})
+            return
+
+        if path == "/seer/keyword":
+            from . import sessionlog as sl
+            try:
+                self._send(202, self.state.keyword_start(req))
+            except (ValueError, sl.SessionLogError, re.error) as e:
                 self._send(400, {"error": str(e)})
             return
 

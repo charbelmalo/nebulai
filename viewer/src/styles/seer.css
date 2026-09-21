@@ -1,6 +1,6 @@
 /* seer.css — Seer's stylesheet barrel (entry: src/seer-main.ts).
    The mirror of nebulai.css: the same shared base + chrome primitives, then
-   only Seer's three page partials. Nebulai's map and Internals sheets are not
+   only Seer's four page partials. Nebulai's map and Internals sheets are not
    here, so a Seer document does not download the styling for pages it cannot
    navigate to.
 
@@ -15,4 +15,5 @@
 @import "./seer.snapshot.css";
 @import "./seer.sessions.css";
 @import "./seer.live.css";
+@import "./seer.keyword.css";
 @import "./chrome.responsive.css";

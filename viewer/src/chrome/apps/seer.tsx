@@ -1,7 +1,8 @@
-/** apps/seer.tsx — Seer's page set: Live · Transcripts · Topics.
+/** apps/seer.tsx — Seer's page set: Live · Transcripts · Keywords · Topics.
  *
  *  Imported by `src/seer-main.ts` and by nothing else. The mirror image of
- *  apps/nebulai.tsx: naming SeerPage / SessionsPage / SnapshotMap here is what
+ *  apps/nebulai.tsx: naming SeerPage / SessionsPage / KeywordPage / SnapshotMap
+ *  here is what
  *  keeps them out of Nebulai's bundle, and not naming AtlasDriver anywhere in
  *  this graph is what lets `seer.html` boot with no atlas artifacts at all.
  *
@@ -10,6 +11,7 @@
  *  (permalinks, store, e2e), labels are product. See apps/nav.ts. */
 
 import { SeerPage } from "../SeerPage";
+import { KeywordPage } from "../KeywordPage";
 import { SessionsPage } from "../SessionsPage";
 import { SnapshotMap } from "../SnapshotMap";
 import { APP_CHROME } from "./nav";
@@ -23,6 +25,8 @@ export const SEER_APP: AppShell = {
         return <SeerPage />;
       case "sessions":
         return <SessionsPage />;
+      case "keyword":
+        return <KeywordPage />;
       case "snapshot":
         return <SnapshotMap />;
       default:

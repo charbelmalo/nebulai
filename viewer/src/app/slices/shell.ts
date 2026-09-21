@@ -27,7 +27,10 @@ export type AppId = "nebulai" | "seer";
  *  interpretability drivers, each rendering one real computed quantity from an
  *  interp bundle); `guide` documents the exact math + source data behind every
  *  live feature; `sessions` is the transcript plotter (shown as
- *  "Transcripts"); `seer` is SessionSeer's live view — capture and comparison
+ *  "Transcripts"); `keyword` (shown as "Keywords") attributes a word in an
+ *  agent's context to whoever put it there — the operator, their standing
+ *  instructions, the harness, the model or the machine — by scanning Claude
+ *  Code's own session logs server-side; `seer` is SessionSeer's live view — capture and comparison
  *  of Codex / Claude / Hermes agent runs, served by `seer serve`.
  *
  *  `behavior` is the association study of docs/BEHAVIORAL-DIVERGENCE-PLAN.md.
@@ -38,7 +41,7 @@ export type AppId = "nebulai" | "seer";
  *  did these deployments actually say". Keeping them on separate pages is what
  *  stops a reader carrying a causal reading from one to the other.
  *
- *  The union stays all seven on purpose: ONE shell type serves both
+ *  The union stays all eight on purpose: ONE shell type serves both
  *  instruments, so the chrome, the permalink layer and the signal bridge stay
  *  single. Which of the seven a given document may actually reach is
  *  `APP_PAGES`. */
@@ -49,6 +52,7 @@ export type Page =
   | "interp"
   | "guide"
   | "sessions"
+  | "keyword"
   | "seer";
 
 /** The pages each instrument owns, in nav order — the authority for both
@@ -61,7 +65,7 @@ export type Page =
  *  sensible failure mode beyond "stay where you are". */
 export const APP_PAGES: Record<AppId, readonly Page[]> = {
   nebulai: ["map", "behavior", "interp", "guide"],
-  seer: ["seer", "sessions", "snapshot"],
+  seer: ["seer", "sessions", "keyword", "snapshot"],
 };
 
 /** Global render-quality settings — live-applied. Per-view appearance knobs
