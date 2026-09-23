@@ -123,12 +123,12 @@ build:hub`. The three underlying commands, spelled out (see `package.json`):
 ```sh
 PSYCHIX_ENTRY=nebulai VITE_BASE=/psychiX/nebulai-maps/ \
   VITE_NEBULAI_APP_URL=/psychiX/nebulai-maps/ VITE_SEER_APP_URL=/psychiX/seer/ VITE_HUB_URL=/psychiX/ \
-  VITE_LIVE_URL= VITE_BUILD_URL= VITE_EMBED_HOST= VITE_SEER_URL= \
+  VITE_LIVE_URL= VITE_BUILD_URL= VITE_EMBED_HOST= VITE_LLM_HOST= VITE_SEER_URL= \
   vite build --outDir dist/nebulai
 
 PSYCHIX_ENTRY=seer VITE_BASE=/psychiX/seer/ \
   VITE_NEBULAI_APP_URL=/psychiX/nebulai-maps/ VITE_SEER_APP_URL=/psychiX/seer/ VITE_HUB_URL=/psychiX/ \
-  VITE_LIVE_URL= VITE_BUILD_URL= VITE_EMBED_HOST= VITE_SEER_URL= \
+  VITE_LIVE_URL= VITE_BUILD_URL= VITE_EMBED_HOST= VITE_LLM_HOST= VITE_SEER_URL= \
   vite build --outDir dist/seer
 
 PSYCHIX_ENTRY=hub VITE_BASE=/psychiX/ vite build --outDir dist/hub
@@ -169,13 +169,17 @@ Four groups of build-time env vars matter here:
   not just where it itself will sit. Verified on disk: `dist/nebulai/assets/
   index-*.js` contains the literal strings `/psychiX/`, `/psychiX/
   nebulai-maps` and `/psychiX/seer`.
-- **`VITE_LIVE_URL= VITE_BUILD_URL= VITE_EMBED_HOST=`** (empty) — blanks
-  Nebul.AI's three optional live-probing endpoints (the #25 "Live Nebula"
+- **`VITE_LIVE_URL= VITE_BUILD_URL= VITE_EMBED_HOST= VITE_LLM_HOST=`** (empty) —
+  blanks Nebul.AI's optional live-probing endpoints (the #25 "Live Nebula"
   driver, "+ your prompt" trace/SAE re-derive, on-demand build, the model
-  probe — all in `viewer/src/app/slices/probing.ts`) so the static site is
-  bring-your-own-endpoint and contacts no backend on its own (§8). Omitting
-  these bakes in the local-dev loopback defaults (`127.0.0.1:8123/8124`,
-  `localhost:11434`) instead — **don't**, for a public deploy.
+  probe, the LLM host — all in `viewer/src/app/slices/probing.ts`) so the
+  static site is bring-your-own-endpoint and contacts no backend on its own
+  (§8). Omitting these bakes in the local-dev loopback defaults
+  (`127.0.0.1:8123/8124`, `localhost:11434`, `localhost:8050`) instead —
+  **don't**, for a public deploy. The authoritative list is the
+  `import.meta.env.VITE_*` reads in `probing.ts`; check it when upgrading,
+  since a newly added endpoint defaults to loopback and will silently ship
+  unless blanked here.
 - **`VITE_SEER_URL=`** (empty) — blanks the default address of the Seer
   **capture server** (`seer serve`, `:8125`) that Seer's own Live page talks
   to (`viewer/src/app/slices/seer.ts`). **This is not the same variable as
@@ -256,6 +260,12 @@ Four details in that command are load-bearing, all learned the hard way:
 
 Expect a re-deploy to move only what changed (a 2026-08-12 sync moved 155 MB of
 the 396 MB tree in ~1m40s and deleted nothing).
+
+If the rsync fails with `Operation not permitted`, macOS TCC is refusing the
+non-interactive tool access to `~/Documents`. `scripts/sync-out.sh` runs the
+same rsync inside a throwaway container with both paths mounted (Docker's file
+sharing sits outside the TCC boundary); it dry-runs by default in both
+directions — `push --apply` publishes, `verify` checksum-compares both trees.
 
 **Option B — SSH/rsync from elsewhere.** Resolve the private hostname and
 deployment account from the operator's local configuration; do not commit them
