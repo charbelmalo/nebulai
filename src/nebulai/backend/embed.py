@@ -84,9 +84,12 @@ _DISCOVER_SENTINELS = frozenset({"auto", "discover", "dynamic", "m4"})
 _M4_EMBED_PORT = 11435
 
 #: Last-resort host when dynamic discovery is unavailable (the resolver cannot be
-#: imported, or itself gives up). The historical literal, kept so a resolver
-#: problem degrades to the old behavior rather than breaking a command.
-_M4_FALLBACK_HOST = "192.168.0.200"
+#: imported, or itself gives up), so a resolver problem degrades to a concrete URL
+#: that fails loudly at request time rather than breaking the command outright.
+#: Kept in step with `m4host.DEFAULT_HOST` — it was still the long-retired
+#: 192.168.0.200 until 2026-08-18, which would have out-lived the resolver's own
+#: fallback and pointed at a box that answers on no port at all.
+_M4_FALLBACK_HOST = "192.168.0.110"
 
 
 def _looks_like_discover(value: str) -> bool:
