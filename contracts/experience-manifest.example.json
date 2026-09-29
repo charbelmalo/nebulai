@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "entry_experiences": [
+    "learn",
+    "atlas",
+    "research"
+  ],
+  "default_atlas": {
+    "dataset_id": "gpt2-small__sae__blocks.8.hook_resid_pre",
+    "sha256": "d36402d8503e82df71a9c64e48a4f9561f35ad2ac666c43eee127ff71eac10f7",
+    "view": "atlas",
+    "dimensions": 2
+  },
+  "learn_intro": {
+    "lesson_id": "what-is-a-point",
+    "dataset_id": "gpt2-small__sae__blocks.8.hook_resid_pre",
+    "sha256": "d36402d8503e82df71a9c64e48a4f9561f35ad2ac666c43eee127ff71eac10f7"
+  },
+  "research_intro": {
+    "dataset_id": "gpt2",
+    "feature": "fourier-atlas",
+    "bundle_path": "gpt2/interp/fourier.json",
+    "sha256": "572645fc13b08a8afcaab1d4155f0f2010c4a7c84757e3eac52bb2b67f785093",
+    "bytes": 9130
+  },
+  "artifacts": [
+    {
+      "dataset_id": "gpt2-small__sae__blocks.8.hook_resid_pre",
+      "sha256": "d36402d8503e82df71a9c64e48a4f9561f35ad2ac666c43eee127ff71eac10f7",
+      "path": "artifacts/d36402d8503e82df71a9c64e48a4f9561f35ad2ac666c43eee127ff71eac10f7/nebulai.json",
+      "legacy_path": "gpt2-small__sae__blocks.8.hook_resid_pre/nebulai.json",
+      "sidecar_base": "gpt2-small__sae__blocks.8.hook_resid_pre",
+      "bytes": 1478565,
+      "label": "GPT-2 Small · SAE decoder directions · Layer 8",
+      "representation": "sae_decoder",
+      "model_revision": null,
+      "has_interp": false
+    }
+  ]
+}

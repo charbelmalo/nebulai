@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "kind": "nebulai.atlas-unit-finding",
+  "artifact": {
+    "dataset_id": "gpt2-small__sae__blocks.8.hook_resid_pre",
+    "sha256": "d36402d8503e82df71a9c64e48a4f9561f35ad2ac666c43eee127ff71eac10f7",
+    "source_path": "gpt2-small__sae__blocks.8.hook_resid_pre/nebulai.json",
+    "source_schema_version": 2
+  },
+  "model": {
+    "id": "gpt2-small",
+    "revision": null
+  },
+  "unit": {
+    "point_id": 0,
+    "kind": "sae_decoder(gpt2-small-res-jb, blocks.8.hook_resid_pre)",
+    "index": 0
+  },
+  "representation": "sae_decoder",
+  "evidence": {
+    "label": "numbers and quantities",
+    "layer": 8,
+    "cluster_id": -1,
+    "cluster_membership": 0.0,
+    "xy": [
+      -1.0771,
+      -0.1357
+    ],
+    "xyz": [
+      5.7967,
+      4.6216,
+      6.3973
+    ]
+  },
+  "source_metadata": {
+    "model": "gpt2-small",
+    "unit": "sae_decoder(gpt2-small-res-jb, blocks.8.hook_resid_pre)",
+    "projection": "decoder",
+    "layer": 8,
+    "loader": "safetensors-direct(jbloom/GPT2-Small-SAEs-Reformatted)",
+    "sae_release": "jbloom/GPT2-Small-SAEs-Reformatted",
+    "sae_id": "blocks.8.hook_resid_pre",
+    "d_sae": 24576,
+    "d_in": 768,
+    "kept": 4096,
+    "curation": "first_4096_of_24576",
+    "centered": false,
+    "labels_source": "neuronpedia",
+    "n_labeled": 4096,
+    "n_unlabeled": 0,
+    "log_sparsity_mean": -2.894,
+    "log_sparsity_min": -4.249,
+    "log_sparsity_max": -1.181,
+    "n_dead": 0,
+    "schema_version": 2,
+    "n_points": 4096,
+    "n_clusters": 69,
+    "noise_fraction": 0.4946,
+    "namer": "claude-cli:opus",
+    "created": "2026-07-16T19:34:54+00:00",
+    "renamed_from": "ollama:liquidai/lfm2.5-1.2b-instruct:q8_0",
+    "reps_space": "u_cluster",
+    "namer_history": [
+      "ollama:liquidai/lfm2.5-1.2b-instruct:q8_0"
+    ]
+  },
+  "reopen": {
+    "experience": "atlas",
+    "page": "map",
+    "view": "atlas",
+    "dimensions": 2
+  },
+  "note": "",
+  "limitations": [
+    "Decoder-vector geometry and descriptive labels do not establish activation on an input or causal control.",
+    "First 4096 of 24576 SAE directions; this is a partial subset, not a representative sample.",
+    "Cluster membership is not confidence in the truth of a label.",
+    "Artifact replay is pinned; the model revision and full pipeline reproduction are not recorded."
+  ]
+}

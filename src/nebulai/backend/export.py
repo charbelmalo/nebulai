@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from ..units import Units
+from .atomic import write_text_atomic
 
 
 SCHEMA_VERSION = 2
@@ -91,5 +92,5 @@ def export_json(
         doc["edges"] = compute_edges(
             u_cluster, cluster_ids, include_knn=(edges_mode == "knn")
         )
-    path.write_text(json.dumps(doc, ensure_ascii=False))
+    write_text_atomic(path, json.dumps(doc, ensure_ascii=False))
     return doc["meta"]

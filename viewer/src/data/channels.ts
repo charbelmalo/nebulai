@@ -26,6 +26,7 @@
  *  `null` for it so the type system helps.
  */
 
+import { sidecarKnownAbsent } from "./experience";
 import { signal } from "@preact/signals";
 import { DATA_BASE } from "./base";
 
@@ -238,8 +239,11 @@ export function ensureChannels(
   void (async () => {
     let set: ChannelSet | null = null;
     try {
-      const res = await fetch(`${base}/${datasetId}/channels.json`);
-      if (res.ok) {
+      // the release manifest can say authoritatively that no channels ship
+      // for this map; then there is nothing to ask for, and no 404 to log
+      const absent = base === DATA_BASE && sidecarKnownAbsent(datasetId, "channels.json");
+      const res = absent ? null : await fetch(`${base}/${datasetId}/channels.json`);
+      if (res?.ok) {
         set = parseChannelSet(await res.json(), datasetId);
         if (set && expectedPoints !== undefined && set.nPoints !== expectedPoints) set = null;
       }

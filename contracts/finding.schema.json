@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NebulAI atlas unit finding v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "artifact",
+    "model",
+    "unit",
+    "representation",
+    "evidence",
+    "source_metadata",
+    "reopen",
+    "note",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "kind": {
+      "const": "nebulai.atlas-unit-finding"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_id",
+        "sha256",
+        "source_path",
+        "source_schema_version"
+      ],
+      "properties": {
+        "dataset_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "source_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_schema_version": {
+          "enum": [
+            1,
+            2
+          ]
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "revision"
+      ],
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "unit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "point_id",
+        "kind",
+        "index"
+      ],
+      "properties": {
+        "point_id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "representation": {
+      "enum": [
+        "token_embedding",
+        "token_unembedding",
+        "sae_decoder",
+        "mlp_neuron",
+        "external_text_embedding",
+        "unknown"
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "layer",
+        "cluster_id",
+        "cluster_membership",
+        "xy",
+        "xyz"
+      ],
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "layer": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cluster_id": {
+          "type": "integer",
+          "minimum": -1
+        },
+        "cluster_membership": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "xy": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "xyz": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        }
+      }
+    },
+    "source_metadata": {
+      "type": "object"
+    },
+    "reopen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "experience",
+        "page",
+        "view",
+        "dimensions"
+      ],
+      "properties": {
+        "experience": {
+          "const": "atlas"
+        },
+        "page": {
+          "const": "map"
+        },
+        "view": {
+          "const": "atlas"
+        },
+        "dimensions": {
+          "enum": [
+            2,
+            3
+          ]
+        }
+      }
+    },
+    "note": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

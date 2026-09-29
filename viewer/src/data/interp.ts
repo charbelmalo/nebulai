@@ -5,6 +5,7 @@
  *  next-token distributions). Every bundle's `meta.quantity`/`meta.formula`
  *  states exactly what the numbers are — surfaced in-view and on /guide. */
 
+import { sidecarKnownAbsent } from "./experience";
 import { DATA_BASE } from "./base";
 
 /** One weight matrix's singular-value spectrum + honest rank summaries. */
@@ -963,8 +964,12 @@ export function interpBase(model: string, base = DATA_BASE): string {
   return `${base}/${model}/interp`;
 }
 
+/** Rejects without a request when the release manifest says this model ships
+ *  no interp export — the same answer a 404 gives, minus the console noise. */
 export const loadInterpIndex = (model: string, base = DATA_BASE) =>
-  fetchJSON<InterpIndex>(`${interpBase(model, base)}/index.json`);
+  base === DATA_BASE && sidecarKnownAbsent(model, "interp/index.json")
+    ? Promise.reject(new Error(`no interp export for ${model}`))
+    : fetchJSON<InterpIndex>(`${interpBase(model, base)}/index.json`);
 
 export const loadWeights = (model: string, base = DATA_BASE) =>
   fetchJSON<WeightsBundle>(`${interpBase(model, base)}/weights.json`);

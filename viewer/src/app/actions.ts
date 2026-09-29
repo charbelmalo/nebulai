@@ -33,6 +33,12 @@ export interface AppActions {
    *  Resolves once the step is fully applied, so a caller can await the step
    *  before advancing rather than racing the fetch. */
   runEpisodeStep(episodeId: string, step: number): Promise<void>;
+  /** Repeat whatever failed last: the index fetch, or the dataset request
+   *  recorded in `loadError`. A no-op when nothing failed. */
+  retryLoad(): Promise<void>;
+  /** Open the curated starter map (manifest `default_atlas`, else the
+   *  unverified default). Used when the map page opens with nothing loaded. */
+  openStarter(): Promise<void>;
 }
 
 export type CompareTourCommand =
@@ -108,6 +114,14 @@ export function requestFlyToPoint(id: number): void {
 
 export function requestCompareTour(cmd: CompareTourCommand): void {
   handlers?.compareTour(cmd);
+}
+
+export function requestRetryLoad(): void {
+  handlers?.retryLoad().catch((e) => console.error("[nebulai] retry failed", e));
+}
+
+export function requestStarter(): void {
+  handlers?.openStarter().catch((e) => console.error("[nebulai] starter failed", e));
 }
 
 /** Fire-and-forget an episode step (for click handlers). */

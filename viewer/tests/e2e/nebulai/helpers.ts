@@ -18,6 +18,9 @@ import type { Rung } from "../helpers";
 
 export type View = "atlas" | "chord" | "hierarchy" | "compare";
 
+/** The map every spec gets unless its hash names another. */
+export const DEFAULT_E2E_MODEL = "EleutherAI__pythia-70m";
+
 export interface BootResult {
   /** console errors + uncaught page errors since navigation */
   errors: string[];
@@ -49,8 +52,16 @@ export async function bootApp(
   // hashchange listener, by design: a hash rewritten mid-session is this app
   // mirroring its own state, and re-applying it would fight the store. So a
   // spec that tests a permalink key has to arrive with it in the URL.
-  const hash = opts.hash ? (opts.hash.startsWith("#") ? opts.hash : `#${opts.hash}`) : "";
-  await page.goto(`/?${params.toString()}${hash}`);
+  //
+  // Boot no longer falls back to "the first dataset in the index" (main.ts):
+  // with no model named, the map page opens the curated starter. The goldens
+  // and budgets below were minted on the map that used to sort first, so a
+  // spec that does not name a model is pinned to it EXPLICITLY here.
+  let raw = opts.hash ? opts.hash.replace(/^#/, "") : "";
+  if (!new URLSearchParams(raw).has("model") && !new URLSearchParams(raw).has("episode")) {
+    raw = raw ? `model=${DEFAULT_E2E_MODEL}&${raw}` : `model=${DEFAULT_E2E_MODEL}`;
+  }
+  await page.goto(`/?${params.toString()}#${raw}`);
 
   await page.waitForFunction(
     () => window.__perf.bootMs !== undefined && window.__store.getState().dataset !== null,

@@ -87,6 +87,8 @@ export type {
   AxisUI,
   ChannelUI,
   CompareUI,
+  LoadFailure,
+  RendererState,
   MapQuery,
   Selection,
   Toggles,

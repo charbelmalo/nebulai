@@ -17,7 +17,8 @@
     "e2e:nebulai": "playwright test tests/e2e/nebulai",
     "e2e:seer": "playwright test tests/e2e/seer",
     "e2e:update": "playwright test --update-snapshots",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "package:experience": "node scripts/package-experience.ts"
   },
   "dependencies": {
     "@deck.gl/core": "^9.3.6",

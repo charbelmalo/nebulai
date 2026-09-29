@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from ..units import Units
+from .atomic import write_text_atomic
 from .name import name_clusters
 
 
@@ -122,7 +123,7 @@ def rename_map(map_dir: Path, namer: str = "claude-cli", **namer_kwargs) -> dict
     ):
         if key in units.meta:
             doc["meta"][key] = units.meta[key]
-    doc_path.write_text(json.dumps(doc))
+    write_text_atomic(doc_path, json.dumps(doc))
     return {
         "id": map_dir.name,
         "renamed": renamed,

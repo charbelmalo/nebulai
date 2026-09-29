@@ -1370,7 +1370,10 @@ def _run_edges(args: argparse.Namespace) -> None:
             u_cluster, cluster_ids, include_knn=(args.mode == "knn")
         )
         doc["meta"]["schema_version"] = SCHEMA_VERSION
-        jp.write_text(json.dumps(doc, ensure_ascii=False))
+        from .backend.atomic import write_text_atomic
+
+        # atomic: packaged artifacts hard-link this file (backend/atomic.py)
+        write_text_atomic(jp, json.dumps(doc, ensure_ascii=False))
         e = doc["edges"]
         knn = f", knn k={e['knn']['k']}" if "knn" in e else ""
         print(

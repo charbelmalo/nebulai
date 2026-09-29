@@ -424,7 +424,7 @@ export function InterpPage() {
           <SelectRow
             label="Model"
             value={model ?? ""}
-            disabled={$loading.value.active || $viewMode.value === "compare"}
+            disabled={$viewMode.value === "compare"}
             options={$datasets.value.map((d) => {
               const has = avail?.[d.id];
               return {

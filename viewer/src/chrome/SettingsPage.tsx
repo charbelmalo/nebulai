@@ -1610,7 +1610,7 @@ function DataTab() {
       <SelectRow
         label="Dataset"
         value={$datasetId.value ?? ""}
-        disabled={$loading.value.active || $viewMode.value === "compare"}
+        disabled={$viewMode.value === "compare"}
         options={$datasets.value.map((d) => ({ value: d.id, label: d.id }))}
         onChange={(id) => requestDataset(id)}
       />

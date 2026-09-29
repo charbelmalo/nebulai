@@ -83,6 +83,22 @@ export interface AxisUI {
   showNull: boolean;
 }
 
+/** Why the last dataset request did not commit. Shown next to Retry and the
+ *  dataset chooser; the last good dataset (if any) stays on screen. */
+export interface LoadFailure {
+  datasetId: string | null;
+  kind: "index" | "fetch" | "parse" | "digest" | "unknown-model" | "no-starter";
+  message: string;
+  /** digest failures: what the manifest pinned vs what the bytes hashed to */
+  expected?: string;
+  actual?: string;
+}
+
+/** Is the map renderer usable yet? `pending` while the GPU driver boots,
+ *  `unavailable` on the static tier or after a failed init — the results list
+ *  and every data action still work then. */
+export type RendererState = "pending" | "ready" | "unavailable";
+
 export interface AtlasSlice {
   datasets: DatasetEntry[];
   datasetId: string | null;
@@ -90,6 +106,13 @@ export interface AtlasSlice {
   compareData: CompareData | null;
   compare: CompareUI;
   loading: { active: boolean; loaded: number; total: number };
+  /** the dataset a request is fetching right now (null when idle) */
+  pendingDatasetId: string | null;
+  loadError: LoadFailure | null;
+  renderer: RendererState;
+  /** the map on screen was opened as the starter WITHOUT a valid manifest to
+   *  pin its bytes — the header says "unverified default" */
+  unverifiedDefault: boolean;
   viewMode: ViewMode;
   dims: 2 | 3;
   morphT: number; // 0 = flat map, 1 = flythrough; drivers ease toward dims
@@ -101,12 +124,21 @@ export interface AtlasSlice {
   axis: AxisUI;
 
   setDatasets(d: DatasetEntry[]): void;
-  setDataset(id: string, d: Dataset, opts?: { keepTour?: boolean }): void;
+  setDataset(
+    id: string,
+    d: Dataset,
+    opts?: { keepTour?: boolean; unverifiedDefault?: boolean },
+  ): void;
   setCompareData(d: CompareData | null): void;
   setCompareState(i: number): void;
   toggleCompareModel(sourceIdx: number): void;
   setCompareSharedOnly(v: boolean): void;
   setLoading(active: boolean, loaded?: number, total?: number): void;
+  beginLoad(datasetId: string): void;
+  failLoad(f: LoadFailure): void;
+  /** a superseded or cancelled request ends without committing or failing */
+  endLoad(): void;
+  setRenderer(r: RendererState): void;
   setViewMode(m: ViewMode): void;
   setDims(d: 2 | 3): void;
   setMorphT(t: number): void;
@@ -128,6 +160,10 @@ export const createAtlasSlice: StateCreator<AppState, [], [], AtlasSlice> = (set
   compareData: null,
   compare: { state: 1, hiddenModels: [], sharedOnly: false },
   loading: { active: false, loaded: 0, total: 0 },
+  pendingDatasetId: null,
+  loadError: null,
+  renderer: "pending",
+  unverifiedDefault: false,
   viewMode: "atlas",
   dims: 2,
   morphT: 0,
@@ -144,6 +180,10 @@ export const createAtlasSlice: StateCreator<AppState, [], [], AtlasSlice> = (set
     set({
       datasetId,
       dataset,
+      pendingDatasetId: null,
+      loadError: null,
+      loading: { active: false, loaded: 0, total: 0 },
+      unverifiedDefault: opts?.unverifiedDefault === true,
       hover: null,
       selection: null,
       // match ids are per-dataset row indices — a stale query on a new
@@ -175,6 +215,12 @@ export const createAtlasSlice: StateCreator<AppState, [], [], AtlasSlice> = (set
     })),
   setCompareSharedOnly: (sharedOnly) => set((s) => ({ compare: { ...s.compare, sharedOnly } })),
   setLoading: (active, loaded = 0, total = 0) => set({ loading: { active, loaded, total } }),
+  beginLoad: (pendingDatasetId) =>
+    set({ pendingDatasetId, loadError: null, loading: { active: true, loaded: 0, total: 0 } }),
+  failLoad: (loadError) =>
+    set({ loadError, pendingDatasetId: null, loading: { active: false, loaded: 0, total: 0 } }),
+  endLoad: () => set({ pendingDatasetId: null, loading: { active: false, loaded: 0, total: 0 } }),
+  setRenderer: (renderer) => set({ renderer }),
   setViewMode: (viewMode) => set({ viewMode, selection: null, hover: null }),
   // beams/flare are drawn in the 2-D map plane — a dimension switch clears
   // the selection rather than rendering edges at stale coordinates
