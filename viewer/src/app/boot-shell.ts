@@ -61,7 +61,13 @@ export interface BootedShell {
 
 /** Probe, mount, read the permalink. Everything in here is unconditional and
  *  nothing in it can be starved by missing data. */
-export async function bootShell(app: AppShell): Promise<BootedShell> {
+export async function bootShell(
+  app: AppShell,
+  /** App-specific routing that must settle BEFORE the chrome paints — NebulAI
+   *  resolves its experience here, so the first frame already shows the right
+   *  navigation. Receives the permalink as read. */
+  resolveContext?: (urlState: UrlState) => void,
+): Promise<BootedShell> {
   window.__perf = {};
   window.__store = appStore; // e2e tests read state through this
 
@@ -84,6 +90,10 @@ export async function bootShell(app: AppShell): Promise<BootedShell> {
   const caps = await probeCapabilities();
   appStore.getState().setCapabilities(caps);
 
+  // permalink: read once, before the chrome mounts, so app routing can use it
+  const urlState = readUrlState();
+  resolveContext?.(urlState);
+
   // The chrome goes up before any data is asked for. It is safe this early:
   // mountChrome appends its own root next to the boot pill rather than
   // replacing it, and every action the chrome can fire routes through
@@ -94,7 +104,7 @@ export async function bootShell(app: AppShell): Promise<BootedShell> {
 
   // permalink: `#model=` picks Nebulai's boot dataset; the rest of the hash
   // state is applied by finishShellBoot once the app shell is wired
-  return { caps, urlState: readUrlState(), chrome, progress, say };
+  return { caps, urlState, chrome, progress, say };
 }
 
 /** Apply the remaining hash state and start mirroring the store into it.

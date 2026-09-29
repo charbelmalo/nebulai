@@ -12,6 +12,7 @@ import {
   $datasetId,
   $datasets,
   $dims,
+  $experience,
   $loading,
   $settings,
   $sidebarOpen,
@@ -21,6 +22,30 @@ import {
 } from "./state";
 import { handControlUnavailableReason } from "../hands/types";
 import { SelectRow, SliderRow, Tabs, ToggleRow } from "@psychix/viz/controls";
+import { APP_ROOT } from "../data/base";
+
+/** Research's Comparisons page for a given map: Chord, Hierarchical and
+ *  Compare live there, with their label-space caveat, not in Atlas. */
+export function advancedHref(datasetId: string | null): string {
+  const params = new URLSearchParams({ page: "map" });
+  if (datasetId) params.set("model", datasetId);
+  return `${new URL("research/", APP_ROOT).href}#${params.toString()}`;
+}
+
+/** Atlas's stand-in for the Type select: the one map view it hosts, and an
+ *  explicit way to the advanced ones rather than options that silently vanish. */
+export function AdvancedHandoff() {
+  return (
+    <div class="sidebar-handoff">
+      <span class="sidebar-handoff-label">View</span>
+      <span class="sidebar-handoff-value">Atlas map</span>
+      <a class="sidebar-handoff-link" href={advancedHref($datasetId.value)}>
+        Chord, hierarchy and model comparison are in Research
+        <span aria-hidden="true"> ↗</span>
+      </a>
+    </div>
+  );
+}
 
 const TOGGLE_ROWS: { key: keyof Toggles; label: string }[] = [
   { key: "territories", label: "Territories" },
@@ -78,6 +103,9 @@ export function Sidebar() {
             options={$datasets.value.map((d) => ({ value: d.id, label: d.id }))}
             onChange={(id) => requestDataset(id)}
           />
+          {$experience.value === "atlas" ? (
+            <AdvancedHandoff />
+          ) : (
           <SelectRow
             label="Type"
             value={$viewMode.value}
@@ -101,6 +129,7 @@ export function Sidebar() {
             ]}
             onChange={(v) => requestViewMode(v as ViewMode)}
           />
+          )}
           {$viewMode.value === "atlas" && (
             <SelectRow
               label="Dimensions"

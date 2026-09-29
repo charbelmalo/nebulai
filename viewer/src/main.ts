@@ -68,7 +68,16 @@ import {
   setManifestStatus,
   STARTER_DATASET_ID,
 } from "./data/experience";
-import { DATA_BASE } from "./data/base";
+import { APP_ROOT, DATA_BASE } from "./data/base";
+import {
+  defaultPage,
+  experienceFromPath,
+  isExperience,
+  resolveExperience,
+  type Experience,
+} from "./app/experience";
+import { NEBULAI_EXPERIENCES } from "./chrome/apps/nav";
+import type { UrlState } from "./chrome/urlState";
 import { isLiveTrace } from "./data/interp";
 import { handRig } from "./hands/rig";
 import { findFeature } from "./scene/interp/registry";
@@ -142,10 +151,58 @@ interface ShowOptions {
   unverifiedDefault?: boolean;
 }
 
+/** Which experience this document was opened as: the entry HTML declares it
+ *  (`<meta name="nebulai-experience">`), and the path is the fallback. */
+function entryExperience(): Experience | null {
+  const meta = document
+    .querySelector<HTMLMetaElement>('meta[name="nebulai-experience"]')
+    ?.getAttribute("content");
+  if (isExperience(meta)) return meta;
+  return experienceFromPath(location.pathname, new URL(APP_ROOT).pathname);
+}
+
+/** Resolve Learn / Atlas / Research before the chrome paints (see
+ *  app/experience.ts for the precedence). When the link belongs to another
+ *  experience than the entry it was opened at, the address bar moves to that
+ *  entry in place — same bundle, same data root — and a one-line notice says
+ *  why, so the correction is never silent. */
+function resolveNebulaiContext(u: UrlState): void {
+  const entry = entryExperience();
+  const legacy = new URLSearchParams(location.search).get("view");
+  const legacyView =
+    legacy === "chord" || legacy === "hierarchy" || legacy === "compare" ? legacy : undefined;
+  const intent = {
+    page: u.page,
+    view: u.view ?? legacyView,
+    episode: !!u.episode,
+    model: !!u.model,
+  };
+  const r = resolveExperience({ entry, explicit: u.experience, intent });
+  // a nested document always has an entry; this only guards a misnamed file
+  const exp: Experience = r.experience ?? entry ?? "atlas";
+  if (entry && exp !== entry) {
+    const path = new URL(`${exp}/`, APP_ROOT).pathname;
+    history.replaceState(null, "", `${path}${location.search}${location.hash}`);
+  }
+  document.title = NEBULAI_EXPERIENCES[exp].documentTitle;
+  document.body.dataset.experience = exp;
+  const st = appStore.getState();
+  st.setExperience(exp, r.notice, u.returnTo ?? null);
+  if (!u.page) st.setPage(defaultPage(exp, intent));
+}
+
 async function boot() {
   const t0 = performance.now();
-  const shell = await bootShell(NEBULAI_APP);
+  const shell = await bootShell(NEBULAI_APP, resolveNebulaiContext);
   shell.say(`gpu: ${shell.caps.tier} — loading datasets…`);
+
+  // Learn hosts map and Internals pages only while a lesson runs. When the
+  // lesson ends (Exit, last step, or a model switch that clears it), the
+  // visitor returns to the Lessons catalog instead of an unguided stage.
+  appStore.subscribe((s, prev) => {
+    if (s.experience !== "learn" || !prev.tour || s.tour) return;
+    if (s.page !== "guide") s.setPage("guide");
+  });
 
   // A dead atlas must not be a dead page — Internals and Guide owe it nothing,
   // and neither does a fresh checkout with an empty out/. Report the failure on
@@ -478,7 +535,9 @@ async function bootAtlas(shell: BootedShell, t0: number): Promise<() => void> {
       first = waitForLoad();
     } else if (urlState.model) {
       first = show(urlState.model);
-    } else if (st.page === "map") {
+    } else if (st.page === "map" && st.experience === "atlas") {
+      // Atlas opens on its curated starter. Research's Comparisons never
+      // loads it implicitly — a research view asks for its map by name.
       first = openStarter();
     } else {
       say(`gpu: ${caps.tier} · ${datasets.length} maps available`);
@@ -488,6 +547,7 @@ async function bootAtlas(shell: BootedShell, t0: number): Promise<() => void> {
     // Opening the map later, with nothing on it, fetches the starter then.
     appStore.subscribe((s, prev) => {
       if (s.page !== "map" || prev.page === "map") return;
+      if (s.experience !== "atlas") return;
       if (s.datasetId || s.pendingDatasetId || s.loadError) return;
       void openStarter();
     });

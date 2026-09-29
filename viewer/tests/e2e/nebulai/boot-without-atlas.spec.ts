@@ -34,12 +34,12 @@ const NO_DATASETS = "no datasets in out/index.json";
  *  `http://localhost:5173/out/index.json` — this glob matches it on any base,
  *  and the assertions below prove the interception actually landed rather than
  *  trusting the pattern. */
-async function bootWithoutAtlas(page: Page): Promise<string[]> {
+async function bootWithoutAtlas(page: Page, entry = "/atlas/", hash = ""): Promise<string[]> {
   const errors: string[] = [];
   page.on("pageerror", (err) => errors.push(String(err)));
 
   await page.route("**/out/index.json", (r) => r.fulfill({ status: 404, body: "" }));
-  await page.goto("/?gpu=webgl&frozen=1");
+  await page.goto(`${entry}?gpu=webgl&frozen=1${hash}`);
 
   // `__perf.bootMs` is set only on the atlas path, so the completion signal
   // here is the status pill reporting the absence — that line is the last thing
@@ -59,15 +59,11 @@ test("no dataset index: the chrome mounts anyway and reports the absence", async
   await expect(page.locator(".chrome-root")).toHaveCount(1);
   await expect(page.locator("nav.topnav")).toBeVisible();
 
-  // this document is Nebulai, and its nav is Nebulai's three pages only
-  // "Episodes" is the LABEL; the page id behind it is still `guide` (nav.ts
-  // holds labels only, APP_PAGES holds membership — see app-pages.test.ts)
-  expect(await page.locator(".topnav-pill").allInnerTexts()).toEqual([
-    "Semantic map",
-    "Behavior",
-    "Internals",
-    "Episodes",
-  ]);
+  // this document is NebulAI Atlas: the experience is named beside the
+  // wordmark and its nav is its own. The other experiences are one menu away.
+  await expect(page.locator(".topbar-exp")).toHaveText("Atlas");
+  expect(await page.locator(".topnav-pill").allInnerTexts()).toEqual(["Explore"]);
+  expect(await page.evaluate(() => window.__store.getState().experience)).toBe("atlas");
   expect(await page.evaluate(() => window.__store.getState().app)).toBe("nebulai");
 
   // the page is degraded, not dead — neither failure handler fired
@@ -77,25 +73,27 @@ test("no dataset index: the chrome mounts anyway and reports the absence", async
   expect(errors).toEqual([]);
 });
 
-test("no dataset index: Seer is still reachable, as the other instrument", async ({ page }) => {
+test("no dataset index: Seer is still reachable, under Other tools", async ({ page }) => {
   await bootWithoutAtlas(page);
 
-  // Seer is one subordinate link, not a fourth pill. Both halves are the
-  // assertion: it must NOT be a pill (that is the segmentation), and it must
-  // be present and correct (that is discoverability before the psychiX hub).
+  // Seer is a link in the Other experiences menu, not a pill. Both halves are
+  // the assertion: it must NOT be a pill (that is the segmentation), and it
+  // must be present and correct (that is discoverability before the hub).
   await expect(page.locator(".topnav-pill", { hasText: "Seer" })).toHaveCount(0);
 
-  const cross = page.locator(".topnav-cross");
-  await expect(cross).toBeVisible();
-  await expect(cross).toHaveAttribute("href", "./seer.html");
-  await expect(cross).toContainText("Seer");
-  // resolved against this document, it lands on the sibling entry rather than
-  // anywhere else on the origin — a relative href is only as good as its base
-  expect(await cross.evaluate((a) => (a as HTMLAnchorElement).href)).toBe(
+  const trigger = page.getByRole("button", { name: "Other experiences" });
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await trigger.click();
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
+  const seer = page.locator(".xnav-other a", { hasText: "Seer" });
+  await expect(seer).toBeVisible();
+  // resolved against the APP ROOT, not against /atlas/ — `./seer.html` from a
+  // nested entry would otherwise 404
+  expect(await seer.evaluate((a) => (a as HTMLAnchorElement).href)).toBe(
     new URL("/seer.html", page.url()).href,
   );
 
-  // and Nebulai cannot be talked into rendering Seer's pages from the inside
+  // and NebulAI cannot be talked into rendering Seer's pages from the inside
   await page.evaluate(() => window.__store.getState().setPage("seer"));
   expect(await page.evaluate(() => window.__store.getState().page)).toBe("map");
   await expect(page.locator(".seer-page")).toHaveCount(0);
@@ -108,10 +106,15 @@ test("mobile Guide clears the two-row chrome and documents every live view", asy
   page,
 }) => {
   await page.setViewportSize({ width: 375, height: 812 });
-  const errors = await bootWithoutAtlas(page);
+  const errors = await bootWithoutAtlas(page, "/research/");
 
-  await page.locator(".topnav-pill", { hasText: "Episodes" }).click();
+  // Research's four destinations collapse into one menu at phone width
+  const sections = page.locator(".xnav .xnav-trigger.topnav-pill");
+  await expect(sections).toHaveText(/Internals/);
+  await sections.click();
+  await page.locator(".xnav-item", { hasText: "Methods" }).click();
   await expect(page.locator(".guide-page")).toBeVisible();
+  await expect(page.locator(".guide-kicker")).toContainText("Methods");
   await expect(page.locator(".guide-count")).toContainText("25 of 25");
   // the feature cards, counted apart from the episode cards that now share the
   // `guide-card` shell — a change to either count has to be deliberate. 26 since
@@ -153,7 +156,11 @@ test("mobile Guide clears the two-row chrome and documents every live view", asy
   const ready = page.locator(".episode-card.is-ready");
   await expect(ready).toHaveCount(1);
   await expect(ready).toContainText("When a small model starts to generalize");
-  await expect(ready.locator(".guide-card-open")).toBeEnabled();
+  // Research hands a playable episode to Learn rather than running it here
+  await expect(ready.locator("a.guide-card-open")).toHaveAttribute(
+    "href",
+    /\/learn\/#episode=[^&]+&step=0$/,
+  );
   await expect(ready.locator(".episode-gate")).toHaveCount(0);
 
   const links = page.locator(".guide-card-research a");

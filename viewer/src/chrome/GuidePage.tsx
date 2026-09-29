@@ -16,8 +16,10 @@ import {
 } from "../data/directions";
 import type { GuideFormula, InterpGroup } from "../scene/interp/InterpDriver";
 import { GROUP_LABEL, INTERP_FEATURES } from "../scene/interp/registry";
+import { APP_ROOT } from "../data/base";
+import { experienceHref } from "./ExperienceNav";
 import { guideResearchFor } from "./guideResearch";
-import { $datasets } from "./state";
+import { $datasetId, $datasets, $experience } from "./state";
 import { episodeAvailability, TOURS, type EpisodeContext } from "./tours";
 
 const GROUP_ORDER: InterpGroup[] = ["weights", "forward", "sae", "trained", "live"];
@@ -80,7 +82,13 @@ function GuideFormulaView({ formula }: { formula: GuideFormula }) {
  *    would produce it. It never falls back to another model, and it never
  *    plays with the numbers missing (§2.2).
  */
-function EpisodeSection() {
+/** An episode's address in Learn: guided walks run there, whatever page a
+ *  step borrows, so Research's Methods links across instead of playing it. */
+export function learnEpisodeHref(id: string): string {
+  return `${new URL("learn/", APP_ROOT).href}#episode=${encodeURIComponent(id)}&step=0`;
+}
+
+function EpisodeSection({ mode }: { mode: "play" | "handoff" }) {
   const entries = $datasets.value;
   // touching the signal here is what subscribes this component to the fetch
   // resolving, so a "pending" card becomes a "ready" one without a click
@@ -118,11 +126,12 @@ function EpisodeSection() {
   return (
     <section class="guide-group guide-episodes">
       <div class="guide-group-head">
-        <h2 class="guide-group-title">Episodes</h2>
+        <h2 class="guide-group-title">{mode === "play" ? "Guided episodes" : "Episodes"}</h2>
         <p class="guide-group-src">
           Guided walks through one finding at a time. Each one quotes exact numbers from
           one named artifact and says which; if that artifact is not in this deploy, the
           episode says so rather than running with the numbers missing.
+          {mode === "handoff" && " Episodes play in NebulAI Learn, which keeps the step controls with you."}
         </p>
       </div>
       <div class="guide-cards">
@@ -134,14 +143,20 @@ function EpisodeSection() {
               <div class="guide-card-head">
                 <span class="guide-card-n">{t.steps.length} steps</span>
                 <h3 class="guide-card-label">{t.label}</h3>
-                <button
-                  type="button"
-                  class="guide-card-open"
-                  disabled={av.state !== "ready"}
-                  onClick={() => requestEpisodeStep(t.id, 0)}
-                >
-                  Play this episode →
-                </button>
+                {mode === "handoff" && av.state === "ready" ? (
+                  <a class="guide-card-open" href={learnEpisodeHref(t.id)}>
+                    Play in Learn ↗
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    class="guide-card-open"
+                    disabled={av.state !== "ready"}
+                    onClick={() => requestEpisodeStep(t.id, 0)}
+                  >
+                    Play this episode →
+                  </button>
+                )}
               </div>
               <p class="guide-card-blurb">{t.blurb}</p>
               <div class="guide-card-row">
@@ -218,7 +233,57 @@ function ClaimContract() {
   );
 }
 
+/** Learn's catalog: lessons and guided episodes only. The per-view method
+ *  cards open unguided Internals analysis, which belongs to Research, so here
+ *  they are one explicit link away rather than 26 equal choices. */
+function LessonsPage() {
+  const datasetId = $datasetId.value;
+  return (
+    <div class="guide-page" role="main">
+      <div class="guide-scroll">
+        <header class="guide-head">
+          <p class="guide-kicker">NebulAI Learn · Lessons</p>
+          <h1 class="guide-title">How model maps work</h1>
+          <p class="guide-lede">
+            A model map places things a model has learned — words, directions, features —
+            so that related ones sit near each other. Each lesson shows one idea on real
+            published data and says what the map cannot tell you. You can stop a lesson at
+            any step.
+          </p>
+        </header>
+
+        <EpisodeSection mode="play" />
+
+        <section class="guide-group guide-next" aria-labelledby="guide-next-title">
+          <div class="guide-group-head">
+            <h2 class="guide-group-title" id="guide-next-title">
+              Where next
+            </h2>
+          </div>
+          <div class="guide-next-links">
+            <a class="guide-next-link" href={experienceHref("atlas", "learn", datasetId)}>
+              <strong>Continue in Atlas</strong>
+              <span>Search the full map on your own, inspect a unit and save an exact record.</span>
+            </a>
+            <a class="guide-next-link" href={`${new URL("research/", APP_ROOT).href}#page=guide`}>
+              <strong>Read the methods in Research</strong>
+              <span>How each of the registered analyses is calculated, with its sources.</span>
+            </a>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 export function GuidePage() {
+  if ($experience.value === "learn") return <LessonsPage />;
+  return <MethodsPage />;
+}
+
+/** Research's Methods: every registered view's calculation, data source and
+ *  references, plus the episode list handing off to Learn. */
+function MethodsPage() {
   const live = INTERP_FEATURES.length;
   // the roadmap in docs/INTERP_FEATURES.md planned 25 views, all of which ship;
   // #26 is the intervention rail, added later by ATTRACTORS-PLAN phase 4. Both
@@ -236,7 +301,7 @@ export function GuidePage() {
     <div class="guide-page" role="main">
       <div class="guide-scroll">
         <header class="guide-head">
-          <p class="guide-kicker">Nebul.AI · Model Guide</p>
+          <p class="guide-kicker">NebulAI Research · Methods</p>
           <h1 class="guide-title">How to read every model view</h1>
           <p class="guide-lede">
             Each view shows one measurement taken from a model. Hover to inspect exact
@@ -261,7 +326,7 @@ export function GuidePage() {
           </p>
         </header>
 
-        <EpisodeSection />
+        <EpisodeSection mode={$experience.value === null ? "play" : "handoff"} />
 
         {GROUP_ORDER.filter((g) => byGroup.has(g)).map((group) => (
           <section key={group} class="guide-group">

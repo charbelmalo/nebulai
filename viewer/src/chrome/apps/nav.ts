@@ -21,11 +21,26 @@
  *  adding a pill here without adding the page there fails a test rather than
  *  shipping a nav button that silently does nothing. */
 
-import { APP_PAGES, type AppId, type Page } from "../../app/store";
+import { APP_PAGES, type AppId, type Experience, type Page } from "../../app/store";
+import { HUB_URL, NEBULAI_APP_URL, SEER_APP_URL } from "./links";
 
 export interface NavItem {
   label: string;
   page: Page;
+}
+
+/** One NebulAI experience's chrome: the name shown beside the wordmark, its
+ *  own pills over the SAME wire pages, and the words that tell a visitor what
+ *  it is for. The pills never add a page — they choose which of APP_PAGES the
+ *  experience shows and what it calls them (Research's "Methods" is `guide`,
+ *  Learn's "Lessons" is `guide` too). */
+export interface ExperienceChrome {
+  id: Experience;
+  label: string;
+  documentTitle: string;
+  /** one line for the Other experiences menu and the chooser */
+  description: string;
+  nav: readonly NavItem[];
 }
 
 /** The sibling instrument: a plain link to the other entry's HTML, not a
@@ -56,14 +71,11 @@ export interface SiblingLink {
  *  Live page talks to over HTTP — a backend endpoint. This one is the URL of
  *  the Seer *web app* on this site. Setting one when you meant the other is
  *  the obvious mistake, hence the different suffix and this paragraph. */
-const SEER_APP_URL = import.meta.env.VITE_SEER_APP_URL || "./seer.html";
-const NEBULAI_APP_URL = import.meta.env.VITE_NEBULAI_APP_URL || "./index.html";
 
 /** The psychiX hub, when there is one. Empty (the default) means this build is
  *  not part of a hub deploy — the combined build has no hub document to point
  *  at — and the top bar then renders no hub link at all rather than a dead
  *  one. `build:nebulai` / `build:seer` set `VITE_HUB_URL=/psychiX/`. */
-const HUB_URL = import.meta.env.VITE_HUB_URL || "";
 
 /** Which brand mark the top bar draws. A discriminant rather than the SVG
  *  itself, because this module is data-only (no JSX) — TopBar owns both
@@ -88,7 +100,38 @@ export interface AppChrome {
   /** the psychiX landing page, when this build belongs to a hub deploy;
    *  `undefined` in the combined build, where there is no hub document */
   hub?: SiblingLink;
+  /** NebulAI only: the three experiences sharing this app's pages */
+  experiences?: Readonly<Record<Experience, ExperienceChrome>>;
 }
+
+export const NEBULAI_EXPERIENCES: Readonly<Record<Experience, ExperienceChrome>> = {
+  learn: {
+    id: "learn",
+    label: "Learn",
+    documentTitle: "Nebul.AI Learn — how model maps work",
+    description: "Guided lessons: what a point on a model map is, and what it cannot show.",
+    nav: [{ label: "Lessons", page: "guide" }],
+  },
+  atlas: {
+    id: "atlas",
+    label: "Atlas",
+    documentTitle: "Nebul.AI Atlas — explore a model",
+    description: "Search a model map, inspect one unit, save an exact record.",
+    nav: [{ label: "Explore", page: "map" }],
+  },
+  research: {
+    id: "research",
+    label: "Research",
+    documentTitle: "Nebul.AI Research — inspect the evidence",
+    description: "Registered analyses, comparisons and the Behavior study, with their caveats.",
+    nav: [
+      { label: "Internals", page: "interp" },
+      { label: "Comparisons", page: "map" },
+      { label: "Behavior study", page: "behavior" },
+      { label: "Methods", page: "guide" },
+    ],
+  },
+};
 
 /** One link, shared by both instruments — the hub is above both of them. */
 const HUB_LINK: SiblingLink | undefined = HUB_URL
@@ -114,6 +157,7 @@ export const APP_CHROME: Record<AppId, AppChrome> = {
     ],
     sibling: { label: "Seer", href: SEER_APP_URL, title: "Seer — map what an agent did" },
     hub: HUB_LINK,
+    experiences: NEBULAI_EXPERIENCES,
   },
   seer: {
     id: "seer",

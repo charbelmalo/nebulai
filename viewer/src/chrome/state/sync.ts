@@ -39,6 +39,8 @@ import {
   $datasets,
   $dims,
   $loading,
+  $pendingDatasetId,
+  $loadError,
   $mapQuery,
   $selection,
   $toggles,
@@ -48,7 +50,15 @@ import { $interp, $interpSelection, $tour } from "./interp";
 import { $probing, $progress } from "./probing";
 import { $seer } from "./seer";
 import { $sessions } from "./sessions";
-import { $app, $capabilities, $page, $settings, $settingsOpen } from "./shell";
+import {
+  $app,
+  $capabilities,
+  $experience,
+  $experienceNotice,
+  $page,
+  $settings,
+  $settingsOpen,
+} from "./shell";
 import { $snapshot } from "./snapshot";
 
 appStore.subscribe((st) => {
@@ -58,6 +68,8 @@ appStore.subscribe((st) => {
   if (st.datasetId !== $datasetId.value) $datasetId.value = st.datasetId;
   if (st.dataset !== $dataset.value) $dataset.value = st.dataset;
   if (st.loading !== $loading.value) $loading.value = st.loading;
+  if (st.pendingDatasetId !== $pendingDatasetId.value) $pendingDatasetId.value = st.pendingDatasetId;
+  if (st.loadError !== $loadError.value) $loadError.value = st.loadError;
   if (st.viewMode !== $viewMode.value) $viewMode.value = st.viewMode;
   if (st.dims !== $dims.value) $dims.value = st.dims;
   if (st.selection !== $selection.value) $selection.value = st.selection;
@@ -71,6 +83,8 @@ appStore.subscribe((st) => {
   if (st.progress !== $progress.value) $progress.value = st.progress;
   if (st.settingsOpen !== $settingsOpen.value) $settingsOpen.value = st.settingsOpen;
   if (st.page !== $page.value) $page.value = st.page;
+  if (st.experience !== $experience.value) $experience.value = st.experience;
+  if (st.experienceNotice !== $experienceNotice.value) $experienceNotice.value = st.experienceNotice;
   if (st.snapshot !== $snapshot.value) $snapshot.value = st.snapshot;
   if (st.sessions !== $sessions.value) $sessions.value = st.sessions;
   if (st.behavior !== $behavior.value) $behavior.value = st.behavior;

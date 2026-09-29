@@ -4,21 +4,83 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="Nebul.AI maps what a language model has learned. Learn how the maps work, explore a model, or inspect the research evidence."
+    />
     <link
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='11' cy='13' r='7' fill='%23ea4f86'/%3E%3Ccircle cx='23' cy='10' r='4' fill='%23f5c33b'/%3E%3Ccircle cx='21' cy='22' r='5' fill='%238b3bf0'/%3E%3C/svg%3E"
     />
-    <title>Nebul.AI — concept atlas</title>
+    <title>Nebul.AI — map what a model knows</title>
   </head>
-  <body>
-    <!-- Layered stack: exactly one SceneDriver owns #scene-canvas at a time;
-         SVG + HTML overlays project through the same camera matrices. -->
-    <div id="stage">
-      <canvas id="scene-canvas"></canvas>
-      <svg id="overlay-svg"></svg>
-      <div id="overlay-html"></div>
-    </div>
-    <div id="chrome"></div>
-    <script type="module" src="/src/main.ts"></script>
+  <body class="chooser">
+    <!-- The root chooser. It fetches no model and runs no renderer: the three
+         cards are plain links, so the page works before (and without) any
+         JavaScript. src/chooser-main.ts only forwards legacy deep links, which
+         used to open the single app at this address, to the experience that
+         now hosts them. -->
+    <main class="chooser-main">
+      <header class="chooser-head">
+        <p class="chooser-brand">
+          <svg class="chooser-mark" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="9" cy="13" r="4.2" fill="#ea4f86" opacity="0.9" />
+            <circle cx="15.5" cy="9" r="2.8" fill="#f5c33b" opacity="0.9" />
+            <circle cx="16" cy="16" r="1.8" fill="#8b3bf0" opacity="0.95" />
+          </svg>
+          nebul<span class="chooser-brand-dim">.ai</span>
+        </p>
+        <h1 class="chooser-title">Map what a language model has learned.</h1>
+        <p class="chooser-lede">
+          Nebul.AI turns the internal units of real models into maps you can search and
+          inspect. Every view says what was measured and what it cannot show. Pick where to
+          start; you can switch at any time.
+        </p>
+      </header>
+
+      <ul class="chooser-cards" role="list">
+        <li class="chooser-card">
+          <p class="chooser-card-kicker">Learn</p>
+          <h2 class="chooser-card-title">
+            <a class="chooser-card-link" href="learn/">Learn how maps work</a>
+          </h2>
+          <p class="chooser-card-body">
+            A five-step lesson on one real map: what a point is, what its label says, and
+            what it cannot tell you about your own text.
+          </p>
+          <p class="chooser-card-meta">For newcomers · about 5 minutes · no GPU needed</p>
+        </li>
+        <li class="chooser-card">
+          <p class="chooser-card-kicker">Atlas</p>
+          <h2 class="chooser-card-title">
+            <a class="chooser-card-link" href="atlas/">Explore a model</a>
+          </h2>
+          <p class="chooser-card-body">
+            Search 4,096 sparse-autoencoder directions from GPT-2 Small, inspect one, and
+            save an exact record you or a colleague can reopen.
+          </p>
+          <p class="chooser-card-meta">For engineers and designers · search, inspect, save</p>
+        </li>
+        <li class="chooser-card">
+          <p class="chooser-card-kicker">Research</p>
+          <h2 class="chooser-card-title">
+            <a class="chooser-card-link" href="research/">Inspect research evidence</a>
+          </h2>
+          <p class="chooser-card-body">
+            Choose an available GPT-2 analysis, read the quantity it measured and its caveat,
+            and export the source bundle behind it.
+          </p>
+          <p class="chooser-card-meta">For interpretability researchers · 26 registered analyses</p>
+        </li>
+      </ul>
+
+      <footer class="chooser-foot">
+        <p class="chooser-foot-label">Other tools</p>
+        <ul class="chooser-tools" id="chooser-tools" role="list">
+          <li><a data-tool="seer" href="./seer.html">Seer <span aria-hidden="true">↗</span></a> — map what an agent did</li>
+        </ul>
+      </footer>
+    </main>
+    <script type="module" src="/src/chooser-main.ts"></script>
   </body>
 </html>

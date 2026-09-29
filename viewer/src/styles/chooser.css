@@ -1,0 +1,185 @@
+/* chooser.css — the NebulAI root chooser. Owner: src/chooser-main.ts only.
+   Deliberately self-contained: the chooser loads the two token sheets and
+   this file, nothing from the app chrome, so it paints before any app code
+   has been fetched. Same editorial dark system as the app: graphite
+   surfaces, monochrome type, one accent, sharp corners. */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body.chooser {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+.chooser-main {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: clamp(28px, 7vh, 88px) 16px 48px;
+}
+
+.chooser-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 28px;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.chooser-brand-dim {
+  color: var(--text-faint);
+}
+.chooser-mark {
+  width: 22px;
+  height: 22px;
+}
+
+.chooser-title {
+  margin: 0;
+  max-width: 18ch;
+  font-size: clamp(30px, 5.2vw, 52px);
+  line-height: 1.05;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+.chooser-lede {
+  margin: 18px 0 0;
+  max-width: 60ch;
+  color: var(--text-dim);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.chooser-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 40px 0 0;
+  padding: 0;
+  list-style: none;
+}
+@media (max-width: 860px) {
+  .chooser-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+.chooser-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 22px 20px 20px;
+  background: var(--bg-raise);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-card);
+  transition:
+    border-color var(--t-fast) var(--ease-out),
+    transform var(--t-fast) var(--ease-out);
+}
+.chooser-card:hover {
+  border-color: var(--hairline-strong);
+  transform: translateY(-1px);
+}
+.chooser-card:focus-within {
+  border-color: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .chooser-card,
+  .chooser-card:hover {
+    transition: none;
+    transform: none;
+  }
+}
+
+.chooser-card-kicker {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.chooser-card-title {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+/* the whole card is the hit target; the link text stays the accessible name */
+.chooser-card-link {
+  color: var(--text);
+  text-decoration: none;
+}
+.chooser-card-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.chooser-card-link:focus-visible {
+  outline: none;
+}
+.chooser-card-link::before {
+  content: "→ ";
+  color: var(--accent);
+}
+.chooser-card-body {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1.5;
+}
+.chooser-card-meta {
+  margin: auto 0 0;
+  padding-top: 8px;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+
+.chooser-foot {
+  margin-top: 40px;
+  padding-top: 20px;
+  border-top: 1px solid var(--hairline);
+  color: var(--text-dim);
+  font-size: 14px;
+}
+.chooser-foot-label {
+  margin: 0 0 8px;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.chooser-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.chooser-tools a {
+  color: var(--text);
+  text-decoration-color: var(--hairline-strong);
+  text-underline-offset: 3px;
+}
+.chooser-tools a:hover {
+  text-decoration-color: var(--accent);
+}
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.chooser-card:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

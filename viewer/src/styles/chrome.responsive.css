@@ -159,3 +159,44 @@
     display: none;
   }
 }
+
+/* ── NebulAI experience nav on narrow viewports ───────────────────────────
+   The strip keeps its ≤900px position but must not scroll-clip its menus, so
+   it wraps instead; each menu then anchors to the whole strip (full width)
+   rather than to its own button, which could sit mid-row at 390px and push a
+   right-aligned panel off the left edge. */
+@media (max-width: 900px) {
+  .topnav.xnav {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+  .xnav .xnav-disclosure {
+    position: static;
+  }
+  .xnav .xnav-panel,
+  .xnav .xnav-panel.xnav-other,
+  .xnav .xnav-panel.xnav-help {
+    left: 0;
+    right: 0;
+    width: auto;
+    max-width: none;
+    top: calc(100% + 6px);
+  }
+  .xnav-progress {
+    max-width: 140px;
+  }
+  .xnav-notice {
+    top: 124px;
+    left: 12px;
+    right: 12px;
+    max-width: none;
+    border-radius: var(--radius-card);
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .xnav-caret {
+    transition: none;
+  }
+}

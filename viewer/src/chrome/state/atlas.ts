@@ -10,6 +10,7 @@ import {
   type AxisUI,
   type ChannelUI,
   type CompareUI,
+  type LoadFailure,
   type MapQuery,
   type Selection,
   type Toggles,
@@ -26,6 +27,10 @@ export const $datasets = signal<DatasetEntry[]>(s.datasets);
 export const $datasetId = signal<string | null>(s.datasetId);
 export const $dataset = signal<Dataset | null>(s.dataset);
 export const $loading = signal(s.loading);
+/** the dataset a request is fetching right now (null when idle) */
+export const $pendingDatasetId = signal<string | null>(s.pendingDatasetId);
+/** why the last dataset request did not commit (null when it did) */
+export const $loadError = signal<LoadFailure | null>(s.loadError);
 export const $viewMode = signal<ViewMode>(s.viewMode);
 export const $dims = signal<2 | 3>(s.dims);
 export const $selection = signal<Selection | null>(s.selection);

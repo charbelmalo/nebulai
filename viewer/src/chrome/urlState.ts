@@ -25,6 +25,7 @@ import {
   type ViewMode,
 } from "../app/store";
 import { requestViewMode } from "../app/actions";
+import { isExperience, type Experience } from "../app/experience";
 
 const VIEWS: readonly ViewMode[] = ["atlas", "chord", "hierarchy", "compare"];
 const BVIEWS: readonly BehaviorView[] = ["landscape", "ranked", "table"];
@@ -90,6 +91,12 @@ export interface UrlState {
   cue?: string;
   /** Behavior: landscape | ranked | table */
   bview?: BehaviorView;
+  /** NebulAI experience named by the link. Kept RAW: whether it can host the
+   *  rest of the link is app/experience.ts's decision, and an unknown value is
+   *  simply ignored there. */
+  experience?: string;
+  /** contextual help's way back (`return=atlas`) */
+  returnTo?: Experience;
 }
 
 /** Parse the current hash. Unknown keys/values are dropped, never guessed. */
@@ -160,6 +167,10 @@ export function readUrlState(): UrlState {
   if (cue && cue.trim()) out.cue = cue;
   const bview = p.get("bview");
   if (bview && (BVIEWS as readonly string[]).includes(bview)) out.bview = bview as BehaviorView;
+  const experience = p.get("experience");
+  if (experience) out.experience = experience;
+  const ret = p.get("return");
+  if (isExperience(ret)) out.returnTo = ret;
   return out;
 }
 
@@ -193,11 +204,22 @@ export function applyUrlState(u: UrlState): void {
   if (u.episode) interpHooks.runEpisode?.(u.episode, u.step ?? 0);
 }
 
+/** The model the address named at boot. Until the first load starts,
+ *  resolves or fails, the store has no dataset yet — and a hash rewritten in
+ *  that window would drop `model=`, so a link copied (or a return address
+ *  remembered) a moment after opening would lose the map it was opened on. */
+let bootModel: string | null = null;
+
 function buildHash(): string {
   const st = appStore.getState();
+  if (bootModel && (st.datasetId || st.pendingDatasetId || st.loadError)) bootModel = null;
+  const model = st.pendingDatasetId ?? st.datasetId ?? bootModel;
   const p = new URLSearchParams();
+  // the experience is written explicitly so a link pasted anywhere under the
+  // app — including the root chooser — reopens in the same context
+  if (st.experience) p.set("experience", st.experience);
   p.set("page", st.page);
-  if (st.datasetId) p.set("model", st.datasetId);
+  if (model) p.set("model", model);
   if (st.page === "map") {
     if (st.viewMode !== "atlas") p.set("view", st.viewMode);
     if (st.dims === 3) p.set("dims", "3");
@@ -234,6 +256,7 @@ function buildHash(): string {
     p.set("episode", st.tour.id);
     p.set("step", String(st.tour.step));
   }
+  if (st.returnTo) p.set("return", st.returnTo);
   return `#${p.toString()}`;
 }
 
@@ -243,6 +266,7 @@ function buildHash(): string {
  *  which would leave the hash stale exactly when a user copies a link from a
  *  backgrounded window. */
 export function startUrlSync(): void {
+  bootModel = readUrlState().model ?? null;
   let queued = false;
   const sync = () => {
     queued = false;

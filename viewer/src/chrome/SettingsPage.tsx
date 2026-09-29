@@ -40,6 +40,8 @@ import {
   $probing,
   $progress,
   $seer,
+  $app,
+  $experience,
   $sessions,
   $settings,
   $settingsOpen,
@@ -65,17 +67,9 @@ import {
   verdictNote,
   type PersonaSpace,
 } from "../data/persona";
+import { owns, tabsFor, type SettingsContext, type SettingsTab } from "./settingsScope";
 
-const TABS = [
-  "General",
-  "Appearance",
-  "Behavior",
-  "Model Probing",
-  "Snapshot",
-  "Sessions",
-  "Data",
-  "About",
-];
+/** The tab list and who sees which tab/section live in settingsScope.ts. */
 
 const STAGE_ORDER: readonly string[] = [
   "probing",
@@ -101,9 +95,22 @@ const STAGE_LABEL: Record<string, string> = {
   error: "Error",
 };
 
+/** Which Settings context this document is: Seer, or NebulAI's experience. */
+function settingsContext(): SettingsContext {
+  return $app.value === "seer" ? "seer" : ($experience.value ?? "atlas");
+}
+
+/** Is `path` shown in the current context? Read inside a render so it
+ *  subscribes to the app/experience signals. */
+function shown(path: string): boolean {
+  return owns(settingsContext(), path);
+}
+
 export function SettingsPage() {
-  const tab = useSignal("General");
+  const tab = useSignal<SettingsTab>("General");
   if (!$settingsOpen.value) return null;
+  const TABS = tabsFor(settingsContext());
+  if (!TABS.includes(tab.value)) tab.value = "General";
 
   const close = () => appStore.getState().setSettingsOpen(false);
 
@@ -283,14 +290,17 @@ function GeneralTab() {
           format={(v) => `${v.toFixed(2)}×`}
           onChange={(v) => appStore.getState().setSetting("animationSpeed", v)}
         />
+        {shown("General/Chrome/Cross-view linking") && (
         <ToggleRow
           label="Cross-view linking (Internals)"
           checked={settings.crossLink}
           onChange={(v) => appStore.getState().setSetting("crossLink", v)}
           hint="clicking a head / token / SAE feature highlights it in every view that shows the same unit"
         />
+        )}
       </SettingsSection>
 
+      {shown("General/Rendering") && (
       <SettingsSection title="Rendering" hint="Live-applied across all graph types.">
         <SliderRow
           label="Point scale"
@@ -327,7 +337,9 @@ function GeneralTab() {
           onChange={(v) => appStore.getState().setSetting("bloom", v)}
         />
       </SettingsSection>
+      )}
 
+      {shown("General/Hand control") && (
       <SettingsSection
         title="Hand control"
         hint="Steer the map with a webcam. Video is processed on this machine and never leaves it — no frame is uploaded, stored or sent anywhere."
@@ -361,6 +373,7 @@ function GeneralTab() {
           ))}
         </ul>
       </SettingsSection>
+      )}
     </>
   );
 }
@@ -368,14 +381,18 @@ function GeneralTab() {
 // ── Appearance ─────────────────────────────────────────────────────────────
 
 function AppearanceTab() {
-  const sub = useSignal<"atlas" | "chord" | "hierarchy" | "compare" | "sessions">("atlas");
+  const subs = (["atlas", "chord", "hierarchy", "compare", "sessions"] as const).filter((t) =>
+    shown(`Appearance/${t}`),
+  );
+  const sub = useSignal<"atlas" | "chord" | "hierarchy" | "compare" | "sessions">(subs[0] ?? "atlas");
+  if (!subs.includes(sub.value) && subs[0]) sub.value = subs[0];
   const a = $appearance.value;
 
   return (
     <>
       <div class="settings-subtabs">
         <Tabs
-          tabs={["atlas", "chord", "hierarchy", "compare", "sessions"]}
+          tabs={[...subs]}
           active={sub.value}
           onChange={(t) => (sub.value = t as typeof sub.value)}
         />
@@ -1019,6 +1036,7 @@ function ProbingTab() {
 
   return (
     <>
+      {shown("Model Probing/Map builder") && (
       <SettingsSection
         title="Map builder"
         hint="Runs the real pipeline on the local build server — `nebulai tokens` for a model's geometry, or `nebulai probe` to grow a cloud from a seed word with no model at all. Start it with: python -m nebulai.backend.build_server"
@@ -1279,11 +1297,18 @@ function ProbingTab() {
           </button>
         </div>
       </SettingsSection>
+      )}
 
       <SettingsSection
         title="Endpoint"
-        hint="Point the naming/embedding chain at a custom OpenAI-compatible endpoint, or route through the bridge endpoint."
+        hint={
+          settingsContext() === "seer"
+            ? "Where Seer's Live page reaches the capture server."
+            : "Point the naming/embedding chain at a custom OpenAI-compatible endpoint, or route through the bridge endpoint."
+        }
       >
+        {shown("Model Probing/Endpoint/Naming chain") && (
+          <>
         <ToggleRow
           label="Route through bridge endpoint"
           checked={p.useBridgeEndpoint}
@@ -1311,6 +1336,9 @@ function ProbingTab() {
           placeholder="llama3.2:3b or gpt-4o-mini"
           onChange={(v) => appStore.getState().setProbing("model", v)}
         />
+          </>
+        )}
+        {shown("Model Probing/Endpoint/Live nebula server") && (
         <TextRow
           label="Live nebula server"
           type="url"
@@ -1319,6 +1347,8 @@ function ProbingTab() {
           onChange={(v) => appStore.getState().setProbing("liveUrl", v)}
           hint="Internals #25 — python -m nebulai.backend.interp.live_server"
         />
+        )}
+        {shown("Model Probing/Endpoint/SessionSeer server") && (
         <TextRow
           label="SessionSeer server"
           type="url"
@@ -1327,8 +1357,10 @@ function ProbingTab() {
           onChange={(v) => appStore.getState().setSeerConfig("serverUrl", v)}
           hint="Seer → Live — seer serve"
         />
+        )}
       </SettingsSection>
 
+      {shown("Model Probing/Live probing") && (
       <SettingsSection title="Live probing">
         <ToggleRow
           label="Ping endpoint on change"
@@ -1355,11 +1387,14 @@ function ProbingTab() {
           </button>
         </div>
       </SettingsSection>
+      )}
 
+      {shown("Model Probing/Progress") && (
       <SettingsSection title="Progress" hint="Live view of the pipeline as the map builds.">
         <ProgressStrip />
         <ProgressLog />
       </SettingsSection>
+      )}
     </>
   );
 }
@@ -1614,6 +1649,7 @@ function DataTab() {
         options={$datasets.value.map((d) => ({ value: d.id, label: d.id }))}
         onChange={(id) => requestDataset(id)}
       />
+      {shown("Data/Dataset & view/View type") && (
       <SelectRow
         label="View type"
         value={$viewMode.value}
@@ -1636,6 +1672,7 @@ function DataTab() {
         ]}
         onChange={(v) => requestViewMode(v as ViewMode)}
       />
+      )}
       {$viewMode.value === "atlas" && (
         <SelectRow
           label="Dimensions"

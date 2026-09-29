@@ -5,8 +5,8 @@
  *  guesses.
  *
  *  This lives here rather than in the shared tests/e2e/helpers.ts because
- *  `bootApp` is genuinely Nebulai-specific: it navigates to `/` (Nebulai's
- *  entry) and its completion signal is
+ *  `bootApp` is genuinely Nebulai-specific: it navigates to the NebulAI
+ *  experience entry the link resolves to (`/atlas/`, `/research/`, …) and its completion signal is
  *  `window.__store.getState().dataset !== null`, a condition Seer's document
  *  can never satisfy — Seer boots with no atlas artifacts at all. Seer's own
  *  entry spec (tests/e2e/seer/seer-entry.spec.ts) defines a local `bootSeer`
@@ -14,7 +14,24 @@
  *  `Rung`, used by every spec in both trees, stays in the shared file.
  */
 import type { Page } from "@playwright/test";
+import { resolveExperience, type RouteIntent } from "../../../src/app/experience";
 import type { Rung } from "../helpers";
+
+/** The nested entry a legacy-shaped link lands on — computed with the app's
+ *  own resolver, so the spec opens the entry directly instead of bouncing
+ *  through the root chooser (which has its own spec, experiences.spec.ts). */
+export function entryFor(search: URLSearchParams, hash: URLSearchParams): string {
+  const page = hash.get("page") ?? undefined;
+  const view = hash.get("view") ?? search.get("view") ?? undefined;
+  const intent: RouteIntent = {
+    page: page as RouteIntent["page"],
+    view: view as RouteIntent["view"],
+    episode: hash.has("episode"),
+    model: hash.has("model"),
+  };
+  const { experience } = resolveExperience({ entry: null, explicit: hash.get("experience"), intent });
+  return experience ? `/${experience}/` : "/";
+}
 
 export type View = "atlas" | "chord" | "hierarchy" | "compare";
 
@@ -61,7 +78,7 @@ export async function bootApp(
   if (!new URLSearchParams(raw).has("model") && !new URLSearchParams(raw).has("episode")) {
     raw = raw ? `model=${DEFAULT_E2E_MODEL}&${raw}` : `model=${DEFAULT_E2E_MODEL}`;
   }
-  await page.goto(`/?${params.toString()}#${raw}`);
+  await page.goto(`${entryFor(params, new URLSearchParams(raw))}?${params.toString()}#${raw}`);
 
   await page.waitForFunction(
     () => window.__perf.bootMs !== undefined && window.__store.getState().dataset !== null,

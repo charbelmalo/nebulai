@@ -82,6 +82,7 @@ export { DEFAULT_TOPICS } from "./slices/snapshot";
 
 export { APP_PAGES } from "./slices/shell";
 export type { AppId, Page, Settings, ShellSlice } from "./slices/shell";
+export type { Experience } from "./experience";
 export type {
   AtlasSlice,
   AxisUI,

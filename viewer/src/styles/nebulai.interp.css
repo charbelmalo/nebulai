@@ -2115,3 +2115,40 @@
 .guide-card-claimnote em {
   font-style: italic;
 }
+
+/* ── Learn's "Where next" (GuidePage LessonsPage) ─────────────────────── */
+.guide-next-links {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.guide-next-link {
+  display: grid;
+  gap: 6px;
+  padding: 16px 18px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.guide-next-link span {
+  color: var(--text-dim);
+  font: 400 12.5px/1.5 var(--font-ui);
+}
+
+.guide-next-link:hover,
+.guide-next-link:focus-visible {
+  border-color: var(--hairline-strong);
+  background: var(--hairline);
+  outline: none;
+}
+
+.guide-next-link:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--text);
+}
+
+a.guide-card-open {
+  text-decoration: none;
+}

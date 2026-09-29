@@ -19,17 +19,33 @@ type EntryId = "all" | "nebulai" | "seer" | "hub";
 
 const ENTRY = (process.env.PSYCHIX_ENTRY ?? "all") as EntryId;
 
+function NEBULAI_INPUTS(): Record<string, string> {
+  return {
+    index: resolve(__dirname, "index.html"),
+    learn: resolve(__dirname, "learn/index.html"),
+    atlas: resolve(__dirname, "atlas/index.html"),
+    research: resolve(__dirname, "research/index.html"),
+  };
+}
+
 const INPUTS: Record<EntryId, Record<string, string>> = {
   // Two instruments, one repo, one build. Rollup treats each HTML file as
   // an independent entry and only shares a chunk between them when both
   // actually import it — which is how `npm run build` produces the
   // evidence that the split is real: Seer's graph reaches the chrome and
   // @psychix/viz, and reaches no atlas or Internals driver at all.
+  //
+  // NebulAI is four documents: the root chooser (index.html, no model fetch)
+  // and one nested entry per experience. The nested files live in their own
+  // directories and are emitted at the same relative paths, so every asset and
+  // DATA_BASE still resolve against the app root — never `/learn/out/`. That
+  // is also why the default base below is the explicit root "/" rather than a
+  // relative "./", which would resolve data against each nested directory.
   all: {
-    index: resolve(__dirname, "index.html"),
+    ...NEBULAI_INPUTS(),
     seer: resolve(__dirname, "seer.html"),
   },
-  nebulai: { index: resolve(__dirname, "index.html") },
+  nebulai: NEBULAI_INPUTS(),
   seer: { seer: resolve(__dirname, "seer.html") },
   hub: { hub: resolve(__dirname, "hub.html") },
 };
@@ -97,10 +113,13 @@ function serveOut(): Plugin {
 }
 
 export default defineConfig({
-  // Dev + relative-hosting default is "./"; a sub-path static deploy sets
-  // VITE_BASE (e.g. "/psychiX/nebulai-maps/") so BASE_URL — and thus DATA_BASE
-  // in src/data/base.ts — resolve the baked out/ tree under that sub-path.
-  base: process.env.VITE_BASE ?? "./",
+  // Dev, preview and the e2e suite serve at the origin root, so the default is
+  // the explicit root "/"; a sub-path static deploy sets VITE_BASE (e.g.
+  // "/psychiX/nebulai-maps/") so BASE_URL — and thus DATA_BASE in
+  // src/data/base.ts — resolve the baked out/ tree under that sub-path. A
+  // relative "./" is NOT safe any more: the nested experience entries
+  // (learn/, atlas/, research/) would resolve data one directory too deep.
+  base: process.env.VITE_BASE ?? "/",
   plugins: [
     preact(),
     serveOut(),

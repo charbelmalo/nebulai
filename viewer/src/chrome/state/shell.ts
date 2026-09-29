@@ -14,7 +14,7 @@
  *  rather than re-worded, so read "above" as "in state/atlas.ts". */
 
 import { signal } from "@preact/signals";
-import { appStore, type AppId, type Page, type Settings } from "../../app/store";
+import { appStore, type AppId, type Experience, type Page, type Settings } from "../../app/store";
 import type { Capabilities } from "@psychix/viz/capabilities";
 
 const s = appStore.getState();
@@ -29,6 +29,9 @@ export const $capabilities = signal<Capabilities | null>(s.capabilities);
 export const $settings = signal<Settings>(s.settings);
 export const $settingsOpen = signal<boolean>(s.settingsOpen);
 export const $page = signal<Page>(s.page);
+/** NebulAI's experience (null on Seer) and its one-shot boot notice. */
+export const $experience = signal<Experience | null>(s.experience);
+export const $experienceNotice = signal<string | null>(s.experienceNotice);
 
 /** Compact-viewport signal (phone widths, or a coarse pointer under 900px —
  *  tablets in portrait). Also NOT a store mirror: the viewport is a property
