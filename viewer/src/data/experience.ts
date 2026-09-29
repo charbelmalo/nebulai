@@ -255,7 +255,9 @@ export function sidecarKnownAbsent(datasetId: string, rel: string): boolean {
 export async function loadManifest(base: string, noCache = false): Promise<ManifestStatus> {
   let res: Response;
   try {
-    res = await fetch(`${base}/experience.json`, noCache ? { cache: "no-store" } : undefined);
+    // mutable: always revalidate (the host sends max-age=3600, and a stale
+    // manifest would name the previous release's artifacts for an hour)
+    res = await fetch(`${base}/experience.json`, { cache: noCache ? "no-store" : "no-cache" });
   } catch {
     return { state: "absent" };
   }

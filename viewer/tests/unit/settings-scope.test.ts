@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  renderOwnershipMarkdown,
   SETTINGS_CONTEXTS,
   SETTINGS_OWNERSHIP,
   SETTINGS_TABS,
@@ -56,5 +59,12 @@ describe("Settings ownership", () => {
       expect(owns(ctx, "General/Chrome/Theme")).toBe(true);
       expect(owns(ctx, "About/Provenance")).toBe(true);
     }
+  });
+});
+
+describe("docs/SETTINGS-OWNERSHIP.md", () => {
+  it("matches the ownership table (regenerate with npm run docs:settings)", () => {
+    const doc = readFileSync(join(__dirname, "../../../docs/SETTINGS-OWNERSHIP.md"), "utf8");
+    expect(doc).toBe(renderOwnershipMarkdown());
   });
 });

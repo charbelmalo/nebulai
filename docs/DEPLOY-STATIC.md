@@ -413,6 +413,10 @@ Nebul.AI's data tree nested inside its own subtree only:
 Put each instrument build into its matching directory under `psychiX/`.
 `--delete` is correct for those self-contained subtrees only.
 
+> **Live host:** use the release procedure in §10 instead of the rsync below.
+> It keeps old hashed chunks for open tabs, publishes pinned artifacts first,
+> and activates the new `index.html` last.
+
 ```sh
 # Nebul.AI app code. `out/` is deliberately excluded: it is the separate,
 # heavier §4 data tree and is not present in dist/nebulai/. Without this
@@ -577,10 +581,15 @@ Then in a browser:
 - [ ] "Enter NebulAI" → `…/psychiX/nebulai-maps/`. Seer is deliberately not
       duplicated here; it remains reachable from Nebul.AI's cross-instrument link.
 
+Run `node viewer/scripts/smoke-release.mjs https://research.elysiumsystems.net`
+first (§10.4). It covers the three entries, the manifest, pinned artifacts and
+the first task of each experience. The checklist below covers what it does not.
+
 **`…/psychiX/nebulai-maps/`** (Nebul.AI):
 - [ ] Semantic map renders; status bar shows `… pts · … clusters · gpu: webgpu`.
 - [ ] Dataset dropdown switches models (loads `<id>/nebulai.json`).
-- [ ] **Internals** tab on `gpt2` shows "26 live" in the rail counter and a panel renders
+- [ ] **Research** on `gpt2` shows "24 of 26 analyses available" (the live host
+      has no gpt2 `channels.json`/`directions.json`) and a panel renders
       (e.g. #21 Weight Spectrum draws curves).
 - [ ] View dropdown → **Compare** renders (loads `compare/compare.json`).
 - [ ] **Behavior** page loads a study (fetches `behavior/behavior.json`) and the
@@ -666,3 +675,162 @@ deploy.)
 - Everything renders client-side; visitor prompts in the (opt-in,
   off-by-default) live features — Nebul.AI's probing panels, Seer's Live page
   — never leave their browser unless they configure their own server.
+
+---
+
+## 10. Release procedure — three entries, pinned artifacts, rollback
+
+Since the three-experience release (2026-09-30), Nebul.AI ships **four HTML
+entries** from one build and a **manifest of immutable map artifacts**. This
+section supersedes the plain `rsync --delete` app sync in §5 for the live host.
+
+### 10.1 What a release is
+
+| Piece | Path under `nebulai-maps/` | Mutable? |
+|---|---|---|
+| Root chooser | `index.html` | yes — the activation switch, written **last** |
+| Entries | `learn/`, `atlas/`, `research/` (each an `index.html`) | replaced per release |
+| Code | `assets/*` (content-hashed names) | additive — old chunks stay |
+| Hand tracking | `models/` | rarely |
+| Manifest | `out/experience.json` | yes — names the current artifacts |
+| Map index | `out/index.json` | yes |
+| Artifacts | `out/artifacts/<sha256>/nebulai.json` | **never** — immutable once published |
+
+The entries reference `../assets/`, and every entry's `DATA_BASE` is the parent
+`out/`. There is no SPA fallback on this host: an unknown path must 404, and
+the smoke check below tests that.
+
+Both `experience.json` and `index.json` are fetched with `cache: "no-cache"`,
+so a browser revalidates them on every boot even though the host sends
+`cache-control: public, max-age=3600` for all of `out/`. Artifacts are safe to
+cache forever. Setting `immutable` for `out/artifacts/` is an owner Caddyfile
+change and is optional.
+
+### 10.2 Artifact retention
+
+`viewer/scripts/package-experience.ts` (`npm run package:experience`) hashes
+every map in `out/index.json`, hard-links it to `out/artifacts/<sha>/nebulai.json`,
+and writes `out/experience.json` after validating it with the viewer's own
+validator. It is additive: a digest from an earlier manifest stays listed with
+`current: false` for as long as its artifact exists.
+
+`scripts/sync-out.sh` enforces three rules in every mode:
+
+1. `artifacts/` is protected from `--delete` on both sides.
+2. An artifact that already exists on the destination is never rewritten. If
+   the two copies differ, the run stops before copying anything.
+3. Every source artifact must hash to its own directory name.
+
+```sh
+./scripts/sync-out.sh publish           # dry run: artifacts, then experience.json
+./scripts/sync-out.sh publish --apply   # additive; deletes nothing
+./scripts/sync-out.sh verify            # checksum-compare both trees
+```
+
+`-H` preserves the hard links, so publishing the 18 artifacts transferred
+0 bytes of map data: each new name links to the map already on the host. On the
+host, `stat -c %i` shows the same inode for `gpt2/nebulai.json` and its
+`artifacts/c2ebac8c…/nebulai.json`.
+
+**Removing an artifact is manual and reviewed.** Do it only when no published
+finding or link can name it. List the candidates, confirm none is referenced by
+the live `experience.json`, then remove the directory by its literal path
+inside the container. Never script it into a sync.
+
+Do not replace the live `out/compare/metrics.json` as part of a release. The
+local copy is regenerated by tests and differs from the published one.
+
+### 10.3 Deploy order
+
+The webroot is under `~/Documents`, which TCC blocks for agent shells, so the
+copy goes through the Caddy container (`docker cp`), as `sync-out.sh` does.
+
+```sh
+cd viewer
+npm run -s typecheck && npx vitest run
+npm run build:nebulai && npm run build:seer        # never deploy dist/hub here
+grep -aoE '(liveUrl|buildUrl|serverUrl|embedHost|llmHost):`[^`]*`' \
+  dist/nebulai/assets/*.js dist/seer/assets/*.js | sort -u   # all must be empty
+
+# 0. rollback copy of what is live now
+R=~/Developer/nebulai-rollback-$(date +%Y%m%d)-live
+mkdir -p "$R/nebulai-maps" "$R/seer"
+docker cp homelab-caddy:/srv/www/research/psychiX/nebulai-maps/index.html "$R/nebulai-maps/"
+docker cp homelab-caddy:/srv/www/research/psychiX/nebulai-maps/assets     "$R/nebulai-maps/"
+docker cp homelab-caddy:/srv/www/research/psychiX/nebulai-maps/models     "$R/nebulai-maps/"
+docker cp homelab-caddy:/srv/www/research/psychiX/seer/.                  "$R/seer/"
+# also copy learn/ atlas/ research/ once they exist on the host
+
+# 1. data first: artifacts, then the manifest
+../scripts/sync-out.sh publish --apply
+
+# 2. stage the build inside the container
+docker exec homelab-caddy rm -rf /tmp/nbstage /tmp/seerstage
+docker cp dist/nebulai/. homelab-caddy:/tmp/nbstage
+docker cp dist/seer/.    homelab-caddy:/tmp/seerstage
+
+# 3. merge assets (keep old chunks for open tabs), replace entries,
+#    then activate by renaming index.html into place LAST
+docker exec homelab-caddy sh -c '
+  A=/srv/www/research/psychiX/nebulai-maps S=/tmp/nbstage
+  cp -a $S/assets/. $A/assets/ && cp -a $S/models/. $A/models/ &&
+  for e in learn atlas research; do
+    rm -rf $A/$e.new && cp -a $S/$e $A/$e.new && rm -rf $A/$e && mv $A/$e.new $A/$e
+  done &&
+  cp $S/index.html $A/index.html.new && mv $A/index.html.new $A/index.html'
+docker exec homelab-caddy sh -c '
+  A=/srv/www/research/psychiX/seer S=/tmp/seerstage
+  cp -a $S/assets/. $A/assets/ &&
+  cp $S/index.html $A/index.html.new && mv $A/index.html.new $A/index.html'
+
+# 4. verify over the public route
+node scripts/smoke-release.mjs https://research.elysiumsystems.net
+```
+
+Old hashed chunks accumulate in `assets/` because step 3 merges rather than
+replaces. Prune them by hand now and then, keeping at least the chunks that the
+current and the rollback `index.html` reference.
+
+### 10.4 Smoke check
+
+`viewer/scripts/smoke-release.mjs <origin> [--all-artifacts]` runs against a
+staging server or the public host and exits 1 on any failure. Over HTTP it
+checks the five entries (HTML with a module script), that an unknown entry
+404s, the manifest, the Research bundle's SHA-256 and size, and the starter
+artifact. `--all-artifacts` hashes all 18. It then drives headless Chromium
+and checks:
+
+- the root chooser, and that it fetches no map;
+- the Research first task reaches "Verified";
+- a legacy Internals link lands in Research;
+- Learn lists its lesson, and Atlas opens its starter;
+- a pinned unit link reopens "Verified against artifact";
+- the Research task at 390 px has no horizontal scroll;
+- Seer boots its own shell.
+
+Any same-origin response of 400 or more, or any page error, fails the run.
+
+To stage locally, serve a copy of `dist/nebulai` with `out` symlinked to the
+repo's `out/` at `psychiX/nebulai-maps/`, and `dist/seer` at `psychiX/seer/`,
+from `python3 -m http.server`. It has no SPA fallback, like the live host.
+
+### 10.5 Rollback
+
+Rollback restores the app and keeps every artifact, so findings saved against
+the new release still verify later.
+
+```sh
+R=~/Developer/nebulai-rollback-20260930-live    # the copy taken in step 0
+docker cp "$R/nebulai-maps/assets/." homelab-caddy:/srv/www/research/psychiX/nebulai-maps/assets/
+docker cp "$R/nebulai-maps/models/." homelab-caddy:/srv/www/research/psychiX/nebulai-maps/models/
+docker cp "$R/seer/assets/."         homelab-caddy:/srv/www/research/psychiX/seer/assets/
+docker cp "$R/seer/index.html"       homelab-caddy:/srv/www/research/psychiX/seer/index.html
+docker cp "$R/nebulai-maps/index.html" homelab-caddy:/srv/www/research/psychiX/nebulai-maps/index.html
+```
+
+That rollback copy predates the three entries. To return to it fully, also
+remove `learn/`, `atlas/` and `research/`, and move `out/experience.json`
+aside. The old app does not read the manifest, and leaving the artifacts in
+place is harmless. The rollback was rehearsed on staging on 2026-09-30: the
+old app booted, a retained artifact still returned 200, and the only errors
+were the old app's known sidecar 404s on the pythia dataset.

@@ -1,10 +1,10 @@
-# Proposed data contracts
+# Data contracts
 
-These are implementation specifications and source-backed fixtures. They do not mean that the current application imports or exports this format.
+These are the specifications and source-backed fixtures for the three-experience release. The viewer implements them: `viewer/src/data/experience.ts` validates the manifest, and `viewer/src/data/finding.ts` validates, resolves and exports findings. The live manifest is `out/experience.json`, written by `viewer/scripts/package-experience.ts` (see `docs/DEPLOY-STATIC.md` §10).
 
 - `finding.schema.json`: JSON Schema Draft 2020-12 for one v1 atlas-unit finding. All named fields are required; unknown model revisions are null. Extra top-level fields are rejected; raw source metadata intentionally allows fields from different pipelines.
 - `finding.example.json`: actual point 0 and metadata from the local 4,096-direction starter. Its artifact digest was independently computed from the source bytes. No user note or invented model revision is present.
-- `experience-manifest.example.json`: a **minimal example**, not a complete deployable index. A release packager must enumerate all supported current maps and all previously published pinned map digests, add their immutable paths, and include the pinned Research intro bundle. Its proposed `artifacts/<digest>/nebulai.json` path does not exist merely because it appears in this example.
+- `experience-manifest.example.json`: a **minimal example**, not a complete deployable index. A release packager must enumerate all supported current maps and all previously published pinned map digests, add their immutable paths, and include the pinned Research intro bundle. On the live host every listed digest exists as `artifacts/<digest>/nebulai.json`; one named only in this example does not.
 
 The experience manifest is versioned separately from findings and the existing map schema. It must have a supported schema version, unique `(dataset_id, sha256)` entries, a valid SHA-256 and byte count for each entry, normalized relative same-origin paths under DATA_BASE, and defaults that resolve to listed entries. Reject traversal, absolute paths and conflicting duplicate entries. `legacy_path` and `sidecar_base` identify existing resources; no sidecar may be inferred from a content-addressed map directory. The Research intro is a separate bundle reference, not an atlas point artifact.
 
@@ -33,7 +33,7 @@ unit_kind=sae_decoder(gpt2-small-res-jb, blocks.8.hook_resid_pre)
 unit_index=0
 ```
 
-Encode with URLSearchParams under the Atlas entry. These are proposed keys; the current app does not yet implement them. A valid pinned link verifies artifact and identity, but contains no saved note/evidence object to compare. Imported JSON additionally compares its saved evidence. New links open Atlas explicitly even when created from a Learn lesson.
+Encode with URLSearchParams under the Atlas entry. The Atlas entry implements these keys; `viewer/scripts/smoke-release.mjs` reopens this exact link against the published bytes. A valid pinned link verifies artifact and identity, but contains no saved note/evidence object to compare. Imported JSON additionally compares its saved evidence. New links open Atlas explicitly even when created from a Learn lesson.
 
 ### Precision and version policy
 

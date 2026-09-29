@@ -5,11 +5,13 @@ import {
   currentArtifact,
   findArtifact,
   isSafeRelativePath,
+  loadManifest,
   setManifestStatus,
   sidecarKnownAbsent,
   validateManifest,
   type ExperienceManifest,
 } from "../../src/data/experience";
+import { loadIndex } from "../../src/data/loader";
 
 const A = "a".repeat(64);
 const B = "b".repeat(64);
@@ -156,5 +158,32 @@ describe.skipIf(!existsSync(OUT))("packaged out/experience.json", () => {
       dimensions: 2,
     });
     expect(r.manifest.research_intro.sha256).toBe("572645fc13b08a8afcaab1d4155f0f2010c4a7c84757e3eac52bb2b67f785093");
+  });
+});
+
+describe("mutable manifests revalidate", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+  function spy(): RequestInit[] {
+    const seen: RequestInit[] = [];
+    globalThis.fetch = (async (_u: RequestInfo | URL, init?: RequestInit) => {
+      seen.push(init ?? {});
+      return new Response("{}", { status: 404, headers: { "content-type": "text/plain" } });
+    }) as typeof fetch;
+    return seen;
+  }
+  it("experience.json asks the cache to revalidate, and a retry bypasses it", async () => {
+    const seen = spy();
+    await loadManifest("/out");
+    await loadManifest("/out", true);
+    expect(seen.map((i) => i.cache)).toEqual(["no-cache", "no-store"]);
+  });
+  it("index.json does the same", async () => {
+    const seen = spy();
+    await loadIndex("/out").catch(() => undefined);
+    await loadIndex("/out", true).catch(() => undefined);
+    expect(seen.map((i) => i.cache)).toEqual(["no-cache", "no-store"]);
   });
 });

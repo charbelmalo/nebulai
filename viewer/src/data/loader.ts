@@ -72,7 +72,8 @@ export function cacheKey(path: string, base = DATA_BASE, expectedSha256?: string
 }
 
 export async function loadIndex(base = DATA_BASE, noCache = false): Promise<DatasetIndex> {
-  const res = await fetch(`${base}/index.json`, noCache ? { cache: "no-store" } : undefined);
+  // mutable, like experience.json: revalidate rather than trust max-age
+  const res = await fetch(`${base}/index.json`, { cache: noCache ? "no-store" : "no-cache" });
   const type = res.headers.get("content-type") ?? "";
   // a dev-server SPA fallback answers 200 with index.html: that is "no index"
   if (!res.ok || !type.includes("json")) {

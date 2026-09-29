@@ -18,7 +18,7 @@
  *  ADDITIVE ONLY. Nothing is ever deleted: a digest from an earlier manifest
  *  stays listed (current: false) as long as its artifact is still on disk, so
  *  a finding saved against it keeps reopening the exact bytes. Retention is a
- *  separate, deliberate step (docs: DEPLOY.md, "Artifact retention").
+ *  separate, deliberate step (docs/DEPLOY-STATIC.md §10.2, "Artifact retention").
  *
  *  The manifest is checked with the SAME validator the viewer runs
  *  (src/data/experience.ts) before it is written; an invalid one is never

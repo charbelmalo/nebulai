@@ -95,3 +95,35 @@ export function owns(ctx: SettingsContext, path: string): boolean {
 export function tabsFor(ctx: SettingsContext): SettingsTab[] {
   return SETTINGS_TABS.filter((t) => owns(ctx, t));
 }
+
+const CONTEXT_LABEL: Record<SettingsContext, string> = {
+  seer: "Seer",
+  learn: "Learn",
+  atlas: "Atlas",
+  research: "Research",
+};
+
+/** docs/SETTINGS-OWNERSHIP.md, rendered from the table above
+ *  (`npm run docs:settings`; a unit test fails when the file drifts). */
+export function renderOwnershipMarkdown(): string {
+  const head = ["Setting", ...SETTINGS_CONTEXTS.map((c) => CONTEXT_LABEL[c])];
+  const rows = Object.keys(SETTINGS_OWNERSHIP).map((path) => {
+    const depth = path.split("/").length - 1;
+    const name = path.split("/").pop() as string;
+    const label = depth === 0 ? `**${name}**` : `${"  ".repeat(depth)}${name}`;
+    return [label, ...SETTINGS_CONTEXTS.map((c) => (owns(c, path) ? "shown" : "–"))];
+  });
+  const line = (cells: string[]) => `| ${cells.join(" | ")} |`;
+  return [
+    "# Settings ownership",
+    "",
+    "Generated from `viewer/src/chrome/settingsScope.ts` by `npm run docs:settings`. Do not edit by hand.",
+    "",
+    "Settings is the one canonical home for every preference. Each context shows only the tabs, sections and rows it owns. A hidden option keeps its stored value and still applies wherever it is used. Rows not listed inherit their section's owners.",
+    "",
+    line(head),
+    line(head.map(() => "---")),
+    ...rows.map(line),
+    "",
+  ].join("\n");
+}
