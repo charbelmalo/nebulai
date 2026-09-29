@@ -84,6 +84,7 @@ export { APP_PAGES } from "./slices/shell";
 export type { AppId, Page, Settings, ShellSlice } from "./slices/shell";
 export type { Experience } from "./experience";
 export type {
+  AtlasPanel,
   AtlasSlice,
   AxisUI,
   ChannelUI,
@@ -91,6 +92,8 @@ export type {
   LoadFailure,
   RendererState,
   MapQuery,
+  PinSource,
+  PinState,
   Selection,
   Toggles,
   ViewMode,

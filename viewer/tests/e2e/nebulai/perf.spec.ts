@@ -72,7 +72,7 @@ test("cached dataset switch lands under 400ms", async ({ page }, testInfo) => {
   const first = await page.evaluate(() => window.__store.getState().datasetId);
 
   // populate the column cache with a second dataset (network-bound, uncapped)
-  await page.locator("#sel-dataset").selectOption("distilgpt2");
+  await page.locator("#sel-map").selectOption("distilgpt2");
   await page.waitForFunction(
     () =>
       window.__store.getState().datasetId === "distilgpt2" &&
@@ -85,7 +85,7 @@ test("cached dataset switch lands under 400ms", async ({ page }, testInfo) => {
   await page.evaluate(() => {
     window.__perf.datasetSwitchMs = undefined;
   });
-  await page.locator("#sel-dataset").selectOption(first!);
+  await page.locator("#sel-map").selectOption(first!);
   await page.waitForFunction(
     (id) => window.__store.getState().datasetId === id && !window.__store.getState().loading.active,
     first,

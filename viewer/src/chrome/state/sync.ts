@@ -30,6 +30,7 @@ import { appStore } from "../../app/store";
 import { $appearance } from "./appearance";
 import { $behavior } from "./behavior";
 import {
+  $atlasPanel,
   $axis,
   $channel,
   $compare,
@@ -41,8 +42,12 @@ import {
   $loading,
   $pendingDatasetId,
   $loadError,
+  $inspectorOpen,
   $mapQuery,
+  $pin,
+  $renderer,
   $selection,
+  $unverifiedDefault,
   $toggles,
   $viewMode,
 } from "./atlas";
@@ -95,4 +100,9 @@ appStore.subscribe((st) => {
   if (st.compareData !== $compareData.value) $compareData.value = st.compareData;
   if (st.compare !== $compare.value) $compare.value = st.compare;
   if (st.seer !== $seer.value) $seer.value = st.seer;
+  if (st.pin !== $pin.value) $pin.value = st.pin;
+  if (st.inspectorOpen !== $inspectorOpen.value) $inspectorOpen.value = st.inspectorOpen;
+  if (st.atlasPanel !== $atlasPanel.value) $atlasPanel.value = st.atlasPanel;
+  if (st.renderer !== $renderer.value) $renderer.value = st.renderer;
+  if (st.unverifiedDefault !== $unverifiedDefault.value) $unverifiedDefault.value = st.unverifiedDefault;
 });

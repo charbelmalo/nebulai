@@ -286,6 +286,7 @@ export class AtlasDriver implements SceneDriver {
         if (s.selection !== prev.selection) {
           this.labels?.setSelected(s.selection?.kind === "cluster" ? s.selection.id : null);
           this.applySelection(s.selection);
+          this.applyFocus(s.selection);
           this.needsRender = true;
         }
         if (s.toggles !== prev.toggles) {
@@ -614,8 +615,20 @@ export class AtlasDriver implements SceneDriver {
     // fresh layers start flat — re-apply the current dimension morph
     this.applyMorph();
 
+    // a selection made before the renderer had this map (a pinned unit
+    // opened while the GPU was still starting) is drawn now
+    const sel = appStore.getState().selection;
+    this.applySelection(sel);
+    this.applyFocus(sel);
+
     this.cameraDirty = true;
     this.hoverClear();
+  }
+
+  private applyFocus(sel: Selection | null): void {
+    if (!this.points) return;
+    const n = this.dataset?.columns.count ?? 0;
+    this.points.uFocus.value = sel?.kind === "point" && sel.id >= 0 && sel.id < n ? sel.id : -1;
   }
 
   frame(dt: number, t: number): void {

@@ -7,11 +7,14 @@
 import { signal } from "@preact/signals";
 import {
   appStore,
+  type AtlasPanel,
   type AxisUI,
   type ChannelUI,
   type CompareUI,
   type LoadFailure,
   type MapQuery,
+  type PinState,
+  type RendererState,
   type Selection,
   type Toggles,
   type ViewMode,
@@ -43,6 +46,13 @@ export const $channel = signal<ChannelUI>(s.channel);
  *  blend has travelled, and whether the null cloud is in the picture. */
 export const $axis = signal<AxisUI>(s.axis);
 export const $compareData = signal<CompareData | null>(s.compareData);
+/** exact-unit pin from a link or an imported finding, and how far it got */
+export const $pin = signal<PinState>(s.pin);
+export const $inspectorOpen = signal<boolean>(s.inspectorOpen);
+export const $atlasPanel = signal<AtlasPanel>(s.atlasPanel);
+/** map renderer readiness: `unavailable` = the results list is the whole UI */
+export const $renderer = signal<RendererState>(s.renderer);
+export const $unverifiedDefault = signal<boolean>(s.unverifiedDefault);
 export const $compare = signal<CompareUI>(s.compare);
 
 /** The one signal here that does NOT mirror a store slice: the compare layout

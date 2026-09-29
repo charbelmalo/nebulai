@@ -64,6 +64,8 @@ import {
 import {
   activeManifest,
   currentArtifact,
+  findArtifact,
+  type ManifestArtifact,
   loadManifest,
   setManifestStatus,
   STARTER_DATASET_ID,
@@ -79,6 +81,8 @@ import {
 import { NEBULAI_EXPERIENCES } from "./chrome/apps/nav";
 import type { UrlState } from "./chrome/urlState";
 import { isLiveTrace } from "./data/interp";
+import { parsePin, resolveUnit, verifyFinding, type Finding, type UnitPin } from "./data/finding";
+import type { PinSource } from "./app/store";
 import { handRig } from "./hands/rig";
 import { findFeature } from "./scene/interp/registry";
 import { AtlasDriver } from "./scene/drivers/AtlasDriver";
@@ -105,6 +109,7 @@ registerInterpUrlHooks({
   shareableTrace: (slug) => !isLiveTrace(slug),
   knownEpisode: (id) => !!findTour(id),
   runEpisode: (id, step) => requestEpisodeStep(id, step),
+  parsePin,
 });
 
 
@@ -149,6 +154,11 @@ interface ShowOptions {
   noCache?: boolean;
   keepTour?: boolean;
   unverifiedDefault?: boolean;
+  /** a pinned open: read exactly these bytes (a manifest entry, current or
+   *  retained) instead of the dataset's current artifact */
+  artifact?: ManifestArtifact;
+  /** a pinned open with no manifest: the mutable path must hash to this */
+  expectSha256?: string;
 }
 
 /** Which experience this document was opened as: the entry HTML declares it
@@ -176,6 +186,7 @@ function resolveNebulaiContext(u: UrlState): void {
     view: u.view ?? legacyView,
     episode: !!u.episode,
     model: !!u.model,
+    finding: !!u.pin,
   };
   const r = resolveExperience({ entry, explicit: u.experience, intent });
   // a nested document always has an entry; this only guards a misnamed file
@@ -305,7 +316,7 @@ async function bootAtlas(shell: BootedShell, t0: number): Promise<() => void> {
       // A published artifact is read from its immutable path and checked
       // against its digest. A refresh after a local rebuild reads the mutable
       // path instead — the manifest describes the release, not the rebuild.
-      const art = opts.noCache ? null : currentArtifact(activeManifest(), id);
+      const art = opts.artifact ?? (opts.noCache ? null : currentArtifact(activeManifest(), id));
       let ds: Dataset;
       if (opts.noCache) evictDataset(entry.path);
       if (art) {
@@ -320,13 +331,20 @@ async function bootAtlas(shell: BootedShell, t0: number): Promise<() => void> {
           // still serves a map, just not a pinned one
           if (!(e instanceof LoadError) || e.kind !== "fetch") throw e;
           console.warn(`[nebulai] ${art.path} unavailable, reading ${entry.path}`);
-          ds = await loadDataset(entry.path, { onProgress, signal: ctrl.signal });
+          // a pinned open still insists on the pinned bytes: the mutable
+          // path is acceptable only if it hashes to the same digest
+          ds = await loadDataset(entry.path, {
+            onProgress,
+            signal: ctrl.signal,
+            expectedSha256: opts.artifact ? art.sha256 : undefined,
+          });
         }
       } else {
         ds = await loadDataset(entry.path, {
           onProgress,
           noCache: opts.noCache,
           signal: ctrl.signal,
+          expectedSha256: opts.expectSha256,
         });
       }
       if (my !== seq) return false;
@@ -393,6 +411,113 @@ async function bootAtlas(shell: BootedShell, t0: number): Promise<() => void> {
       return;
     }
     await show(pick.id, { unverifiedDefault: pick.unverifiedDefault });
+  }
+
+  /** See AppActions.openPinned. */
+  async function openPinned(pin: UnitPin, source: PinSource, finding?: Finding): Promise<void> {
+    const st0 = appStore.getState();
+    const pending = { status: "pending" as const, pin, source, finding };
+    st0.setPin(pending);
+    const stillMine = () => appStore.getState().pin === pending;
+    const fail = (code: string, title: string, message: string, extra: { expected?: string; actual?: string; conflicts?: string[] } = {}) => {
+      if (!stillMine()) return;
+      appStore.getState().setPin({ status: "error", pin, source, code, title, message, ...extra });
+    };
+
+    if (!st0.datasets.some((d) => d.id === pin.datasetId)) {
+      fail("unknown-map", "Map unavailable", `No published map is named “${pin.datasetId}” here, so this unit cannot be opened.`);
+      return;
+    }
+    const manifest = activeManifest();
+    const exact = findArtifact(manifest, pin.datasetId, pin.sha256);
+    const loaded = st0.datasetId === pin.datasetId ? st0.dataset : null;
+
+    if (!(loaded && loaded.sha256 === pin.sha256)) {
+      if (exact) {
+        if (!(await show(pin.datasetId, { artifact: exact }))) {
+          const err = appStore.getState().loadError;
+          if (!err) {
+            if (stillMine()) appStore.getState().setPin({ status: "none" }); // superseded
+            return;
+          }
+          appStore.getState().clearLoadError();
+          fail(
+            err.kind === "digest" ? "digest" : "fetch",
+            "Exact artifact unavailable",
+            err.kind === "digest"
+              ? "The published bytes for this unit's map no longer match its recorded digest. Nothing was opened."
+              : `The map this unit was saved from could not be read (${err.message}). Nothing was opened.`,
+            { expected: pin.sha256, actual: err.actual },
+          );
+          return;
+        }
+      } else {
+        // not in the trusted manifest: when the digest this map serves now
+        // is known, the pinned bytes are simply not published — say so
+        // without fetching anything
+        // A manifest that does not list this map at all says nothing about
+        // its versions, so that case falls through to digest verification.
+        const listed = !!manifest?.artifacts.some((a) => a.dataset_id === pin.datasetId);
+        const serving = loaded?.sha256 ?? currentArtifact(manifest, pin.datasetId)?.sha256 ?? null;
+        if (listed || serving) {
+          fail(
+            "wrong-artifact",
+            "Exact artifact unavailable",
+            "This unit was saved from a version of the map that is not published here. The current map was not substituted.",
+            { expected: pin.sha256, actual: serving ?? undefined },
+          );
+          return;
+        }
+        // no manifest entry: the mutable path is acceptable only if its
+        // bytes hash to the pinned digest
+        if (!(await show(pin.datasetId, { expectSha256: pin.sha256 }))) {
+          const err = appStore.getState().loadError;
+          if (!err) {
+            if (stillMine()) appStore.getState().setPin({ status: "none" });
+            return;
+          }
+          appStore.getState().clearLoadError();
+          fail(
+            err.kind === "digest" ? "wrong-artifact" : "fetch",
+            "Exact artifact unavailable",
+            err.kind === "digest"
+              ? "The map published here is a different version from the one this unit was saved from. Nothing was opened."
+              : `The map could not be read (${err.message}). Nothing was opened.`,
+            { expected: pin.sha256, actual: err.actual },
+          );
+          return;
+        }
+      }
+    }
+    if (!stillMine()) return;
+
+    const st = appStore.getState();
+    const ds = st.dataset!;
+    const r = finding ? verifyFinding(finding, ds, pin.datasetId) : resolveUnit(ds, pin.datasetId, pin);
+    if (!r.ok) {
+      const title =
+        r.code === "conflict" ? "Record conflicts with the map" : r.code === "missing" ? "Unit not found" : r.code === "ambiguous" ? "Unit is ambiguous" : "Exact artifact unavailable";
+      fail(r.code, title, r.message, r.code === "conflict" ? { conflicts: r.conflicts } : {});
+      return;
+    }
+    // reopen on the plain atlas, in the dimensions the record names
+    if (st.viewMode !== "atlas") {
+      const g = gfx ?? (await gfxReady);
+      if (g) await g.switchViewMode("atlas");
+      else appStore.getState().setViewMode("atlas");
+    }
+    if (!stillMine()) return;
+    const s2 = appStore.getState();
+    if (s2.mapQuery.text) s2.setMapQuery("");
+    if (s2.channel.id) s2.setChannel(null);
+    if (s2.axis.directionId) s2.setAxisDirection(null);
+    s2.setDims(pin.dims);
+    s2.setPin({ status: "ok", pin, row: r.row, source, note: finding?.note || undefined });
+    s2.setSelection({ kind: "point", id: r.row });
+    s2.setInspectorOpen(true);
+    if (s2.page !== "map") s2.setPage("map");
+    const g = gfx ?? (await gfxReady);
+    g?.flyToPoint(r.row);
   }
 
   /* ── actions: all registered before any GPU work ─────────────────────── */
@@ -473,6 +598,7 @@ async function bootAtlas(shell: BootedShell, t0: number): Promise<() => void> {
       else if (err.datasetId) await show(err.datasetId);
     },
     openStarter,
+    openPinned,
     flyToCluster(id) {
       gfx?.flyToCluster(id);
     },
@@ -533,6 +659,19 @@ async function bootAtlas(shell: BootedShell, t0: number): Promise<() => void> {
     } else if (st.pendingDatasetId !== null || st.datasetId !== null) {
       // the permalink (an episode step) already claimed a map
       first = waitForLoad();
+    } else if (urlState.pin) {
+      // a pinned unit: verify first; a broken pin loads NOTHING, not the
+      // latest map under an exact-looking link
+      if (urlState.pin.ok) first = openPinned(urlState.pin.pin, "link");
+      else
+        st.setPin({
+          status: "error",
+          pin: null,
+          source: "link",
+          code: "invalid-link",
+          title: "Unit link can't be opened",
+          message: urlState.pin.message,
+        });
     } else if (urlState.model) {
       first = show(urlState.model);
     } else if (st.page === "map" && st.experience === "atlas") {

@@ -164,7 +164,7 @@ export function SearchPanel() {
  *    owns that). So narrowing onto eleven near-identical values dims the rest
  *    of the map rather than repainting eleven points across a full spectrum.
  */
-function ChannelLens() {
+export function ChannelLens() {
   const ds = $dataset.value;
   const dsId = $datasetId.value;
   const set = channelsFor(dsId);
@@ -318,7 +318,7 @@ function sideArgs(side: Side, which: "a" | "b"): string {
  *  command that computes the direction where the vectors actually live. The
  *  result lands in `directions.json` and the rail above picks it up.
  */
-function DirectionMaker() {
+export function DirectionMaker() {
   const ds = $dataset.value;
   const dsId = $datasetId.value;
   if (!ds || !dsId) return null;

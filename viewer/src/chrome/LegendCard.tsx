@@ -16,6 +16,7 @@ import { ensureVerdicts, verdictFor } from "../data/validation";
 import {
   $dataset,
   $datasetId,
+  $experience,
   $legendCollapsed,
   $toggles,
   $viewMode,
@@ -169,8 +170,10 @@ export function LegendCard() {
         </p>
       )}
 
-      <div class="legend-sep" />
-      <RadioRow
+      {/* Atlas hosts one view; the advanced ones are Research's, reached by
+          the explicit handoff in the workspace toolbar */}
+      {$experience.value !== "atlas" && <div class="legend-sep" />}
+      {$experience.value !== "atlas" && <RadioRow
         name="View"
         value={$viewMode.value}
         options={[
@@ -184,7 +187,7 @@ export function LegendCard() {
           },
         ]}
         onChange={(v) => requestViewMode(v as ViewMode)}
-      />
+      />}
 
       {/* LAST, and directly under the view switcher, for two reasons. The note
           describes the SELECTED view, so it reads as an answer to the control

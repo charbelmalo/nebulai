@@ -94,7 +94,7 @@ test("atlas: confidence floor culls low-confidence points (gate direction locked
   expect(open).toBeGreaterThan(culled * 1.05);
 });
 
-test("hand control is reachable from the sidebar, and only where it steers", async ({
+test("hand control is reachable from the workspace, and only where it steers", async ({
   page,
 }, testInfo) => {
   test.skip(rungOf(testInfo) === "webgpu", "chrome is identical on both rungs");
@@ -108,7 +108,10 @@ test("hand control is reachable from the sidebar, and only where it steers", asy
   // The bug this pins: the rig shipped with its only switch at the bottom of
   // the Settings overlay's General tab, so the feature was invisible from the
   // view it drives and nobody could turn it on.
-  const sidebar = page.locator(".sidebar");
+  // Atlas keeps it in the workspace's Display disclosure, next to the other
+  // controls of the view it drives.
+  const sidebar = page.locator(".atlas-workspace");
+  await sidebar.locator("summary", { hasText: "Display" }).click();
   const toggle = sidebar.getByRole("switch", { name: "Hand control" });
   await expect(toggle).toBeVisible();
   await expect(toggle).toBeEnabled(); // localhost is a secure context
@@ -162,7 +165,7 @@ test("hand control is reachable from the sidebar, and only where it steers", asy
   // Only the atlas has a driver to steer, so the row must not advertise itself
   // in a view where turning it on would do nothing.
   await page.evaluate(() => window.__store.getState().setViewMode("chord"));
-  await expect(sidebar.getByRole("switch", { name: "Hand control" })).toHaveCount(0);
+  await expect(page.getByRole("switch", { name: "Hand control" })).toHaveCount(0);
 });
 
 test("channel lens: the permalink lights it, and the filter narrows the map", async ({
@@ -259,7 +262,8 @@ test("channel lens: an unknown channel in the URL is dropped, not half-applied",
 
 test("v1-style hierarchy gating: radio disabled only without edges", async ({ page }, testInfo) => {
   test.skip(rungOf(testInfo) === "webgpu", "chrome is identical on both rungs");
-  await bootApp(page, "webgl");
+  // Hierarchy is an advanced map mode, so its radio lives in Research's map.
+  await bootApp(page, "webgl", { hash: "experience=research&page=map&view=atlas" });
   // all live exports are v2 — the hierarchy radio must be enabled
   const radio = page.locator('.legend input[type="radio"][value="hierarchy"]');
   await expect(radio).toBeEnabled();

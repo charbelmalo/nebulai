@@ -14,6 +14,7 @@ import type { StateCreator } from "zustand";
 import type { CompareData } from "../../data/compare";
 import type { Dataset } from "../../data/loader";
 import type { DatasetEntry } from "../../data/schema";
+import type { Finding, UnitPin } from "../../data/finding";
 import { searchLabels, type SearchResults } from "../../data/search";
 import type { AppState } from "../store";
 
@@ -94,6 +95,33 @@ export interface LoadFailure {
   actual?: string;
 }
 
+/** An exact-unit pin (a pinned link or an imported finding) and how far it
+ *  got. `ok` holds only while the pinned row is the selection: moving the
+ *  selection off it drops back to `none`, because the URL and the badge must
+ *  never claim a verified unit the user has left.
+ *
+ *  `error` never changes the map on screen. It is shown with the expected
+ *  identity so the reader can tell a missing artifact from a bad record. */
+export type PinSource = "link" | "import";
+export type PinState =
+  | { status: "none" }
+  | { status: "pending"; pin: UnitPin; source: PinSource; finding?: Finding }
+  | { status: "ok"; pin: UnitPin; row: number; source: PinSource; note?: string }
+  | {
+      status: "error";
+      pin: UnitPin | null;
+      source: PinSource;
+      code: string;
+      title: string;
+      message: string;
+      expected?: string;
+      actual?: string;
+      conflicts?: string[];
+    };
+
+/** Narrow-screen Atlas: which of the two panels is showing. */
+export type AtlasPanel = "map" | "results";
+
 /** Is the map renderer usable yet? `pending` while the GPU driver boots,
  *  `unavailable` on the static tier or after a failed init — the results list
  *  and every data action still work then. */
@@ -122,6 +150,13 @@ export interface AtlasSlice {
   toggles: Toggles;
   channel: ChannelUI;
   axis: AxisUI;
+  pin: PinState;
+  /** the inspector is showing the selected point (Atlas / Learn). Separate
+   *  from `selection` so a narrow screen can go "Back to results" and keep the
+   *  pick highlighted on the map. */
+  inspectorOpen: boolean;
+  /** narrow-screen Atlas: map or results list (wide screens show both) */
+  atlasPanel: AtlasPanel;
 
   setDatasets(d: DatasetEntry[]): void;
   setDataset(
@@ -138,6 +173,8 @@ export interface AtlasSlice {
   failLoad(f: LoadFailure): void;
   /** a superseded or cancelled request ends without committing or failing */
   endLoad(): void;
+  /** drop a recorded failure that another surface (a pin error) now reports */
+  clearLoadError(): void;
   setRenderer(r: RendererState): void;
   setViewMode(m: ViewMode): void;
   setDims(d: 2 | 3): void;
@@ -151,6 +188,9 @@ export interface AtlasSlice {
   setAxisDirection(id: string | null): void;
   setAxisT(t: number): void;
   setAxisNull(show: boolean): void;
+  setPin(p: PinState): void;
+  setInspectorOpen(open: boolean): void;
+  setAtlasPanel(p: AtlasPanel): void;
 }
 
 export const createAtlasSlice: StateCreator<AppState, [], [], AtlasSlice> = (set, get) => ({
@@ -173,11 +213,14 @@ export const createAtlasSlice: StateCreator<AppState, [], [], AtlasSlice> = (set
   toggles: { territories: true, labels: true, beams: true, halos: true, noise: true, legend: true },
   channel: { id: null, window: null },
   axis: { directionId: null, t: 0, showNull: true },
+  pin: { status: "none" },
+  inspectorOpen: false,
+  atlasPanel: "map",
 
   setDatasets: (datasets) => set({ datasets }),
   // unit ids are per-model, so a dataset switch clears the cross-view pick too
   setDataset: (datasetId, dataset, opts) =>
-    set({
+    set((s) => ({
       datasetId,
       dataset,
       pendingDatasetId: null,
@@ -201,7 +244,17 @@ export const createAtlasSlice: StateCreator<AppState, [], [], AtlasSlice> = (set
       // a direction is a vector in ONE model's space; carrying an axis across
       // a dataset switch would lay out the new map on the old model's basis
       axis: { directionId: null, t: 0, showNull: true },
-    }),
+      inspectorOpen: false,
+      // a pin waiting for THIS dataset survives its own load; any other pin
+      // named a unit of a different map and is dropped (an error stays until
+      // dismissed or replaced — it describes a request, not the map)
+      pin:
+        s.pin.status === "pending" && s.pin.pin.datasetId === datasetId
+          ? s.pin
+          : s.pin.status === "error"
+            ? s.pin
+            : { status: "none" as const },
+    })),
   setCompareData: (compareData) => set({ compareData }),
   setCompareState: (state) => set((s) => ({ compare: { ...s.compare, state } })),
   toggleCompareModel: (sourceIdx) =>
@@ -220,8 +273,16 @@ export const createAtlasSlice: StateCreator<AppState, [], [], AtlasSlice> = (set
   failLoad: (loadError) =>
     set({ loadError, pendingDatasetId: null, loading: { active: false, loaded: 0, total: 0 } }),
   endLoad: () => set({ pendingDatasetId: null, loading: { active: false, loaded: 0, total: 0 } }),
+  clearLoadError: () => set({ loadError: null }),
   setRenderer: (renderer) => set({ renderer }),
-  setViewMode: (viewMode) => set({ viewMode, selection: null, hover: null }),
+  setViewMode: (viewMode) =>
+    set((s) => ({
+      viewMode,
+      selection: null,
+      hover: null,
+      inspectorOpen: false,
+      pin: s.pin.status === "ok" ? { status: "none" } : s.pin,
+    })),
   // beams/flare are drawn in the 2-D map plane — a dimension switch clears
   // the selection rather than rendering edges at stale coordinates
   // selection survives the dimension flip — beams glide pos2→pos3 with the
@@ -229,7 +290,23 @@ export const createAtlasSlice: StateCreator<AppState, [], [], AtlasSlice> = (set
   setDims: (dims) => set({ dims, hover: null }),
   setMorphT: (morphT) => set({ morphT }),
   setHover: (hover) => set({ hover }),
-  setSelection: (selection) => set({ selection }),
+  setSelection: (selection) =>
+    set((s) => {
+      const leaves =
+        s.pin.status === "ok" && !(selection?.kind === "point" && selection.id === s.pin.row);
+      return {
+        selection,
+        // a NEW point opens the inspector (map pick or results row); the same
+        // point re-selected keeps whatever "Back to results" chose
+        inspectorOpen:
+          selection?.kind === "point"
+            ? s.selection?.kind === "point" && s.selection.id === selection.id
+              ? s.inspectorOpen
+              : true
+            : false,
+        ...(leaves ? { pin: { status: "none" as const } } : {}),
+      };
+    }),
   setMapQuery: (text) => {
     const ds = get().dataset;
     const results = ds ? searchLabels(ds.columns.labels, ds.columns.clusterId, text) : null;
@@ -251,4 +328,7 @@ export const createAtlasSlice: StateCreator<AppState, [], [], AtlasSlice> = (set
   setAxisT: (t) =>
     set((s) => ({ axis: { ...s.axis, t: Math.min(1, Math.max(0, t)) } })),
   setAxisNull: (showNull) => set((s) => ({ axis: { ...s.axis, showNull } })),
+  setPin: (pin) => set({ pin }),
+  setInspectorOpen: (inspectorOpen) => set({ inspectorOpen }),
+  setAtlasPanel: (atlasPanel) => set({ atlasPanel }),
 });

@@ -28,10 +28,10 @@ test("axe: no serious or critical violations", async ({ page }) => {
   expect(severe).toEqual([]);
 });
 
-test("keyboard reaches the sidebar selects and legend radios", async ({ page }) => {
+test("keyboard reaches the workspace map select, search and results", async ({ page }) => {
   await bootApp(page, "webgl");
   const seq: string[] = [];
-  // 60 stops: every top-nav pill (Behavior included) sits before the legend
+  // 60 stops: the top bar and nav sit before the workspace
   for (let i = 0; i < 60; i++) {
     await page.keyboard.press("Tab");
     seq.push(
@@ -44,8 +44,9 @@ test("keyboard reaches the sidebar selects and legend radios", async ({ page }) 
       }),
     );
   }
-  expect(seq).toContain("select#sel-dataset"); // sidebar
-  expect(seq.some((s) => s.startsWith("input[radio]"))).toBe(true); // legend
+  expect(seq).toContain("select#sel-map"); // Atlas workspace toolbar
+  expect(seq).toContain("input[search]#rt-search"); // results search
+  expect(seq).toContain("button"); // row "Inspect …" buttons
 });
 
 test("Escape clears the selection from anywhere", async ({ page }) => {

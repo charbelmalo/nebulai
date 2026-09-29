@@ -159,13 +159,13 @@ test("Help in Atlas opens Learn with a way back", async ({ page }) => {
 test("Atlas hands advanced map views to Research explicitly", async ({ page }) => {
   await page.goto("/atlas/?gpu=webgl&frozen=1#model=EleutherAI__pythia-70m");
   await page.waitForFunction(() => window.__store.getState().dataset !== null, undefined, { timeout: 45_000 });
-  const link = page.locator(".sidebar-handoff-link");
+  const link = page.getByRole("link", { name: /Advanced analysis/ });
   await expect(link).toBeVisible();
   const href = new URL(await link.evaluate((a) => (a as HTMLAnchorElement).href));
   expect(href.pathname).toBe("/research/");
   expect(href.hash).toBe("#page=map&model=EleutherAI__pythia-70m");
   // there is no view-type select in Atlas to reach chord/hierarchy/compare
-  await expect(page.locator(".sidebar select", { has: page.locator('option[value="chord"]') })).toHaveCount(0);
+  await expect(page.locator("select", { has: page.locator('option[value="chord"]') })).toHaveCount(0);
 });
 
 test("phone width: no horizontal scroll on any entry", async ({ page }) => {

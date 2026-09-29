@@ -3,7 +3,8 @@
  *  Keeps Preact free of driver/loader imports and the dependency arrow
  *  pointing one way: chrome → store/actions ← app shell. */
 
-import type { ViewMode } from "./store";
+import type { PinSource, ViewMode } from "./store";
+import type { Finding, UnitPin } from "../data/finding";
 
 export interface AppActions {
   switchDataset(id: string): Promise<void>;
@@ -39,6 +40,12 @@ export interface AppActions {
   /** Open the curated starter map (manifest `default_atlas`, else the
    *  unverified default). Used when the map page opens with nothing loaded. */
   openStarter(): Promise<void>;
+  /** Open one exact unit: resolve (dataset, digest) through the trusted
+   *  manifest, load those bytes, find the identity tuple, and select it on
+   *  the plain atlas. `finding` (an imported record) additionally has its
+   *  evidence checked. Every outcome lands in `pin`; a failure never changes
+   *  the map on screen. */
+  openPinned(pin: UnitPin, source: PinSource, finding?: Finding): Promise<void>;
 }
 
 export type CompareTourCommand =
@@ -122,6 +129,10 @@ export function requestRetryLoad(): void {
 
 export function requestStarter(): void {
   handlers?.openStarter().catch((e) => console.error("[nebulai] starter failed", e));
+}
+
+export function requestOpenPinned(pin: UnitPin, source: PinSource, finding?: Finding): void {
+  handlers?.openPinned(pin, source, finding).catch((e) => console.error("[nebulai] pinned open failed", e));
 }
 
 /** Fire-and-forget an episode step (for click handlers). */

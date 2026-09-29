@@ -19,6 +19,7 @@ import { Sidebar } from "../Sidebar";
 import { APP_ROOT } from "../../data/base";
 import { ExperienceChip, ExperienceNav, ExperienceNotice } from "../ExperienceNav";
 import { MapChooser } from "../MapChooser";
+import { AtlasPanels } from "../atlas/AtlasPanels";
 import { $datasetId, $experience, $viewMode } from "../state";
 import { APP_CHROME, NEBULAI_EXPERIENCES, type SiblingLink } from "./nav";
 import type { AppShell } from "./types";
@@ -32,6 +33,9 @@ function MapPanels() {
   // Research asks for its map by name: until one is on screen, the page is
   // the explicit chooser rather than an empty stage with a settings panel.
   if ($experience.value === "research" && $datasetId.value === null) return <MapChooser />;
+  // Atlas's own workspace: search → inspect → save → reopen. The advanced
+  // views live in Research, so Atlas is always the plain atlas view.
+  if ($experience.value === "atlas" && view === "atlas") return <AtlasPanels />;
   return (
     <>
       <Sidebar />
