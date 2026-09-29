@@ -20,7 +20,8 @@ import { APP_ROOT } from "../../data/base";
 import { ExperienceChip, ExperienceNav, ExperienceNotice } from "../ExperienceNav";
 import { MapChooser } from "../MapChooser";
 import { AtlasPanels } from "../atlas/AtlasPanels";
-import { $datasetId, $experience, $viewMode } from "../state";
+import { LearnMapPanels } from "../learn/LessonPanel";
+import { $datasetId, $experience, $tour, $viewMode } from "../state";
 import { APP_CHROME, NEBULAI_EXPERIENCES, type SiblingLink } from "./nav";
 import type { AppShell } from "./types";
 
@@ -30,6 +31,9 @@ import type { AppShell } from "./types";
  *  mount.tsx because it is Nebulai's, not the shell's. */
 function MapPanels() {
   const view = $viewMode.value;
+  // Learn's map page exists only inside a lesson or a guided episode: the
+  // lesson stage (task, evidence, unit) or the episode's step controls.
+  if ($experience.value === "learn" && $tour.value) return <LearnMapPanels />;
   // Research asks for its map by name: until one is on screen, the page is
   // the explicit chooser rather than an empty stage with a settings panel.
   if ($experience.value === "research" && $datasetId.value === null) return <MapChooser />;

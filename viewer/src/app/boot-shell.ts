@@ -79,6 +79,9 @@ export async function bootShell(
   progress.className = "boot-progress";
   const status = document.createElement("div");
   status.className = "boot-status";
+  // the persistent provenance line (data source, build): a labelled landmark
+  status.setAttribute("role", "contentinfo");
+  status.setAttribute("aria-label", "Data source");
   // the MetaLine truncates to one line on compact viewports (chrome.base.css);
   // tapping it reveals the full provenance string instead of leaving it clipped
   status.addEventListener("click", () => status.classList.toggle("is-expanded"));

@@ -59,6 +59,9 @@ export interface InterpUrlHooks {
   /** play episode `id` at `step`. Asynchronous inside — a step may name a model
    *  that still has to be fetched — so it is injected rather than imported. */
   runEpisode?(id: string, step: number): void;
+  /** validate Learn's `lesson` / `lesson_step` keys against the lesson
+   *  registry; returns the namespaced tour id and a valid step */
+  parseLesson?(lesson: string | null, step: string | null): { tourId: string; step: number } | null;
   /** parse the pinned-unit keys (NebulAI only; Seer has no atlas units) */
   parsePin?(p: URLSearchParams): PinParse;
 }
@@ -172,6 +175,13 @@ export function readUrlState(): UrlState {
     out.episode = episode;
     const step = Number(p.get("step") ?? "0");
     out.step = Number.isInteger(step) && step >= 0 ? step : 0;
+  }
+  // Learn's lesson keys ride the same runner as episodes, under a namespaced
+  // tour id; a recognised lesson wins over a stray episode key
+  const lesson = interpHooks.parseLesson?.(p.get("lesson"), p.get("lesson_step")) ?? null;
+  if (lesson) {
+    out.episode = lesson.tourId;
+    out.step = lesson.step;
   }
   const cue = p.get("cue");
   if (cue && cue.trim()) out.cue = cue;
@@ -289,8 +299,13 @@ function buildHash(): string {
   // an episode is a position in a narrative, not a property of one page: it has
   // to survive the step that carries it from Internals to the Map
   if (st.tour) {
-    p.set("episode", st.tour.id);
-    p.set("step", String(st.tour.step));
+    if (st.tour.id.startsWith("lesson:")) {
+      p.set("lesson", st.tour.id.slice("lesson:".length));
+      p.set("lesson_step", String(st.tour.step));
+    } else {
+      p.set("episode", st.tour.id);
+      p.set("step", String(st.tour.step));
+    }
   }
   if (st.returnTo) p.set("return", st.returnTo);
   return `#${p.toString()}`;

@@ -692,3 +692,9 @@
     left: 736px;
   }
 }
+
+/* the switch is a labelled region (so it is inside a landmark) holding the
+   named button group the tests and screen readers address */
+.atlas-switch > [role="group"] {
+  display: flex;
+}

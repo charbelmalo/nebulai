@@ -14,7 +14,7 @@
   <body>
     <!-- Layered stack: exactly one SceneDriver owns #scene-canvas at a time;
          SVG + HTML overlays project through the same camera matrices. -->
-    <div id="stage">
+    <div id="stage" role="region" aria-label="Visualization">
       <canvas id="scene-canvas"></canvas>
       <svg id="overlay-svg"></svg>
       <div id="overlay-html"></div>

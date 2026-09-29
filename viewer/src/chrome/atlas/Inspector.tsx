@@ -77,6 +77,7 @@ export function Inspector({
   onBack,
   backLabel,
   actions = true,
+  closable = true,
 }: {
   row: number;
   /** narrow screens: return to the list without dropping the selection */
@@ -84,6 +85,9 @@ export function Inspector({
   backLabel?: string;
   /** the Learn lesson shows evidence only until its save step */
   actions?: boolean;
+  /** the Learn lesson keeps its unit on screen: no close button, and Escape
+   *  does not drop the unit the lesson is about */
+  closable?: boolean;
 }) {
   const ds = $dataset.value;
   const id = $datasetId.value;
@@ -132,7 +136,7 @@ export function Inspector({
       class="inspector"
       aria-labelledby="inspector-title"
       onKeyDown={(e) => {
-        if (e.key === "Escape" && !(e.target as HTMLElement).closest("textarea")) {
+        if (closable && e.key === "Escape" && !(e.target as HTMLElement).closest("textarea")) {
           e.stopPropagation();
           closeInspector();
         }
@@ -146,9 +150,11 @@ export function Inspector({
           </button>
         )}
         <p class="inspector-kicker">{copy.pointNoun}</p>
-        <button type="button" class="inspector-close" aria-label="Close unit details" onClick={closeInspector}>
-          <span aria-hidden="true">×</span>
-        </button>
+        {closable && (
+          <button type="button" class="inspector-close" aria-label="Close unit details" onClick={closeInspector}>
+            <span aria-hidden="true">×</span>
+          </button>
+        )}
       </div>
       <h2 id="inspector-title" class="inspector-title" tabIndex={-1} ref={headRef}>
         {unitTitle(meta, u)}

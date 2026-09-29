@@ -45,12 +45,14 @@ import "./styles/nebulai.css";
 
 import { registerActions, requestEpisodeStep, type CompareTourCommand } from "./app/actions";
 import "./chrome/episodes";
+import "./chrome/learn/lesson";
 import { bootShell, finishShellBoot, type BootedShell } from "./app/boot-shell";
 import type { Capabilities } from "@psychix/viz/capabilities";
 import { appStore, type ViewMode } from "./app/store";
 import { NEBULAI_APP } from "./chrome/apps/nebulai";
 import { $compareTour } from "./chrome/state";
-import { applyTourStep, findTour } from "./chrome/tours";
+import { applyTourStep, findTour, type Tour } from "./chrome/tours";
+import { lessonIdOf, parseLessonKeys } from "./chrome/learn/lesson";
 import { registerInterpUrlHooks } from "./chrome/urlState";
 import { loadCompare } from "./data/compare";
 import {
@@ -109,6 +111,7 @@ registerInterpUrlHooks({
   shareableTrace: (slug) => !isLiveTrace(slug),
   knownEpisode: (id) => !!findTour(id),
   runEpisode: (id, step) => requestEpisodeStep(id, step),
+  parseLesson: (lesson, step) => parseLessonKeys(lesson, step, findTour),
   parsePin,
 });
 
@@ -559,6 +562,7 @@ async function bootAtlas(shell: BootedShell, t0: number): Promise<() => void> {
       const tour = findTour(episodeId);
       const spec = tour?.steps[step];
       if (!tour || !spec) return;
+      if (tour.kind === "lesson") return runLessonStep(tour, step);
       const st = appStore.getState();
 
       if (spec.dataset && spec.dataset !== st.datasetId) {
@@ -574,7 +578,12 @@ async function bootAtlas(shell: BootedShell, t0: number): Promise<() => void> {
       }
 
       appStore.getState().setTour({ id: episodeId, step });
-      if (spec.page) appStore.getState().setPage(spec.page);
+      // A step that names an Internals feature is shown on Internals even
+      // when it does not say so: started from Learn's catalog or from a
+      // `learn/#episode=…` link, the tour must take the reader to its stage,
+      // not narrate over the catalog.
+      const page = spec.page ?? (spec.feature ? "interp" : null);
+      if (page) appStore.getState().setPage(page);
       applyTourStep(tour, step);
     },
     async retryLoad() {
@@ -609,6 +618,50 @@ async function bootAtlas(shell: BootedShell, t0: number): Promise<() => void> {
       gfx?.compareTour(cmd);
     },
   });
+
+  /** A lesson step. Unlike a narrated episode, a lesson's words describe one
+   *  PUBLISHED artifact, so its map is opened only through the release
+   *  manifest's `learn_intro` entry and the exact digest it names. If that
+   *  cannot be done the step is shown BLOCKED with the reason — nothing is
+   *  applied, nothing counts as done, and no other map is substituted. The
+   *  step pointer is set first so the lesson panel can show the load. */
+  async function runLessonStep(tour: Tour, step: number): Promise<void> {
+    const st = appStore.getState();
+    const lessonId = lessonIdOf(tour.id);
+    st.setTour({ id: tour.id, step });
+    st.setPage("map");
+    const m = activeManifest();
+    const li = m?.learn_intro;
+    const art =
+      li && li.lesson_id === lessonId && li.dataset_id === tour.manifest?.dataset
+        ? findArtifact(m, li.dataset_id, li.sha256)
+        : null;
+    const block = (why: string) => {
+      const now = appStore.getState().tour;
+      if (now?.id === tour.id) appStore.getState().setTour({ id: tour.id, step: now.step, blocked: why });
+    };
+    if (!art) {
+      block(
+        m
+          ? "The release manifest does not publish this lesson's map, so it cannot be checked. No other map was substituted."
+          : "This lesson checks its map against the release manifest, which is not available here. No other map was substituted.",
+      );
+      return;
+    }
+    const cur = appStore.getState();
+    if (!(cur.datasetId === art.dataset_id && cur.dataset?.sha256 === art.sha256)) {
+      if (!(await show(art.dataset_id, { keepTour: true, artifact: art }))) {
+        const err = appStore.getState().loadError;
+        block(`The lesson's map could not be opened${err ? ` — ${err.message}` : ""}. No other map was substituted.`);
+        return;
+      }
+    }
+    // the reader may have left or moved on while the map loaded
+    const now = appStore.getState().tour;
+    if (!now || now.id !== tour.id || now.step !== step) return;
+    appStore.getState().setTour({ id: tour.id, step });
+    applyTourStep(tour, step);
+  }
 
   function manifestStateOk(): boolean {
     return activeManifest() !== null;
@@ -656,6 +709,8 @@ async function bootAtlas(shell: BootedShell, t0: number): Promise<() => void> {
     if (datasets.length === 0) {
       st.failLoad({ datasetId: null, kind: "index", message: "No dataset index was found." });
       say("no datasets in out/index.json — run `uv run nebulai tokens` first");
+    } else if (st.tour?.blocked) {
+      // a lesson refused its map: open nothing under it
     } else if (st.pendingDatasetId !== null || st.datasetId !== null) {
       // the permalink (an episode step) already claimed a map
       first = waitForLoad();

@@ -21,6 +21,18 @@ import { experienceHref } from "./ExperienceNav";
 import { guideResearchFor } from "./guideResearch";
 import { $datasetId, $datasets, $experience } from "./state";
 import { episodeAvailability, TOURS, type EpisodeContext } from "./tours";
+import { manifestStatus } from "../data/experience";
+import {
+  completedLessons,
+  isLessonTour,
+  lessonAvailability,
+  takeLessonExit,
+  WHAT_IS_A_POINT,
+} from "./learn/lesson";
+import { useEffect, useRef } from "preact/hooks";
+
+/** Narrated episodes; lessons have their own card and their own URL keys. */
+const EPISODES = TOURS.filter((t) => !isLessonTour(t));
 
 const GROUP_ORDER: InterpGroup[] = ["weights", "forward", "sae", "trained", "live"];
 
@@ -99,7 +111,7 @@ function EpisodeSection({ mode }: { mode: "play" | "handoff" }) {
   // point count the index already knows — the same expected length the map
   // itself checks with, so a channels.json aligned to a different build is
   // rejected here exactly as it would be there
-  for (const t of TOURS) {
+  for (const t of EPISODES) {
     const dsId = t.manifest?.dataset ?? (t.manifest?.channels?.length ? t.model : null);
     if (!dsId) continue;
     const entry = entries.find((e) => e.id === dsId);
@@ -109,7 +121,7 @@ function EpisodeSection({ mode }: { mode: "play" | "handoff" }) {
   // because an episode may name directions without naming channels — the
   // refusal-style one does exactly that, since its direction is in resid.L8
   // and therefore has no channels on this map at all.
-  for (const t of TOURS) {
+  for (const t of EPISODES) {
     const dsId = t.manifest?.directions?.length ? (t.manifest.dataset ?? t.model) : null;
     if (dsId && entries.some((e) => e.id === dsId)) ensureDirections(dsId);
   }
@@ -135,7 +147,7 @@ function EpisodeSection({ mode }: { mode: "play" | "handoff" }) {
         </p>
       </div>
       <div class="guide-cards">
-        {TOURS.map((t) => {
+        {EPISODES.map((t) => {
           const av = episodeAvailability(t, ctx);
           const m = t.manifest;
           return (
@@ -233,6 +245,57 @@ function ClaimContract() {
   );
 }
 
+/** The introductory lesson, first on Learn's catalog. Ready only when the
+ *  release manifest publishes its exact map; otherwise the card says why and
+ *  the button is disabled — it never starts on a substitute. */
+function IntroLessonCard() {
+  const tour = WHAT_IS_A_POINT;
+  const entries = $datasets.value;
+  const av = lessonAvailability(tour, manifestStatus(), entries.length ? entries.map((e) => e.id) : null);
+  const done = completedLessons().includes("what-is-a-point");
+  const startRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (takeLessonExit()) startRef.current?.focus();
+  }, []);
+  return (
+    <section class="guide-group guide-lesson" aria-labelledby="lesson-card-title">
+      <article class={`guide-card lesson-card is-${av.state}`}>
+        <p class="lesson-card-kicker">
+          Start here · {tour.steps.length} steps
+          {done && <span class="lesson-card-done"> · Completed</span>}
+        </p>
+        <h2 class="lesson-card-title" id="lesson-card-title">
+          {tour.label}
+        </h2>
+        <p class="guide-card-blurb">{tour.blurb}</p>
+        <div class="guide-card-row">
+          <span class="guide-card-tag">Map</span>
+          <span class="guide-card-source">
+            GPT-2 Small · SAE directions at layer 8
+            {av.state === "ready" ? ` · sha256 ${av.sha256.slice(0, 12)}…` : ""}
+          </span>
+        </div>
+        {av.state !== "ready" && (
+          <p class={`episode-gate is-${av.state}`}>
+            {av.state === "pending" ? av.reason : `Not available here — ${av.reason}`}
+          </p>
+        )}
+        <div class="lesson-card-actions">
+          <button
+            type="button"
+            class="aw-btn aw-btn-primary"
+            ref={startRef}
+            disabled={av.state !== "ready"}
+            onClick={() => requestEpisodeStep(tour.id, 0)}
+          >
+            {done ? "Take the lesson again" : "Start the lesson"}
+          </button>
+        </div>
+      </article>
+    </section>
+  );
+}
+
 /** Learn's catalog: lessons and guided episodes only. The per-view method
  *  cards open unguided Internals analysis, which belongs to Research, so here
  *  they are one explicit link away rather than 26 equal choices. */
@@ -241,7 +304,7 @@ function LessonsPage() {
   return (
     <div class="guide-page" role="main">
       <div class="guide-scroll">
-        <header class="guide-head">
+        <div class="guide-head">
           <p class="guide-kicker">NebulAI Learn · Lessons</p>
           <h1 class="guide-title">How model maps work</h1>
           <p class="guide-lede">
@@ -250,7 +313,9 @@ function LessonsPage() {
             published data and says what the map cannot tell you. You can stop a lesson at
             any step.
           </p>
-        </header>
+        </div>
+
+        <IntroLessonCard />
 
         <EpisodeSection mode="play" />
 
@@ -300,7 +365,7 @@ function MethodsPage() {
   return (
     <div class="guide-page" role="main">
       <div class="guide-scroll">
-        <header class="guide-head">
+        <div class="guide-head">
           <p class="guide-kicker">NebulAI Research · Methods</p>
           <h1 class="guide-title">How to read every model view</h1>
           <p class="guide-lede">
@@ -324,7 +389,7 @@ function MethodsPage() {
             visualization. Views that still need data or computation stay hidden
             until they are ready.
           </p>
-        </header>
+        </div>
 
         <EpisodeSection mode={$experience.value === null ? "play" : "handoff"} />
 

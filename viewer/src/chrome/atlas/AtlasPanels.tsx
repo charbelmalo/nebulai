@@ -19,26 +19,28 @@ function PanelSwitch({ noGpu }: { noGpu: boolean }) {
   const panel = noGpu ? "results" : $atlasPanel.value;
   const set = (p: "map" | "results") => appStore.getState().setAtlasPanel(p);
   return (
-    <div class="atlas-switch" role="group" aria-label="Show">
-      <button
-        type="button"
-        class={panel === "map" ? "aw-seg is-on" : "aw-seg"}
-        aria-pressed={panel === "map"}
-        disabled={noGpu}
-        title={noGpu ? "The map needs WebGL or WebGPU" : undefined}
-        onClick={() => set("map")}
-      >
-        Map
-      </button>
-      <button
-        type="button"
-        class={panel === "results" ? "aw-seg is-on" : "aw-seg"}
-        aria-pressed={panel === "results"}
-        onClick={() => set("results")}
-      >
-        Results
-      </button>
-    </div>
+    <section class="atlas-switch" aria-label="Panel switch">
+      <div role="group" aria-label="Show">
+        <button
+          type="button"
+          class={panel === "map" ? "aw-seg is-on" : "aw-seg"}
+          aria-pressed={panel === "map"}
+          disabled={noGpu}
+          title={noGpu ? "The map needs WebGL or WebGPU" : undefined}
+          onClick={() => set("map")}
+        >
+          Map
+        </button>
+        <button
+          type="button"
+          class={panel === "results" ? "aw-seg is-on" : "aw-seg"}
+          aria-pressed={panel === "results"}
+          onClick={() => set("results")}
+        >
+          Results
+        </button>
+      </div>
+    </section>
   );
 }
 

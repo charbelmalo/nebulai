@@ -40,6 +40,10 @@ export type InterpSelection =
 export interface TourRef {
   id: string;
   step: number;
+  /** set when the step could not be told truthfully (its artifact is missing
+   *  or is not the published one); the chrome shows this and a recovery path,
+   *  and nothing about the step is applied or counted as done */
+  blocked?: string;
 }
 
 export function sameInterpSelection(
