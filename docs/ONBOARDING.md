@@ -6,10 +6,17 @@
 > start page described below to Nebul.AI unless that product decision changes.
 > The interaction and honesty notes remain useful design research, but the
 > proposed build order is no longer an implementation backlog.
+> Since this was written the instrument grew a Behavior page and Seer became its
+> own entry (`viewer/seer.html`); neither changes the entry decision recorded
+> here.
 
 This proposal began when Nebul.AI opened directly on 49,857 GPT-2 token dots,
 208 clusters, and a gear panel, with no product-level introduction. It records
 the earlier design for an onboarding path inside the instrument.
+
+- **For what the instrument does *now*, read
+  [`USER-GUIDE.html`](USER-GUIDE.html)** — the offline field guide to the
+  2026-09 features: open it in any browser, no server needed.
 
 Two facts shape the whole design:
 
@@ -138,7 +145,7 @@ The implementation prerequisites from the original proposal are resolved:
 | Live probe build path | Resolved. `build_server` accepts `source=probe`, validates the free-text seed separately from `_MODEL_ID`, builds argv as a list without a shell, and maps the result to the same dataset slug as the CLI. |
 | Pre-baked examples | Resolved. The deployed catalog contains three probe clouds: glassblowing, grief, and tidal ecology. |
 | Product entry | Superseded. The external PsychiX shell owns first-run entry into Nebul.AI. Seer remains reachable through Nebul.AI's cross-instrument navigation. |
-| In-instrument explanation | Retained. Nebul.AI's Guide documents all 25 live Internals views and their research references. |
+| In-instrument explanation | Retained. Nebul.AI's Guide documents all 26 live Internals views and their research references, including #26 Steer Rail, the one view that installs a hook. |
 
 Live probe generation remains optional and bring-your-own-endpoint. The static
 deployment is complete without a generator or embedder running on the web
@@ -167,8 +174,13 @@ re-export re-runs the embedder, and the GGUF build is not bit-deterministic
 (measured against the July cache: ~1e-3 elementwise, cosine >= 0.999945), so
 every coordinate in five maps would have moved to fix one metadata string. The
 substitution was verified to leave each parsed document differing at exactly one
-key. Originals are in `nebulai-data/.pre-redaction-backup/` — outside the served
-`out/` tree, deliberately.
+key. Originals are in `/Users/charbelmalo/Developer/nebulai-data/.pre-redaction-backup/`
+— outside the served `out/` tree, deliberately. Verified 2026-09-11: 20 MB, five
+files, matching the five redacted artifacts one-for-one — the `claude-tokenizer`
+MiniLM map (19.7 MB of it), the `gpt2` mxbai map, and the three `probe__*` clouds.
+That directory took an embarrassingly long time to find again because it is a
+*dotted* one, and `mdfind` does not index dotted paths; searching for it by name
+returns nothing whatever it contains. Go to the path directly with `ls -la`.
 
 ## Archived ideas, not current Nebul.AI scope
 

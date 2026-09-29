@@ -487,6 +487,32 @@ def _sig(s: SpanRecord) -> str:
     return f"{s.action.value if s.action else '?'}::{(s.detail or '').strip()}"
 
 
+#: Weakest first. `MISSING` and `DROPPED_BY_POLICY` are absences rather than
+#: rungs of confidence and never appear as a decided effect's fidelity, so they
+#: are not on this ladder; a value off the ladder is treated as the weakest
+#: thing we can say, which is `HEURISTIC`.
+_FIDELITY_ORDER = (
+    Fidelity.HEURISTIC,
+    Fidelity.ESTIMATED,
+    Fidelity.DETERMINISTIC,
+    Fidelity.NATIVE,
+)
+
+
+def _weakest_fidelity(spans: Sequence[SpanRecord]) -> Fidelity:
+    """The least confident way any of these spans got its effect label.
+
+    A span with no `effect_fidelity` took its effect from what the agent said,
+    which is `NATIVE` — the strongest rung, and the one that never drags the
+    answer down.
+    """
+    worst = len(_FIDELITY_ORDER) - 1
+    for s in spans:
+        f = s.effect_fidelity or Fidelity.NATIVE
+        worst = min(worst, _FIDELITY_ORDER.index(f) if f in _FIDELITY_ORDER else 0)
+    return _FIDELITY_ORDER[worst]
+
+
 def loop_rules(view: RunView, events: Sequence[Event]) -> Analysis:
     key, ver = "loop_rules", "1.0"
     label = "Loop rules"
@@ -518,8 +544,9 @@ def loop_rules(view: RunView, events: Sequence[Event]) -> Analysis:
             "rule": "no_new_information_streak",
             "description": "3+ consecutive actions the agent labelled as surfacing nothing new",
             "hits": None, "fidelity": Fidelity.MISSING.value,
-            "note": "no span in this run carries an information effect; "
-                    "this agent's adapter does not label them",
+            "note": "no span in this run carries an information effect — "
+                    "nothing in it was decidable from a payload, so the count "
+                    "is absent rather than 0",
             "evidence": [],
         })
     else:
@@ -536,10 +563,17 @@ def loop_rules(view: RunView, events: Sequence[Event]) -> Analysis:
             hits += 1
             run_ids.append([x.span_id for x in streak])
         total += hits
+        # The count is only as good as its weakest input. A streak built from
+        # two exact repeats and one `zero_result_search` is HEURISTIC, because
+        # one of the three spans in it was decided by a sentence list rather
+        # than by a comparison — see `adapters/novelty.py`. Reporting the
+        # strongest fidelity present, or a hardcoded DETERMINISTIC, would let a
+        # single proxy travel to the reader labelled as an exact measurement.
         rows.append({
             "rule": "no_new_information_streak",
             "description": "3+ consecutive actions the agent labelled as surfacing nothing new",
-            "hits": hits, "fidelity": Fidelity.DETERMINISTIC.value,
+            "hits": hits, "fidelity": _weakest_fidelity(labelled).value,
+            "rules_used": sorted({s.effect_rule for s in labelled if s.effect_rule}),
             "evidence": run_ids,
         })
 

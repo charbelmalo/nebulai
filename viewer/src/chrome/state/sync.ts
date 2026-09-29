@@ -16,7 +16,7 @@
  *  inequality means "actually changed" and skipping on equality is what keeps
  *  an unrelated `set` from waking every subscriber of every signal.
  *
- *  One seam the split introduced: the eight state modules each take their own
+ *  One seam the split introduced: the state modules each take their own
  *  `appStore.getState()` snapshot to seed their signals, where the single file
  *  they came from took one snapshot for all of them. That is equivalent today —
  *  module evaluation is synchronous, nothing writes the store at import time,
@@ -28,7 +28,10 @@
 
 import { appStore } from "../../app/store";
 import { $appearance } from "./appearance";
+import { $behavior } from "./behavior";
 import {
+  $axis,
+  $channel,
   $compare,
   $compareData,
   $dataset,
@@ -60,6 +63,8 @@ appStore.subscribe((st) => {
   if (st.selection !== $selection.value) $selection.value = st.selection;
   if (st.mapQuery !== $mapQuery.value) $mapQuery.value = st.mapQuery;
   if (st.toggles !== $toggles.value) $toggles.value = st.toggles;
+  if (st.channel !== $channel.value) $channel.value = st.channel;
+  if (st.axis !== $axis.value) $axis.value = st.axis;
   if (st.settings !== $settings.value) $settings.value = st.settings;
   if (st.appearance !== $appearance.value) $appearance.value = st.appearance;
   if (st.probing !== $probing.value) $probing.value = st.probing;
@@ -68,6 +73,7 @@ appStore.subscribe((st) => {
   if (st.page !== $page.value) $page.value = st.page;
   if (st.snapshot !== $snapshot.value) $snapshot.value = st.snapshot;
   if (st.sessions !== $sessions.value) $sessions.value = st.sessions;
+  if (st.behavior !== $behavior.value) $behavior.value = st.behavior;
   if (st.interp !== $interp.value) $interp.value = st.interp;
   if (st.interpSelection !== $interpSelection.value)
     $interpSelection.value = st.interpSelection;

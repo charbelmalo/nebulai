@@ -5,10 +5,20 @@
  *  required on InterpFeature) to compile. Each card links straight into the live
  *  view so the reader can check the numbers themselves. */
 
+import { requestEpisodeStep } from "../app/actions";
 import { appStore } from "../app/store";
+import { $channels, channelsFor, channelsLoaded, ensureChannels } from "../data/channels";
+import {
+  $directions,
+  directionsFor,
+  directionsLoaded,
+  ensureDirections,
+} from "../data/directions";
 import type { GuideFormula, InterpGroup } from "../scene/interp/InterpDriver";
 import { GROUP_LABEL, INTERP_FEATURES } from "../scene/interp/registry";
 import { guideResearchFor } from "./guideResearch";
+import { $datasets } from "./state";
+import { episodeAvailability, TOURS, type EpisodeContext } from "./tours";
 
 const GROUP_ORDER: InterpGroup[] = ["weights", "forward", "sae", "trained", "live"];
 
@@ -52,8 +62,169 @@ function GuideFormulaView({ formula }: { formula: GuideFormula }) {
   );
 }
 
+/* ── episodes (P5) ────────────────────────────────────────────────────────── */
+
+/** The episode list, gated on what this deploy can actually show.
+ *
+ *  The gate is the whole reason this section exists rather than a row of
+ *  buttons. Every episode quotes exact numbers out of one named artifact. If
+ *  that artifact is not here, there are three honest answers and this renders
+ *  all three differently:
+ *
+ *  · **ready** — the map, the channels and the views the captions point at are
+ *    all present. The button plays it.
+ *  · **pending** — the sidecar is being fetched right now. Not an error, and
+ *    not a promise either; it says what it is waiting on.
+ *  · **unavailable** — something is genuinely absent. The card stays, the
+ *    button is disabled, and the card prints WHICH file and WHICH command
+ *    would produce it. It never falls back to another model, and it never
+ *    plays with the numbers missing (§2.2).
+ */
+function EpisodeSection() {
+  const entries = $datasets.value;
+  // touching the signal here is what subscribes this component to the fetch
+  // resolving, so a "pending" card becomes a "ready" one without a click
+  void $channels.value;
+  void $directions.value;
+
+  // kick off the sidecar fetch for every dataset an episode names, with the
+  // point count the index already knows — the same expected length the map
+  // itself checks with, so a channels.json aligned to a different build is
+  // rejected here exactly as it would be there
+  for (const t of TOURS) {
+    const dsId = t.manifest?.dataset ?? (t.manifest?.channels?.length ? t.model : null);
+    if (!dsId) continue;
+    const entry = entries.find((e) => e.id === dsId);
+    if (entry) ensureChannels(dsId, entry.n_points);
+  }
+  // and the direction sidecar for every episode that names one. Separate loop
+  // because an episode may name directions without naming channels — the
+  // refusal-style one does exactly that, since its direction is in resid.L8
+  // and therefore has no channels on this map at all.
+  for (const t of TOURS) {
+    const dsId = t.manifest?.directions?.length ? (t.manifest.dataset ?? t.model) : null;
+    if (dsId && entries.some((e) => e.id === dsId)) ensureDirections(dsId);
+  }
+
+  const ctx: EpisodeContext = {
+    datasets: entries.map((e) => e.id),
+    channelsFor: (id) => channelsFor(id)?.channels.map((c) => c.id) ?? null,
+    channelsLoaded: (id) => channelsLoaded(id),
+    directionsFor: (id) => directionsFor(id)?.directions.map((d) => d.id) ?? null,
+    directionsLoaded: (id) => directionsLoaded(id),
+    features: INTERP_FEATURES.map((f) => f.id),
+  };
+
+  return (
+    <section class="guide-group guide-episodes">
+      <div class="guide-group-head">
+        <h2 class="guide-group-title">Episodes</h2>
+        <p class="guide-group-src">
+          Guided walks through one finding at a time. Each one quotes exact numbers from
+          one named artifact and says which; if that artifact is not in this deploy, the
+          episode says so rather than running with the numbers missing.
+        </p>
+      </div>
+      <div class="guide-cards">
+        {TOURS.map((t) => {
+          const av = episodeAvailability(t, ctx);
+          const m = t.manifest;
+          return (
+            <article key={t.id} class={`guide-card episode-card is-${av.state}`}>
+              <div class="guide-card-head">
+                <span class="guide-card-n">{t.steps.length} steps</span>
+                <h3 class="guide-card-label">{t.label}</h3>
+                <button
+                  type="button"
+                  class="guide-card-open"
+                  disabled={av.state !== "ready"}
+                  onClick={() => requestEpisodeStep(t.id, 0)}
+                >
+                  Play this episode →
+                </button>
+              </div>
+              <p class="guide-card-blurb">{t.blurb}</p>
+              <div class="guide-card-row">
+                <span class="guide-card-tag">Model</span>
+                <span class="guide-card-source">
+                  {t.model}
+                  {m?.space ? ` · ${m.space}` : ""}
+                </span>
+              </div>
+              {m?.channels?.length ? (
+                <div class="guide-card-row">
+                  <span class="guide-card-tag">Channels</span>
+                  <span class="guide-card-source">{m.channels.join(", ")}</span>
+                </div>
+              ) : null}
+              {m?.directions?.length ? (
+                <div class="guide-card-row">
+                  <span class="guide-card-tag">Directions</span>
+                  <span class="guide-card-source">{m.directions.join(", ")}</span>
+                </div>
+              ) : null}
+              {av.state !== "ready" && (
+                <p class={`episode-gate is-${av.state}`}>
+                  {av.state === "pending" ? av.reason : `Not available here — ${av.reason}`}
+                </p>
+              )}
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/* ── the claim contract (§2.4 / D3) ───────────────────────────────────────── */
+
+/** The one causal sentence this project permits, and the boundary around it.
+ *
+ *  Every other view on the Internals page measures a model that was left alone,
+ *  and the honesty rule for those is flat: no causal claims. A view that
+ *  installs a hook is the single exception, and it is a narrow one — the
+ *  sentence may say what the intervention DID, under its protocol, with its
+ *  control, and may not say what the direction or feature IS. Both halves are
+ *  printed, because the permission is worthless without the prohibition
+ *  attached to it.
+ *
+ *  It renders on the card of every feature whose registry entry sets
+ *  `intervenes`, rather than once in the page footer. A footer is the part of a
+ *  page that does not travel: the number gets screenshotted, quoted and
+ *  forwarded, and the contract has to be inside the crop. */
+function ClaimContract() {
+  return (
+    <div class="guide-card-row guide-card-claim">
+      <span class="guide-card-tag">Claims</span>
+      <div class="guide-card-claimbody">
+        <p class="guide-card-claimlede">
+          This view changes the model's forward pass, so it is allowed one causal
+          sentence — of exactly this shape, and no other:
+        </p>
+        <p class="guide-card-claimquote">
+          Under protocol P, intervening on direction <em>d</em> at layer L changed
+          behaviour B from X to Y (n = …, seed = …).
+        </p>
+        <p class="guide-card-claimnote">
+          What that sentence does <strong>not</strong> say is what <em>d</em> is.
+          It is not the refusal direction, the truth direction or the Golden Gate
+          feature: it is a direction extracted by a named method from named data
+          which, when intervened on, moved a measured behaviour. Every figure here
+          ships with the α = 0 control that installed no hook, and the control is
+          drawn rather than assumed. No weights are modified or written.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function GuidePage() {
   const live = INTERP_FEATURES.length;
+  // the roadmap in docs/INTERP_FEATURES.md planned 25 views, all of which ship;
+  // #26 is the intervention rail, added later by ATTRACTORS-PLAN phase 4. Both
+  // numbers are derived, so neither can drift from what is actually registered.
+  const planned = 25;
+  const extra = live - planned;
   const byGroup = new Map<InterpGroup, typeof INTERP_FEATURES>();
   for (const f of INTERP_FEATURES) {
     const arr = byGroup.get(f.group) ?? [];
@@ -74,11 +245,23 @@ export function GuidePage() {
             When a view has an important limitation or known artifact, we call it out.
           </p>
           <p class="guide-count">
-            <strong>{live} of 25</strong> planned views are available. We publish a
-            view only after it works from source data to visualization. Views that
-            still need data or computation stay hidden until they are ready.
+            <strong>
+              {Math.min(live, planned)} of {planned}
+            </strong>{" "}
+            planned views are available
+            {extra > 0 && (
+              <>
+                , plus {extra} added since: the intervention rail, which changes the
+                model's forward pass instead of only measuring it
+              </>
+            )}
+            . We publish a view only after it works from source data to
+            visualization. Views that still need data or computation stay hidden
+            until they are ready.
           </p>
         </header>
+
+        <EpisodeSection />
 
         {GROUP_ORDER.filter((g) => byGroup.has(g)).map((group) => (
           <section key={group} class="guide-group">
@@ -114,6 +297,7 @@ export function GuidePage() {
                     <span class="guide-card-tag">Data source</span>
                     <span class="guide-card-source">{f.source}</span>
                   </div>
+                  {f.intervenes && <ClaimContract />}
                   <div class="guide-card-row">
                     <span class="guide-card-tag">Research</span>
                     <ol class="guide-card-research">

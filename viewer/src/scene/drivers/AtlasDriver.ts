@@ -8,12 +8,28 @@
 import * as THREE from "three/webgpu";
 import type { GpuTier } from "@psychix/viz/capabilities";
 import { appStore, type Selection } from "../../app/store";
+import {
+  $channels,
+  channelFor,
+  channelsFor,
+  channelsLoaded,
+  channelValue,
+  ensureChannels,
+} from "../../data/channels";
+import {
+  $directions,
+  axisChannels,
+  directionsFor,
+  directionsLoaded,
+  ensureDirections,
+} from "../../data/directions";
 import { clusterDegrees, clusterNeighbors, formatCount, knnNeighbors } from "../../data/edges";
 import type { Dataset } from "../../data/loader";
 import { hullRadius, type ClusterHull } from "../../data/hulls";
 import { BeamBadges, type BadgeSpec } from "../../chrome/BeamBadges";
 import { Tooltip } from "../../chrome/Tooltip";
-import { Camera2D, easeInOutCubic } from "../camera2d";
+import { Camera2D, centerForTarget, easeInOutCubic } from "../camera2d";
+import { axisLayout, blendedPosition, mapBounds } from "../axisLayout";
 import { LabelOverlay } from "../labels/LabelOverlay";
 import { BeamsLayer, type Beam } from "../layers/BeamsLayer";
 import { FlareLayer } from "../layers/FlareLayer";
@@ -88,6 +104,11 @@ const PIVOT_DEPTH_SAMPLES = 4096;
 // main thread, with the rotation centre visibly jumping mid-gesture.
 const WHEEL_GESTURE_GAP_MS = 400;
 
+// hand rig: Gaussian half-width of the shockwave packet, in viewport widths at
+// cast time. Narrow enough that the front reads as a front rather than as the
+// whole cloud breathing, wide enough to survive a 4.5px sprite.
+const HAND_PULSE_WIDTH = 0.055;
+
 export class AtlasDriver implements SceneDriver {
   readonly cam = new Camera2D();
 
@@ -150,6 +171,17 @@ export class AtlasDriver implements SceneDriver {
   private orbitLast: { x: number; y: number } | null = null;
   private orbitAz = 0;
   private orbitEl = 0;
+  // hand rig (src/hands): the rig reaches the camera only as pan and zoom
+  // *deltas*, composed on top of whatever the pointer already did. It had two
+  // more offsets — an orbit and a confidence-floor override — and both were
+  // deleted with the gestures that drove them: orbit because a semantic map has
+  // no back side worth walking around, and the floor because culling the map
+  // out from under someone off a probabilistic hand pose is not a gesture, it is
+  // a setting with a slider.
+  /** Hand-rig point-size multiplier, applied on top of settings.pointScale. */
+  private handGain = 1;
+  /** World anchor + scale of the running shockwave, snapshotted at cast time. */
+  private handPulseAt: { x: number; y: number; scale: number } | null = null;
   // orbit pivot: the world point the camera rotates around. Resolved at
   // gesture start (raycasted node → selection → view-center cloud depth →
   // ground plane) and held in both frames because the rendered cloud is
@@ -197,6 +229,11 @@ export class AtlasDriver implements SceneDriver {
   // pos2's PCA frame, so the camera flies to re-frame during the morph)
   private morph = 0;
   private morphTween: { from: number; to: number; start: number; duration: number } | null = null;
+  /** the packed (realXY, nullXY) buffer for the active direction, and which
+   *  direction built it — rebuilt only when the id changes, because it is an
+   *  O(n) pass over 50K points and the rail's slider runs at 60 Hz. */
+  private axisBuffer: { id: string; positions: Float32Array; nMissing: number } | null = null;
+  private ghost: THREE.Sprite | null = null;
   private bounds3: [number, number, number, number] | null = null;
   /** max xy dimension of the pos3 cloud — scale reference for 3D fly-to */
   private extent3 = 1;
@@ -260,10 +297,7 @@ export class AtlasDriver implements SceneDriver {
           this.cameraDirty = true;
         }
         if (s.settings !== prev.settings) {
-          if (this.points) {
-            this.points.uScale.value = s.settings.pointScale;
-            this.points.uConfFloor.value = s.settings.confidenceFloor;
-          }
+          this.applyPointSettings();
           this.bloomOn = this.bloomPipe !== null && s.settings.bloom;
           // point scale / confidence floor / bloom are uniform-and-pipeline
           // changes with no camera move — without this the repaint gate would
@@ -280,8 +314,161 @@ export class AtlasDriver implements SceneDriver {
           this.points?.setMatches(s.mapQuery.results?.matchIds ?? null);
           this.cameraDirty = true;
         }
+        if (s.channel !== prev.channel) this.applyChannel();
+        if (s.axis !== prev.axis) this.applyAxis();
       }),
     );
+    // the sidecar arrives after the map; re-apply when it lands so a
+    // deep link with `channel=` lights up as soon as the numbers exist
+    this.unsubscribes.push(
+      $channels.subscribe(() => {
+        this.applyChannel();
+        // the axis gate reads channels too (D2: the projection channel must
+        // exist and carry the direction's space), so a late channels.json can
+        // turn a refused axis into a renderable one
+        this.applyAxis();
+      }),
+    );
+    this.unsubscribes.push(
+      $directions.subscribe(() => {
+        this.applyAxis();
+      }),
+    );
+  }
+
+  /** Push the store's channel choice at the points layer.
+   *
+   *  The colour ramp always spans the channel's whole MEASURED range, even when
+   *  the filter window is a sliver — a ramp rescaled to the window would repaint
+   *  eleven near-identical tokens as a full spectrum and invent a gradient that
+   *  is not in the data. The window only decides what stays lit. */
+  private applyChannel(): void {
+    if (!this.points) return;
+    const s = appStore.getState();
+    const ch = channelFor(s.datasetId, s.channel.id);
+    if (!ch) {
+      this.points.setChannel(null);
+      this.cameraDirty = true;
+      // A channel id that this map does not have — from a permalink written
+      // against another model, or a typo — is dropped from the STORE too, not
+      // just from the shader. Leaving it set would keep writing `channel=…`
+      // into the hash for a lens that is not lit, which is a link that
+      // promises a picture nobody can open. Only once the sidecar has actually
+      // been read: before that the id is not wrong, it is early. Re-entrancy
+      // is bounded — the write leaves `channel.id` null, and this branch then
+      // has nothing left to clear.
+      if (s.channel.id && channelsLoaded(s.datasetId)) s.setChannel(null);
+      return;
+    }
+    const lo = ch.stats.min;
+    const hi = ch.stats.max;
+    // a channel with nothing measured has no scale to draw; treat it as absent
+    if (lo === null || hi === null) {
+      this.points.setChannel(null);
+      this.cameraDirty = true;
+      return;
+    }
+    this.points.setChannel(ch.values, [lo, hi], s.channel.window ?? [lo, hi]);
+    this.cameraDirty = true;
+  }
+
+  /** Push the store's direction choice at the points layer.
+   *
+   *  Everything that decides whether an axis may be drawn lives in
+   *  `data/directions.ts` — R5's "no null, no figure" and D2's space match —
+   *  so this method only ever asks. A direction that the gate refuses is
+   *  cleared from the STORE as well as from the shader, for the same reason
+   *  `applyChannel()` clears a stale channel id: a permalink that keeps
+   *  writing `axis=…` for an axis nobody can see is a link that promises a
+   *  picture it cannot open. Only once the sidecar has actually been read —
+   *  before that the id is not wrong, it is early.
+   */
+  private applyAxis(): void {
+    if (!this.points || !this.dataset) return;
+    const s = appStore.getState();
+    const id = s.axis.directionId;
+    const found = id ? axisChannels(s.datasetId, id) : null;
+    if (!found) {
+      this.axisBuffer = null;
+      this.points.setAxis(null, this.dataset.columns.pos2);
+      this.points.setAxisT(0);
+      this.applyGhostVisibility();
+      this.cameraDirty = true;
+      if (id && directionsLoaded(s.datasetId) && channelsLoaded(s.datasetId)) {
+        // only drop an id this map genuinely cannot draw — not one whose
+        // sidecars are still in flight
+        const known = directionsFor(s.datasetId)?.byId.has(id) ?? false;
+        if (!known || axisChannels(s.datasetId, id) === null) s.setAxisDirection(null);
+      }
+      return;
+    }
+    const cols = this.dataset.columns;
+    if (!this.axisBuffer || this.axisBuffer.id !== found.direction.id) {
+      const built = axisLayout(
+        cols.pos2,
+        found.par.values,
+        found.orth.values,
+        found.nullPar.values,
+        found.nullOrth.values,
+        mapBounds(cols.pos2),
+      );
+      this.axisBuffer = {
+        id: found.direction.id,
+        positions: built.positions,
+        nMissing: built.nMissing,
+      };
+      this.points.setAxis(built.positions);
+    }
+    this.points.setAxisT(s.axis.t);
+    this.points.setGhost(s.axis.showNull);
+    this.applyGhostVisibility();
+    this.cameraDirty = true;
+  }
+
+  /** Take the null cloud out of the draw list whenever its own opacity gate is
+   *  shut.
+   *
+   *  `createGhostMesh`'s opacityNode ends in `.mul(uAxis).mul(uGhost)`, so with
+   *  no axis engaged — the default for every map — all 49,385 instances shade
+   *  to alpha 0. The GPU still runs their vertex stage and still blends a
+   *  screen's worth of transparent, depth-test-off, additive fragments: at
+   *  1280x800 DPR 2 that measured 1.51 ms of the 4.00 ms scene pass (38%),
+   *  every frame, for nothing on screen. `visible = false` skips the draw
+   *  outright and the mesh comes straight back when the axis engages. */
+  private applyGhostVisibility(): void {
+    if (!this.ghost) return;
+    this.ghost.visible = this.axisT > 0 && appStore.getState().axis.showNull;
+  }
+
+  /** The live axis blend, 0 when no direction is engaged (exposed for tests
+   *  and for the hover mix, which must use exactly this number). */
+  get axisT(): number {
+    return this.axisBuffer ? appStore.getState().axis.t : 0;
+  }
+
+  /** How many points had no measured projection and therefore did not move.
+   *  null when no axis is engaged — "not asked", not "none". */
+  get axisUnmeasured(): number | null {
+    return this.axisBuffer ? this.axisBuffer.nMissing : null;
+  }
+
+  /** Every measured scalar for one point, in reading order: the channel the
+   *  lens is on first, then the rest. `null` values stay null all the way to
+   *  the tooltip, which prints "not measured". */
+  private channelReadout(index: number): { label: string; value: number | null; units: string }[] {
+    const s = appStore.getState();
+    const set = channelsFor(s.datasetId);
+    if (!set) return [];
+    const ordered = [...set.channels].sort((a, b) => {
+      const ra = a.id === s.channel.id ? 0 : 1;
+      const rb = b.id === s.channel.id ? 0 : 1;
+      return ra - rb;
+    });
+    return ordered.map((c) => ({
+      label: c.label,
+      value: channelValue(c, index),
+      units: c.units,
+    }));
   }
 
   /** Eased morph value, 0 = flat map … 1 = flythrough (exposed for tests). */
@@ -376,6 +563,13 @@ export class AtlasDriver implements SceneDriver {
     this.applyFit();
 
     // GPU id-buffer picking for the 3D flythrough (2D stays on kdbush)
+    // the null cloud, added BEFORE the real points so the ghost sits behind
+    // them; it is invisible until an axis is engaged (its opacity is gated on
+    // the same uAxis the blend uses, so it cannot outlive the claim)
+    this.ghost = this.points.createGhostMesh();
+    this.ghost.visible = false; // applyAxis() below raises it if an axis is engaged
+    this.scene.add(this.ghost);
+
     this.idPicker = new IdPicker(this.renderer, this.points.createIdMesh());
     if (this.cam.viewportW >= 2) this.idPicker.setSize(this.cam.viewportW, this.cam.viewportH);
 
@@ -407,9 +601,15 @@ export class AtlasDriver implements SceneDriver {
     this.badges?.clear();
     this.applyBeamsVisibility(t.beams);
     this.points.uNoiseVis.value = t.noise ? 1 : 0;
-    const settings = appStore.getState().settings;
-    this.points.uScale.value = settings.pointScale;
-    this.points.uConfFloor.value = settings.confidenceFloor;
+    this.applyPointSettings();
+    // fetch the per-point scalars for this map (once, lazily; most maps have
+    // none and the loader treats absence as "no channel UI", never as zeros)
+    const dsId = appStore.getState().datasetId;
+    if (dsId) ensureChannels(dsId, ds.columns.count);
+    this.applyChannel();
+    if (dsId) ensureDirections(dsId);
+    this.axisBuffer = null;
+    this.applyAxis();
 
     // fresh layers start flat — re-apply the current dimension morph
     this.applyMorph();
@@ -532,14 +732,30 @@ export class AtlasDriver implements SceneDriver {
    *  horizon. Every gesture that has to reason about the camera's ground frame
    *  (pan, hover, fly-to framing) reads them from here so they can't drift out
    *  of step with the matrix frame() builds. */
-  private orbitAngles(): [az: number, el: number] {
+  private orbitAngles(morph = this.morph): [az: number, el: number] {
+    const el = Math.min(Math.max(this.orbitEl, ORBIT_EL_MIN), ORBIT_EL_MAX);
     return [
-      this.morph * this.orbitAz,
-      Math.min(
-        Math.max(this.morph * (TILT_RAD + this.orbitEl), EL_CLAMP_MIN),
-        EL_CLAMP_MAX,
-      ),
+      morph * this.orbitAz,
+      Math.min(Math.max(morph * (TILT_RAD + el), EL_CLAMP_MIN), EL_CLAMP_MAX),
     ];
+  }
+
+  /** The angles a fly-to has to be solved against: the ones the camera will
+   *  *arrive* at, not the ones it is at now. `orbitAngles` scales both by the
+   *  current morph, which is right for a gesture happening this frame but wrong
+   *  for a 450 ms trip taken while a 900 ms dims 2→3 morph is still lifting the
+   *  camera — the elevation to cancel is the settled one, so the target is dead
+   *  center at the moment the flythrough lands rather than on the way there. */
+  private settledAngles(): [az: number, el: number] {
+    return this.orbitAngles(this.morphTween?.to ?? this.morph);
+  }
+
+  /** Cursor-anchored zoom through the camera's ground frame — the zoom
+   *  counterpart of `panScreen`, and the one place the orbit angles enter a
+   *  zoom so no call site can reason about the frame on its own. */
+  private zoomAtScreen(sx: number, sy: number, factor: number): void {
+    const [az, el] = this.orbitAngles();
+    this.cam.zoomAtInFrame(sx, sy, factor, az, el);
   }
 
   /** Pan by a screen-space drag delta. Camera2D pans along world X/Y, so once
@@ -742,8 +958,13 @@ export class AtlasDriver implements SceneDriver {
       !this.reducedMotion
     ) {
       // spin around the cloud's local depth (or the user's last pivot), not
-      // the z=0 ground plane — zoomed in, the latter swings the cloud away
-      if (!this.orbitPivot) this.grabOrbitPivot(false);
+      // the z=0 ground plane — zoomed in, the latter swings the cloud away.
+      // Not while a fly-to is travelling, though: applyOrbitPivot re-solves the
+      // center from the anchor every frame, *after* the tween has written it,
+      // so grabbing a pivot mid-flight pins the camera and the trip never
+      // happens (only the zoom half of the tween survives). Keep spinning and
+      // re-grab on arrival, where the anchor is the one the user asked for.
+      if (!this.orbitPivot && !this.cam.isFlying) this.grabOrbitPivot(false);
       this.orbitAz += dt * AUTO_ORBIT_RAD_S * orbitSpeed;
       this.cameraDirty = true;
     }
@@ -760,7 +981,7 @@ export class AtlasDriver implements SceneDriver {
       let step = this.zoomPending * k;
       if (Math.abs(this.zoomPending - step) < 1e-4) step = this.zoomPending;
       this.zoomPending -= step;
-      this.cam.zoomAt(this.zoomAnchor.x, this.zoomAnchor.y, Math.exp(step));
+      this.zoomAtScreen(this.zoomAnchor.x, this.zoomAnchor.y, Math.exp(step));
       this.cameraDirty = true;
       this.hoverDirty = true;
     }
@@ -973,15 +1194,19 @@ export class AtlasDriver implements SceneDriver {
     const fitPx = Math.min(this.cam.viewportW, this.cam.viewportH) * 0.55;
     if (this.morph > 0.02) {
       // mid-flythrough cam.cx/cy live in the pos3 xy frame — aim there, not at
-      // pos2. The point sits at z = pos3[id*3+2]; the camera's lookAt targets
-      // the z=0 plane at (cx, cy), so there's a vertical offset — accepted, the
-      // orthographic projection keeps the neighborhood in frame.
+      // pos2 — and solve the tilt out rather than living with it: the point sits
+      // at z = pos3[id*3+2] and cam.cx/cy name a spot on the z=0 plane, so
+      // aiming straight at its xy leaves it off-center by its own height times
+      // tan(el) — a median of 365 px over 50 sampled arrivals, up to 2,844, with
+      // 15 of them off-screen entirely. `centerForTarget` removes it exactly.
       const q = this.dataset.columns.pos3;
       const x = q[id * 3];
       const y = q[id * 3 + 1];
-      if (x === undefined || y === undefined) return;
+      const z = q[id * 3 + 2];
+      if (x === undefined || y === undefined || z === undefined) return;
       const wpp = Math.max((this.extent3 * 0.06) / fitPx, this.cam.minWpp);
-      this.cam.flyTo(x, y, wpp, performance.now());
+      const [cx, cy] = centerForTarget(x, y, z, ...this.settledAngles());
+      this.cam.flyTo(cx, cy, wpp, performance.now());
       return;
     }
     const p = this.dataset.columns.pos2;
@@ -999,14 +1224,18 @@ export class AtlasDriver implements SceneDriver {
     const centroid3 = this.centroid3ById.get(clusterId);
     if (this.morph > 0.02 && centroid3) {
       // mid-flythrough cam.cx/cy live in the pos3 xy frame — aim at the pos3
-      // centroid, not the pos2 hull anchor. The centroid sits at z =
-      // centroid3[2]; the camera's lookAt targets the z=0 plane at (cx, cy), so
-      // there's a vertical offset — accepted, the orthographic projection keeps
-      // the neighborhood in frame.
+      // centroid, not the pos2 hull anchor, and take the tilt out of it the
+      // same way flyToPoint does (see centerForTarget).
       this.userDroveCamera = true;
       const r3 = this.radius3ById.get(clusterId) ?? this.extent3 * 0.04;
       const wpp = Math.max((r3 * 2) / fitPx, this.cam.minWpp);
-      this.cam.flyTo(centroid3[0], centroid3[1], wpp, performance.now());
+      const [cx, cy] = centerForTarget(
+        centroid3[0],
+        centroid3[1],
+        centroid3[2],
+        ...this.settledAngles(),
+      );
+      this.cam.flyTo(cx, cy, wpp, performance.now());
       return;
     }
     const hull = this.hullsById.get(clusterId);
@@ -1014,6 +1243,126 @@ export class AtlasDriver implements SceneDriver {
     this.userDroveCamera = true;
     const wpp = Math.max((hullRadius(hull) * 2) / fitPx, this.cam.minWpp);
     this.cam.flyTo(hull.anchor[0], hull.anchor[1], wpp, performance.now());
+  }
+
+  // ── hand rig ────────────────────────────────────────────────────────────
+  // The webcam rig (src/hands) drives the camera through these, and through
+  // nothing else. Every one of them is an *offset* composed onto whatever the
+  // pointer path already did, so the rig can never take authority away from the
+  // mouse mid-gesture, and dropping every hand provably returns the rig's
+  // contribution to zero rather than to some remembered pose.
+
+  /** Point size and confidence floor. The floor is now the user's setting and
+   *  nothing else — the rig's override went with the two-hand gesture that used
+   *  to drive it. Point size still carries the rig's snap flash on top. */
+  private applyPointSettings(): void {
+    if (!this.points) return;
+    const settings = appStore.getState().settings;
+    this.points.uScale.value = settings.pointScale * this.handGain;
+    this.points.uConfFloor.value = settings.confidenceFloor;
+  }
+
+  /** Viewport size in CSS px — the rig's channels are in viewport widths. */
+  viewportSize(): { width: number; height: number } {
+    return { width: this.cam.viewportW, height: this.cam.viewportH };
+  }
+
+  /** Pan by a screen-space delta, through the same orbit-aware path as a drag. */
+  handPan(dxPx: number, dyPx: number): void {
+    if (dxPx === 0 && dyPx === 0) return;
+    this.panScreen(dxPx, dyPx);
+  }
+
+  /** Zoom by a multiplicative factor, anchored at the viewport centre. A hand
+   *  has no cursor to anchor to, and anchoring on the palm would make the map
+   *  slide sideways whenever the operator's hand was off-centre. */
+  handZoom(factor: number): void {
+    if (!Number.isFinite(factor) || Math.abs(factor - 1) < 1e-5) return;
+    this.zoomAtScreen(this.cam.viewportW / 2, this.cam.viewportH / 2, factor);
+    this.userDroveCamera = true;
+    this.cameraDirty = true;
+    this.hoverDirty = true;
+  }
+
+  /** Set the rig's point-size multiplier (1 = neutral). */
+  handPointGain(gain: number): void {
+    if (gain === this.handGain) return;
+    this.handGain = gain;
+    this.applyPointSettings();
+  }
+
+  /** Anchor a shockwave at a point in *viewport* coordinates (both axes 0..1).
+   *
+   *  The world origin and the viewport→world scale are both snapshotted here
+   *  rather than recomputed per frame: the wave lives for about a second, and a
+   *  camera move during it would otherwise drag the front across the map and
+   *  stretch it, which reads as the wave being painted on the glass rather than
+   *  running through the cloud. */
+  handShockwave(x: number, y: number): void {
+    const world = this.cam.screenToWorld(x * this.cam.viewportW, y * this.cam.viewportH);
+    this.handPulseAt = { x: world[0], y: world[1], scale: this.cam.viewportW * this.cam.wpp };
+  }
+
+  /** Advance the running shockwave. Radius and amplitude are in viewport widths
+   *  at cast time; amplitude 0 retires the wave. */
+  handPulse(radius: number, amplitude: number): void {
+    if (!this.points) return;
+    const at = this.handPulseAt;
+    if (!at || amplitude <= 0) {
+      if (this.points.uPulse.value.w !== 0) {
+        this.points.uPulse.value.set(0, 0, 0, 0);
+        this.cameraDirty = true;
+      }
+      if (amplitude <= 0) this.handPulseAt = null;
+      return;
+    }
+    this.points.uPulse.value.set(at.x, at.y, radius * at.scale, amplitude * at.scale);
+    this.points.uPulseWidth.value = HAND_PULSE_WIDTH * at.scale;
+    this.cameraDirty = true;
+  }
+
+  /** Every point id inside a lasso given in viewport coordinates (axes 0..1).
+   *
+   *  Screen space, not world: the operator drew the loop over what they could
+   *  see, and the cloud they were looking at is the projected one. Projecting
+   *  each point out through the live camera is also the only version that works
+   *  in the flythrough, where the map has no single world plane to test against.
+   */
+  handLassoPick(contains: (x: number, y: number) => boolean): number[] {
+    if (!this.dataset) return [];
+    const { viewportW: w, viewportH: h } = this.cam;
+    if (w < 2 || h < 2) return [];
+    const cols = this.dataset.columns;
+    const n = cols.count;
+    // "flat" means the points really are at their pos2 coordinates — which an
+    // engaged axis blend is precisely not, so it takes the projected path too
+    const flat = this.morph <= 0.02 && this.axisT <= 0.02;
+    const inside: number[] = [];
+    for (let i = 0; i < n; i++) {
+      let x: number | undefined;
+      let y: number | undefined;
+      if (flat) {
+        x = cols.pos2[i * 2];
+        y = cols.pos2[i * 2 + 1];
+      } else {
+        const wp = blendedPosition(
+          i,
+          cols.pos2,
+          cols.pos3,
+          this.morph,
+          this.axisBuffer?.positions ?? null,
+          this.axisT,
+        );
+        const p = this.projectWorld(wp[0], wp[1], wp[2]);
+        if (!p) continue;
+        if (contains(p[0] / w, p[1] / h)) inside.push(i);
+        continue;
+      }
+      if (x === undefined || y === undefined) continue;
+      const [sx, sy] = this.cam.worldToScreen(x, y);
+      if (contains(sx / w, sy / h)) inside.push(i);
+    }
+    return inside;
   }
 
   private clearLayers(): void {
@@ -1265,7 +1614,7 @@ export class AtlasDriver implements SceneDriver {
           Math.min(dy * (pinching ? PINCH_ZOOM_GAIN : WHEEL_ZOOM_GAIN), WHEEL_ZOOM_MAX),
         );
         if (this.reducedMotion) {
-          this.cam.zoomAt(e.clientX, e.clientY, Math.exp(step));
+          this.zoomAtScreen(e.clientX, e.clientY, Math.exp(step));
         } else {
           this.zoomPending += step;
           this.zoomAnchor = { x: e.clientX, y: e.clientY };
@@ -1351,7 +1700,7 @@ export class AtlasDriver implements SceneDriver {
     // is the only meaningful zoom at any tilt — wheel zoom (~line 1060) is
     // already ungated the same way.
     if (Math.abs(dist - prev.dist) > 0.5) {
-      this.cam.zoomAt(cx, cy, prev.dist / dist);
+      this.zoomAtScreen(cx, cy, prev.dist / dist);
       this.userDroveCamera = true;
       this.cameraDirty = true;
     }
@@ -1387,7 +1736,11 @@ export class AtlasDriver implements SceneDriver {
 
   private updateHover(): void {
     if (!this.mouse || !this.dataset || this.dragging) return;
-    if (this.morph > 0.02) {
+    // The 2-D picker is a kdbush over `pos2`. Once the axis blend is engaged
+    // the points are no longer at those coordinates, so hover goes to the
+    // id-buffer picker — which shares `positionExpression()` and therefore
+    // sees exactly the blended positions on screen.
+    if (this.morph > 0.02 || this.axisT > 0.02) {
       this.updateHover3D();
       return;
     }
@@ -1408,7 +1761,7 @@ export class AtlasDriver implements SceneDriver {
     void this.idPicker
       .pick(this.camera, mouse.x, mouse.y)
       .then((i) => {
-        if (this.dataset !== dataset || this.morph <= 0.02) return;
+        if (this.dataset !== dataset || (this.morph <= 0.02 && this.axisT <= 0.02)) return;
         this.setHovered(i >= 0 && i < dataset!.columns.count ? i : null);
       })
       .finally(() => {
@@ -1440,6 +1793,7 @@ export class AtlasDriver implements SceneDriver {
         label: cols.labels[index]!,
         clusterTitle: title,
         confidence: cols.confidence[index]! / 255,
+        channels: this.channelReadout(index),
       });
       this.canvas.style.cursor = "pointer";
     } else {
@@ -1448,18 +1802,22 @@ export class AtlasDriver implements SceneDriver {
     }
   }
 
-  /** Screen position of point i at the current morph, via the render camera
-   *  (matches the GPU's mix(pos2, pos3, uMorph) exactly). */
+  /** Screen position of point i at the current morph AND axis blend, via the
+   *  render camera — the same three-way mix the vertex node does:
+   *  `mix(mix(pos2, pos3, uMorph), axis, uAxis)`. Shared with the shader
+   *  through `scene/axisLayout.ts` so a tooltip can never point at where a
+   *  point used to be. */
   private projectPoint(i: number): [number, number] {
     const cols = this.dataset!.columns;
-    const m = this.morph;
-    return (
-      this.projectWorld(
-        cols.pos2[i * 2]! * (1 - m) + cols.pos3[i * 3]! * m,
-        cols.pos2[i * 2 + 1]! * (1 - m) + cols.pos3[i * 3 + 1]! * m,
-        cols.pos3[i * 3 + 2]! * m,
-      ) ?? [-9999, -9999] // clipped — park the tooltip far offscreen
+    const [x, y, z] = blendedPosition(
+      i,
+      cols.pos2,
+      cols.pos3,
+      this.morph,
+      this.axisBuffer?.positions ?? null,
+      this.axisT,
     );
+    return this.projectWorld(x, y, z) ?? [-9999, -9999]; // clipped — park it offscreen
   }
 
   /** Project a morph-space world position through the render camera; null

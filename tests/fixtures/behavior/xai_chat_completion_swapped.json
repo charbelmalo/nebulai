@@ -1,0 +1,26 @@
+{
+  "_fixture_provenance": {
+    "status": "SYNTHESIZED, NOT CAPTURED",
+    "why": "A response whose `model` field names a DIFFERENT deployment from the pinned one. This is the case §5.5 exists for: a provider rolling an alias forward mid-run. The adapter must stop rather than pool two deployments into one arm.",
+    "authored": "2026-09-11"
+  },
+  "id": "chatcmpl-fixture-0003",
+  "object": "chat.completion",
+  "created": 1788134520,
+  "model": "grok-4-0915",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "stop",
+      "message": {
+        "role": "assistant",
+        "content": "a, b, c"
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 3,
+    "total_tokens": 13
+  }
+}

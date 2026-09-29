@@ -16,17 +16,50 @@ dependencies = [
     "anthropic",
 ]
 
+# ── Attractors P5 (D1b): the only part of this project that needs torch ──────
+# `pip install nebulai` must stay torch-free. Every map, every direction, every
+# Seer capture and the whole numpy forward pass run without it; training a model
+# organism does not, and that one capability is not allowed to put a 2 GB wheel
+# in front of everybody else. tests/test_no_torch_in_base.py enforces it by
+# importing the CLIs with `torch` made unimportable.
+[project.optional-dependencies]
+organisms = [
+    "torch",
+    "transformers",
+    "peft",
+    "datasets",
+]
+
 [project.scripts]
 nebulai = "nebulai.cli:main"
 seer = "nebulai.seer.cli:main"
 
 [dependency-groups]
 dev = ["pytest"]
+# The Behavior study's local execution stack (plan §5.6, §6.3.1). It is an
+# OPTIONAL group on purpose: the base install stays torch-free so the existing
+# cloud pipelines never inherit a multi-gigabyte dependency, and
+# `tests/test_behavior_optional_dep.py` fails if anything under
+# `src/nebulai/` imports torch, transformers or sentence_transformers at module
+# scope. Everything here is pinned, because §6.3.1 requires the embedder to be
+# reproducible down to a revision and a dtype.
+behavior-local = [
+    "torch==2.14.0",
+    "transformers==5.17.0",
+    "sentence-transformers==6.0.1",
+]
 
 [tool.pytest.ini_options]
 # `network` tests hit the real Hugging Face hub, so they are deselected by
 # default; opt in with `pytest -m network` (the trailing -m wins over addopts)
-markers = ["network: opt-in test that makes a real network request"]
+markers = [
+    "network: opt-in test that makes a real network request",
+    # Runs by default. The mark exists so a developer iterating on unrelated
+    # code can `-m 'not slow'`; it must NOT be added to addopts, because the
+    # calibration harness it marks is the thing that would catch a broken
+    # estimator, and a control that is skipped by default is not a control.
+    "slow: seconds-scale statistical calibration harness",
+]
 addopts = "-m 'not network'"
 
 [build-system]

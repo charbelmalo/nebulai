@@ -17,18 +17,28 @@
 import type { ConversationTurn, SnapshotLog, TopicPreset } from "../app/store";
 
 /** Parse a raw string that could be JSON or JSONL, returning a normalized
- *  turn list. Throws with a friendly message on unrecognized shapes. */
-export function parseConversationText(raw: string, name: string): SnapshotLog {
+ *  turn list. Throws with a friendly message on unrecognized shapes.
+ *
+ *  `id` is optional; see `parseSessionTranscript` for why a transcript read
+ *  from disk supplies one and a dropped file does not. */
+export function parseConversationText(raw: string, name: string, id?: string): SnapshotLog {
   const trimmed = raw.trim();
   if (!trimmed) throw new Error("empty input");
 
   let messages: unknown[] = [];
 
-  // JSONL: newline-separated JSON objects
-  if (trimmed.includes("\n") && !trimmed.startsWith("[") && !trimmed.startsWith("{")) {
-    messages = trimmed
-      .split(/\r?\n/)
-      .filter((l) => l.trim())
+  // JSONL: newline-separated JSON objects.
+  //
+  // Sniffed by parsing the FIRST LINE on its own, not by the document's first
+  // character: every real Claude Code transcript starts with `{`, so the old
+  // `!startsWith("{")` test sent all of them down the whole-document branch,
+  // where `JSON.parse` threw on the second line's opening brace. Format 5
+  // above was documented as accepted and was, in fact, unreachable. A
+  // pretty-printed JSON document still takes the other branch, because its
+  // first line (`{`, `[`, or `{"messages": [`) is not valid JSON by itself.
+  const lines = trimmed.split(/\r?\n/).filter((l) => l.trim());
+  if (lines.length > 1 && isCompleteJSON(lines[0]!)) {
+    messages = lines
       .map((l) => {
         try {
           return JSON.parse(l);
@@ -87,11 +97,23 @@ export function parseConversationText(raw: string, name: string): SnapshotLog {
   if (turns.length === 0) throw new Error("parsed 0 turns — check the file format");
 
   return {
-    id: `log-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    id: id ?? `log-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
     name,
     turns,
     loadedAt: Date.now(),
   };
+}
+
+/** Does this one line stand alone as JSON? The NDJSON discriminator. */
+function isCompleteJSON(line: string): boolean {
+  try {
+    const v: unknown = JSON.parse(line);
+    // A bare number or string on a line is not a message, and `"…"` lines do
+    // occur inside pretty-printed documents.
+    return !!v && typeof v === "object";
+  } catch {
+    return false;
+  }
 }
 
 function flattenContent(c: unknown): string {

@@ -60,10 +60,13 @@ test("no dataset index: the chrome mounts anyway and reports the absence", async
   await expect(page.locator("nav.topnav")).toBeVisible();
 
   // this document is Nebulai, and its nav is Nebulai's three pages only
+  // "Episodes" is the LABEL; the page id behind it is still `guide` (nav.ts
+  // holds labels only, APP_PAGES holds membership — see app-pages.test.ts)
   expect(await page.locator(".topnav-pill").allInnerTexts()).toEqual([
     "Semantic map",
+    "Behavior",
     "Internals",
-    "Guide",
+    "Episodes",
   ]);
   expect(await page.evaluate(() => window.__store.getState().app)).toBe("nebulai");
 
@@ -107,14 +110,54 @@ test("mobile Guide clears the two-row chrome and documents every live view", asy
   await page.setViewportSize({ width: 375, height: 812 });
   const errors = await bootWithoutAtlas(page);
 
-  await page.locator(".topnav-pill", { hasText: "Guide" }).click();
+  await page.locator(".topnav-pill", { hasText: "Episodes" }).click();
   await expect(page.locator(".guide-page")).toBeVisible();
   await expect(page.locator(".guide-count")).toContainText("25 of 25");
-  await expect(page.locator(".guide-card")).toHaveCount(25);
-  await expect(page.locator(".guide-card-research li")).toHaveCount(75);
+  // the feature cards, counted apart from the episode cards that now share the
+  // `guide-card` shell — a change to either count has to be deliberate. 26 since
+  // ATTRACTORS-PLAN phase 4 landed the intervention rail (#26), which is why the
+  // count line above still reads "25 of 25": 25 views were planned and all 25
+  // ship; the 26th was added after that roadmap and is named separately.
+  // Research entries: 25 views x 3 references + the rail's 4 = 79. The rail
+  // cites a fourth because it changes the forward pass, and dropping one to
+  // keep a round number would be losing evidence to satisfy a test.
+  await expect(page.locator(".guide-group:not(.guide-episodes) .guide-card")).toHaveCount(26);
+  await expect(page.locator(".guide-card-research li")).toHaveCount(79);
+
+  // This document booted with NO dataset index at all, so every episode that
+  // narrates over a map is unavailable — and that is the state worth pinning.
+  // Each card stays on the page, its play button is disabled, and the gate
+  // line names what is missing. An episode that quietly disappeared when its
+  // data was gone would be indistinguishable from one that was never written.
+  // 9 = the 3 original tours + the 6 episodes registered in episodes.ts
+  // (glitch-knot, grokking-clock, a-direction, refusal-style, assistant-axis,
+  // golden-gate). 8 of them are gated here because they narrate over a map and
+  // there is no map; grokking-clock is the one that survives, for the reason
+  // its own card gives below.
+  await expect(page.locator(".episode-card")).toHaveCount(9);
+  await expect(page.locator(".episode-card.is-unavailable")).toHaveCount(8);
+  await expect(page.locator(".episode-gate").first()).toContainText("Not available here");
+  for (const play of await page
+    .locator(".episode-card.is-unavailable .guide-card-open")
+    .all()) {
+    await expect(play).toBeDisabled();
+  }
+  // …and nothing was substituted: the pinned model id is still the one named
+  await expect(page.locator(".episode-card").first()).toContainText("gpt2");
+
+  // The one that still plays is the grokking episode, and it plays for a
+  // reason that is visible on its own card: its manifest asks only for two
+  // Internals views, both of which are live here. A gate that failed
+  // everything when the atlas was missing would be no more honest than one
+  // that passed everything.
+  const ready = page.locator(".episode-card.is-ready");
+  await expect(ready).toHaveCount(1);
+  await expect(ready).toContainText("When a small model starts to generalize");
+  await expect(ready.locator(".guide-card-open")).toBeEnabled();
+  await expect(ready.locator(".episode-gate")).toHaveCount(0);
 
   const links = page.locator(".guide-card-research a");
-  await expect(links).toHaveCount(75);
+  await expect(links).toHaveCount(79); // same 79 as the <li> count above
   for (const link of await links.all()) {
     await expect(link).toHaveAttribute("href", /^https:\/\//);
     await expect(link).toHaveAttribute("target", "_blank");
@@ -128,7 +171,10 @@ test("mobile Guide clears the two-row chrome and documents every live view", asy
   });
   expect(clearance.pageTop).toBeGreaterThanOrEqual(clearance.navBottom);
 
-  await page.locator(".guide-card-open").first().click();
+  await page
+    .locator(".guide-group:not(.guide-episodes) .guide-card-open")
+    .first()
+    .click();
   expect(await page.evaluate(() => window.__store.getState().page)).toBe("interp");
   await expect(page.locator(".interp-page")).toBeVisible();
 

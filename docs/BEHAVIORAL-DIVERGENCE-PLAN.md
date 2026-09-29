@@ -1,7 +1,10 @@
 # Behavioral semantic divergence — research and UX plan
 
-Status: implementation baseline, 2026-08-13. **Revised 2026-08-13** after a
-methodological and visualization review; see §17 for what changed and why.
+Status: Phase 0 ran and **FAILED its positive-control gate** 2026-09-12
+(§6.7.2); the Phase 1 backend and the Phase 2 Behavior page are built (574 tests
+under `tests/test_behavior_*.py`). Phases 3–4 are not started. Revised
+2026-08-13 after a methodological and visualization review; see §17 for what
+changed and why, and §17.4 for the 2026-09-11/12 implementation notes.
 
 This document defines the additive Nebul.AI feature that can discover where two
 model deployments produce substantially different semantic associations. GPT-2
@@ -64,6 +67,22 @@ The study may also report:
   embedders;
 - whether a selected cue's result is confirmed, suggestive, unstable,
   underpowered, or incomparable.
+
+**The intervention clause (added by `ATTRACTORS-PLAN.md` §2.4, decision D3).**
+A figure that actually changed the forward pass — not one that only measured it
+— may make exactly one further sentence, of exactly this shape:
+
+> Under protocol P, intervening on direction `d` at layer L changed behaviour B
+> from X to Y (n = …, seed = …).
+
+Three conditions, all of them necessary. The intervention must have run, with
+its measurements exported. A control must have run beside it — the α = 0 row
+that installs no hook and is asserted bit-identical to the baseline — and must
+be shown, not merely claimed. And the sentence is about what the intervention
+*did*: §1.2 below is unchanged, so `d` is still never "the refusal direction"
+or "the Golden Gate feature", but a direction extracted by method M from data D
+which, when intervened on, moved behaviour B. Nothing in this clause licenses a
+sentence about what a direction *is*.
 
 ### 1.2 What the feature must not claim
 
@@ -417,12 +436,15 @@ The requirement is restated in two parts:
 
 The repository's `GPT2Numpy` forward pass remains the reference implementation
 for numerical conformance and later Internals links. A large repeated study
-needs batched autoregressive sampling, so the Behavior package adds an optional
-`behavior-local` dependency group using a pinned Transformers/PyTorch stack,
-or an equivalently tested batched backend.
+needs batched autoregressive sampling, so the Behavior package adds the optional
+`behavior-local` dependency group (landed: `torch==2.14.0`,
+`transformers==5.17.0`, `sentence-transformers==6.0.1`), enforced torch-free at
+base by `tests/test_behavior_optional_dep.py`.
 
 Acceptance requires its next-token logits to match `GPT2Numpy` on golden
-prompts within a declared tolerance. The chosen backend, package versions,
+prompts within a declared tolerance. Delivered as `nebulai behavior
+conformance`; the result is `out/behavior/conformance_gpt2.json`. The chosen
+backend, package versions,
 device, precision, sampler seed, temperature, top-p, and checkpoint SHA are
 recorded. This keeps the base Nebul.AI install lightweight and avoids making
 the existing cloud pipelines depend on PyTorch.
@@ -583,7 +605,10 @@ long-running statistical study — a study that will issue far more embed calls
 than `compare`'s few hundred cluster names.
 
 What changes is the **status**: this is now a normal Phase 0 deliverable sized in
-hours, not a blocking prerequisite. The existing LAN embedder remains available
+hours, not a blocking prerequisite. *Status: delivered.* The in-process fp32
+SHA-pinned embedder ships with a golden-vector test
+(`tests/test_behavior_embed_golden.py`), and no Behavior content is routed
+off-box. The existing LAN embedder remains available
 for `compare`, for exploratory Behavior runs explicitly marked ineligible for
 confirmation, and as a cross-check against the in-process vectors.
 
@@ -911,6 +936,68 @@ partial failure is informative too: if GPT-2 fails the control where Grok passes
 that is the capability confound of §4.2.1 showing up in the most direct possible
 form, measured before a single expensive trial is spent.
 
+**Measured 2026-09-12 — both local arms FAIL the gate.** Study
+`positive-control-2026-09-12` (manifest
+`sha256:6878ecb9717b15339fae8ec0a54112e40885b118d09712bff23f13326092be26`), four
+control cues (`cat`, `hot`, `king`, `salt`) × four frames × two arms, run locally
+on CPU in fp32 with no API key involved and zero spend. Report:
+`out/behavior/positive-control-2026-09-12/calibration.md`, 120 trials.
+
+| arm | model | valid control trials | attempted | hits | pass rate | gate @ 0.50 |
+|---|---|---:|---:|---:|---:|---|
+| `cap_small` | GPT-2 small (124M) | 20 | 54 | 2 | **0.1000** | **FAIL** |
+| `cap_xl` | GPT-2 XL (1.5B) | 43 | 66 | 9 | **0.2093** | **FAIL** |
+
+Per cue, hits/valid (`cap_small` → `cap_xl`): `cat` 0/4 → 4/14 · `hot` 2/6 →
+2/9 · `king` 0/5 → 1/10 · `salt` 0/5 → 2/10.
+
+Read the denominators, not just the rates. Of 120 trials, **57 were invalid for
+`too_few` alone** — fewer than three associates survived parsing (`cap_small` 34,
+`cap_xl` 23) — so each pass rate is computed over the minority of trials that
+produced a parseable association list at all. The collection is also partial: the
+frozen design is 20 cues × 24 trials × 4 blocks × 4 frames × 2 models, this run
+was capped with `--cue-limit 4` to 192 intended trials, and 120 of those landed
+before the run was stopped (the machine was in 12.9 GB of swap with two sibling
+agents working, and fp32 GPT-2-XL was paging at roughly two minutes per trial).
+The remaining 72 trials are **not collected**, not zero. A larger denominator
+could move the rates; it cannot move them across the threshold without almost
+every remaining trial being a hit.
+
+Four consequences, recorded so they are not re-litigated:
+
+1. **No Δ̂ computed from these two arms is interpretable as a divergence in word
+   association.** The gate is not advisory. The capability study
+   (`capability-control-2026-09-12`) reached the same conclusion from the other
+   direction without being told this result: its two analysed cues read
+   `insufficient evidence` (`freedom`, Δ̂ 0.222, 10/14 valid — below the
+   20-valid-trial minimum, with the worst-case bound over unparsed trials
+   spanning the effect floor) and `incomparable` (`water`, Δ̂ 0.130, parse rates
+   0.38 vs 0.79, differing by more than the 0.25 ceiling). The pipeline's own
+   gates and this control agree.
+2. **The §4.2.1 capability confound is measured here, not hypothesised.** A 12×
+   parameter difference produced a 2.1× difference in control recovery between
+   two arms given identical prompts, identical frames, identical parsing and
+   identical seeds. Any two-arm comparison across a capability gap inherits
+   this, and the direction (bigger model, higher recovery) is the direction that
+   would be read as "diverges less" by anyone who skipped the control.
+3. **The failure is predominantly formatting and instruction-following, not an
+   absent association network.** `too_few` is the only invalid reason in the
+   whole store; base GPT-2 checkpoints are not instruction-tuned and frequently
+   continue the prompt rather than answering it. That is a statement about what a
+   base LM emits under these frames, and it is exactly why the control exists:
+   without it the resulting near-empty association sets would have been analysed
+   as a *small* divergence rather than as *no measurement*.
+4. **`hot` is the only cue either arm recovers at all on the small model**, at
+   0.333 — consistent with `hot → cold` being the single most overlearned
+   antonym pair in English text, and with nothing else in the pack being
+   recoverable without following an instruction.
+
+A passing arm still has to be demonstrated. The honest status of the instrument
+today is: **validated as a gate** — it fired, on real outputs, before any paid
+trial was spent — and **not yet validated as an instrument**, because no arm
+available in this environment clears it. Clearing it needs either an
+instruction-tuned local model or the paid arm of §5.3, and neither exists here.
+
 ---
 
 ## 7. Visualization contract
@@ -993,7 +1080,12 @@ is *small-n* geometry.
    Note the conditional: persistence is a property of the maths, and it becomes
    a property of *this system* only once something actually writes those arrays
    down. Item 2 is where that stops being free.
-2. **Extend the existing implementation — it is not persistable as written.**
+2. **Extended, 2026-09-11 — it is now persistable.** `_pca_rows()`
+   (`bundles.py:179`) returns a `PCAFit` carrying `mean` and `axes`, and
+   `pca_transform(rows, mean, axes)` (`bundles.py:164`) places new rows into a
+   fitted frame. The three Internals callers are unaffected. The original
+   work item, kept for the record:
+
    `_pca_rows()` at `src/nebulai/backend/interp/bundles.py:146-166` already
    performs exact PCA by covariance eigendecomposition in float64 with
    **deterministic axis signs**, and that arithmetic is worth adopting rather
@@ -1017,6 +1109,11 @@ is *small-n* geometry.
    projecting a held-out row through the persisted `(mean, axes)` equals its
    coordinate from a joint fit, to float tolerance. Without that test the
    promise is a comment.
+
+   **Done:** `PCAFit` carries them, the exporter writes `pca_mean`, `pca_axes`
+   and `pca_axes_shape` into `behavior.json` (`behavior/export.py:95-97`), and
+   later cues are placed with `(x − mean) @ axes` rather than by refitting.
+   Covered by `tests/test_behavior_export.py`.
 
    The Internals bundles also stamp a `"quantity"` string describing what a
    projection physically *is* (`bundles.py:221`); the cue landscape does the
@@ -1173,6 +1270,25 @@ divergence** share no word, so nothing confirms to a user that they arrived wher
 they clicked. The title is therefore **“Behavior — semantic divergence”**, which
 keeps the pill's promise honest and still names the analysis. The reasoning above
 is preserved exactly; only the shared token is added.
+
+> **Contention with the generative-variance study, resolved 2026-09-11.**
+> `GENERATIVE-VARIANCE-PLAN.md` §9 had also reasoned its way toward a page in
+> this shell, so for a while two studies were pointing at one unbuilt pill.
+> The pill went to this study, and this study has now built it:
+> `APP_PAGES.nebulai` is `["map", "behavior", "interp", "guide"]`, `shell.ts`'s
+> `Page` union gained `"behavior"`, and `app-pages.test.ts` pins seven pages
+> with the partition, boot-pill and no-orphan invariants intact.
+>
+> The reason is not seniority. W1 (generative variance) reports a **ranked
+> table of questions by variance contribution**, which is a table; this study
+> reports per-cue effects with uncertainty over a fixed landscape, which needs
+> a plotted surface, a cue inspector, per-run provenance and an approval path
+> for paid work. W1 therefore gets **no page and no pill** and ships a CLI
+> report plus a static JSON artifact — recorded on the other side too, in
+> `GENERATIVE-VARIANCE-PLAN.md` §9, so the two plans cannot come to disagree
+> about what was decided. The A10 blocker W1 named (`_pca_rows` discarding the
+> fit) was fixed anyway, because this page needed it; that closes the blocker
+> and leaves W1's own n≈40 objection to a projection standing untouched.
 
 ### 8.2 Progressive-disclosure layout
 
@@ -1353,18 +1469,23 @@ Add a nested command group:
 nebulai behavior plan <study.yaml>
 nebulai behavior run <study-id>
 nebulai behavior analyze <study-id>
-nebulai behavior confirm <study-id>
-nebulai behavior export <study-id>
+nebulai behavior calibrate <study-id>
+nebulai behavior conformance
+nebulai behavior publish <study-id>
 nebulai behavior inspect <study-id> --cue daddy
 nebulai behavior serve
 ```
 
 - `plan` resolves model identities, runs capability checks, estimates
   calls/tokens/cost/time/storage, and writes the immutable manifest.
-- `run` is idempotent and resumable.
-- `analyze` may produce discovery/suggestive states but not confirmation.
-- `confirm` consumes the held-out partition under the frozen manifest.
-- `export` writes the static contract and excludes raw outputs by default.
+- `run` is idempotent and resumable, and collects one arm at a time.
+- `analyze` may produce discovery/suggestive states but not confirmation; it is
+  what writes the study's `behavior.json`.
+- `calibrate` writes the §6.7 Phase 0 calibration report.
+- `conformance` checks the batched backend against `GPT2Numpy` (§5.6).
+- `publish` copies one study's `behavior.json` to the path the page reads, as a
+  deliberate labelled act (`published_as: "study" | "example"`). Held-out
+  confirmation (Phase 3) has no verb yet.
 - `inspect` prints exact evidence without requiring the viewer.
 - `serve` binds to loopback by default, exposes health/progress/control and
   local raw-evidence reads, enforces origin checks, and never returns secrets.
@@ -1376,19 +1497,24 @@ and no silent budget downgrade—also apply here.
 
 ```text
 out/behavior/
-  index.json
+  behavior.json            # the published study — the only file the page fetches
+  conformance_gpt2.json    # §5.6, written by `behavior conformance`
   <study-id>/
     manifest.json
-    study.sqlite
+    trials.sqlite
     behavior.json
-    report.json
-    cues.csv
-    provenance/
-      prompt-frames.json
-      environment.json
+    calibration.json
+    calibration.md
+    calibration_p_floor.svg
 ```
 
-`study.sqlite` is local research evidence and is not copied to the static
+There is no `index.json`: the page reads `out/behavior/behavior.json` directly,
+and `publish` is what puts a study's own `behavior.json` there. A study that has
+not been analysed has only `manifest.json` (and `trials.sqlite` once collection
+starts); the three `calibration.*` files appear only for a study `calibrate` has
+been run over.
+
+`trials.sqlite` is local research evidence and is not copied to the static
 viewer. `behavior.json` is a compact, redacted, immutable projection.
 
 ### 9.4 Manifest minimum
@@ -1461,7 +1587,7 @@ Unknown schema versions fail closed. A cue's coordinates are meaningless without
 
 ### 10.1 State and navigation
 
-Implementation touches, additively:
+**Landed 2026-09-11.** All of the following are in the tree:
 
 - `viewer/src/app/slices/shell.ts`: add `"behavior"` to `Page`; make
   `APP_PAGES.nebulai` equal
@@ -1497,8 +1623,17 @@ Add:
 - Behavior sections in `viewer/src/chrome/SettingsPage.tsx` and
   `viewer/src/chrome/GuidePage.tsx`.
 
-The Behavior page lazy-loads its artifact and driver. A missing
-`out/behavior/index.json` must not delay or break atlas boot.
+**As shipped**, the last four of those collapsed into one file:
+`viewer/src/chrome/BehaviorPage.tsx` (33 KB) carries the landscape, the
+ranked/table view, the cue inspector and Runs as internal components, beside
+`viewer/src/data/behavior.ts`, `viewer/src/app/slices/behavior.ts`,
+`viewer/src/chrome/state/behavior.ts` and
+`viewer/src/styles/nebulai.behavior.css`. There is no `BehaviorOverview.tsx`,
+`BehaviorCuePanel.tsx`, `BehaviorRuns.tsx` or `BehaviorDriver.ts` — the
+landscape is not a scene driver and no separate driver was needed.
+
+The Behavior page lazy-loads its artifact. A missing
+`out/behavior/behavior.json` must not delay or break atlas boot.
 
 ### 10.3 Permalinks
 
@@ -1555,26 +1690,38 @@ implicit.
 ### Phase 0 — contract, capability audit, and calibration
 
 **On the embedder.** A working LAN embedder exists (mxbai-embed-large on
-`:11435`, verified 2026-08-13 — §6.3.1), so Phase 0 is **not blocked**. The
+`:11435`, verified 2026-08-13 — §6.3.1), so Phase 0 was **not blocked**. The
 in-process, SHA-pinned, fp32 `sentence-transformers` embedder is still a Phase 0
 deliverable, for pinning and content-routing reasons rather than availability
 ones, and it is sized in hours. The LAN embedder stays useful as a cross-check
 and for exploratory runs marked ineligible for confirmation.
 
+**Phase 0 ran 2026-09-12 and its gate FAILED (§6.7.2).** The embedder, the
+capability-control arm, the positive control, the p-floor check and the
+calibration report all landed; the study is halted at this gate pending an
+instruction-tuned or paid arm.
+
 Deliver:
 
-- the in-process pinned embedder, with its SHA recorded and a golden-vector test;
-- schemas and immutable manifest;
-- fake adapter plus GPT-2/xAI capability prototypes;
-- parser/normalizer goldens;
-- `Δ̂`/permutation/BY and A/A calibration harness;
+- the in-process pinned embedder, with its SHA recorded and a golden-vector test
+  — **DONE** (`behavior/embed.py`, `tests/test_behavior_embed_golden.py`);
+- schemas and immutable manifest — **DONE** (`behavior/contract.py`, `protocol.py`);
+- fake adapter plus GPT-2/xAI capability prototypes — **DONE**
+  (`behavior/adapters/`, `tests/test_behavior_xai_adapter.py`);
+- parser/normalizer goldens — **DONE** (`behavior/normalize.py`);
+- `Δ̂`/permutation/BY and A/A calibration harness — **DONE** (`behavior/stats.py`);
 - the **capability-control arm** (§5.7) end-to-end — local, free, and an input to
-  the confirmation gate;
-- the **positive-control** cue pack and its per-model pass rates (§6.7.2);
-- the **canary probe** wired into the runner (§5.5.1);
-- reasoning-token distribution measurement for the pinned Grok release (§5.1);
-- cost/time/storage estimator;
-- 100-cue calibration report.
+  the confirmation gate — **DONE** (`out/behavior/capability-control-2026-09-12/`);
+- the **positive-control** cue pack and its per-model pass rates (§6.7.2) —
+  **DONE, and it FAILED for both local arms** (`out/behavior/positive-control-2026-09-12/`);
+- the **canary probe** wired into the runner (§5.5.1) — **DONE**;
+- reasoning-token distribution measurement for the pinned Grok release (§5.1) —
+  **NOT DONE**, no key on this machine; the xAI arm has never run;
+- cost/time/storage estimator — **DONE** (`behavior plan`);
+- 100-cue calibration report — **PARTIAL**: reports exist for
+  `positive-control-2026-09-12` (4 cues, 120 trials) and
+  `capability-control-2026-09-12` (4 cues, 108 discovery trials); the 100-cue
+  depth is uncollected.
 
 Gate:
 
@@ -1583,8 +1730,9 @@ Gate:
 - no paid request occurs before a human-readable estimate and approval;
 - exact model identity is capturable and aliases are refused in strict mode;
 - null controls meet the declared false-positive envelope;
-- **both models pass the positive control** — otherwise the instrument is not
-  measuring association and the study stops here;
+- **both models pass the positive control** — **MEASURED 2026-09-12: FAILED.**
+  `cap_small` 0.100 and `cap_xl` 0.209 against a 0.50 threshold (§6.7.2). The
+  study stops at this gate until an arm clears it;
 - **the achievable permutation p-floor clears `q` with margin**, and the figure
   is printed in the calibration report (§6.7.1);
 - parser and trial count produce adequate valid/reliable samples;
@@ -1593,6 +1741,10 @@ Gate:
   form of `Δ̂` are all frozen for the pilot.
 
 ### Phase 1 — resumable pilot backend
+
+**Landed 2026-09-11/12, except paid collection.** The 305-cue pilot manifest
+exists (`out/behavior/gpt2-xai-pilot-2026-09-12/manifest.json`) but only arm A
+has trials (24); the xAI arm has never run.
 
 Deliver:
 
@@ -1605,15 +1757,41 @@ Deliver:
 Gate:
 
 - interruption/resume produces no duplicate completed trials;
+- **a second runner on one store is refused, not tolerated.** Added
+  2026-09-12 after measuring the failure: four `behavior run` processes were
+  alive on `out/behavior/positive-control-2026-09-12/trials.sqlite` at the same
+  time, each at ~40% of a core, and the row count did not move for half an hour.
+  Resumption was working exactly as specified — each process re-derived the same
+  remaining schedule, generated the same trials, and lost the `INSERT OR IGNORE`
+  race for each one — so nothing was corrupted, nothing was double-billed, and
+  nothing progressed. The gate above is silent about this because it only asks
+  about *sequential* interruption and resume, which is why the gap survived a
+  test suite that tests resumption with a real `SIGKILL`. `TrialStore.claim_writer`
+  now takes a single-writer lock (pid + host + heartbeat, claimed under
+  `BEGIN IMMEDIATE`) and `Runner.run` holds it for the duration of an arm,
+  releasing on every exit path including a raise; `--force-unlock` exists for a
+  holder a human has confirmed is dead and is never inferred;
 - requested/served identities are present on every API trial;
   `system_fingerprint` is captured **when the provider populates it** and its
   availability is recorded once in the manifest — an absent field never fails a
   trial (§5.5.1);
 - the canary probe ran in every time block and its drift series is reportable;
 - the same manifest + raw database reproduces the compact metrics;
-- no cue receives “confirmed” before held-out data.
+- no cue receives “confirmed” before held-out data;
+- **four later Phase-1 behaviours the runner now guarantees, added 2026-09-12:**
+  a study with one reachable arm refuses rather than dying mid-run (`e0644a6`);
+  a kill is bounded in seconds, not trials (`1ad0472`); `/health` and `inspect`
+  name the writer (`211e753`); the coverage sentence counts cues on disk, not
+  the requested limit (`b879588`); and per-arm run records are emitted and the
+  page declares them (`992d318`).
 
 ### Phase 2 — Behavior page MVP
+
+**Landed 2026-09-11/12.** The page, the loopback server, the landscape, the
+ranked/table view, the cue inspector, the Runs view and the publish path are all
+built and covered by tests. `publish` is a deliberate, labelled act
+(`published_as: "study" | "example"`), and an unfitted landscape says so instead
+of blaming the data.
 
 Deliver:
 
@@ -1639,6 +1817,10 @@ Gate:
 - no UI copy implies internal Grok access or model strength.
 
 ### Phase 3 — held-out confirmation
+
+**NOT STARTED.** Blocked on (a) a human ToS review — nothing in the tree records
+one, and `docs/behavior/TOS-REVIEW.md` is still an empty form — and (b) a paid
+xAI key. No `confirm` verb exists yet.
 
 **Prerequisite — check the provider's terms of service.** This phase ships “a
 shareable redacted artifact” comparing a named commercial model against another
@@ -1671,6 +1853,8 @@ Gate:
 - result ranking is stable enough for the declared trial count.
 
 ### Phase 4 — scale and mechanistic follow-up
+
+**NOT STARTED, and unreachable while the §6.7.2 gate is failing.**
 
 Deliver only after the earlier gates:
 
@@ -1733,7 +1917,8 @@ causal hypothesis about GPT-2; it cannot explain Grok's hidden cause.
 ### Viewer tests
 
 - app/nav agreement for four Nebul.AI pages and three Seer pages;
-- Behavior page with no index, empty study, partial study, and corrupt schema;
+- Behavior page with a missing `behavior.json`, empty study, partial study, and
+  corrupt schema;
 - cue search, filters, selection, permalink, table/map parity, and cross-links;
 - every evidence status and its reason, including `frame-specific`,
   `capability-attributable`, and `indeterminate` associates;
@@ -1802,7 +1987,9 @@ The first research-grade release is done when:
 - a pinned, deterministic, in-process embedder exists and is covered by a
   golden-vector test, and no Behavior trial content has been routed off-box;
 - both models clear the positive control, so the instrument is known to measure
-  association at all;
+  association at all — **tested 2026-09-12 and NOT met: both GPT-2 arms failed
+  (§6.7.2). Clearing it needs an instruction-tuned local model or the paid arm
+  of §5.3;**
 - a strict GPT-2/pinned-Grok study can be planned, costed, run, paused,
   resumed, analyzed, confirmed, and exported;
 - the capability-control arm has run, and no headline effect is reported that
@@ -1968,7 +2155,7 @@ become PCA rather than a promise.
 
 ---
 
-## 17. Revision log — 2026-08-13 review
+## 17. Revision log — 2026-08-13 review, and the 2026-09-11/12 build
 
 ### 17.1 What changed
 
@@ -1984,7 +2171,7 @@ become PCA rather than a promise.
 | 6.4 | Primary statistic is `Δ̂`; added dispersion decomposition, bias-corrected JSD, declared RBO `p`, OOV differential. | Raw MMD² measured the wrong thing; and three separate small-sample biases all pushed in the *same* direction as the capability confound rather than cancelling. |
 | 6.5 | Added compliance-parity gate, informativeness floor, capability-contrast clause, R/G arms, confirmation-partition-only magnitudes, second-embedder caveat. New states `frame-specific` and `capability-attributable`. | Differential attrition biases survivor comparisons even at equal `n`; a model that echoes the exemplar every time has *perfect* reliability and zero content; and discovery effects are selection-inflated by construction. |
 | 6.7 | Added the achievable **p-floor** check and a **positive control**. | Restricted permutation can make confirmation combinatorially impossible regardless of effect size; and with human norms refused and SWOW gated, nothing anchored the instrument at all. |
-| 7.1.1–7.1.3 (new) | Landscape is **PCA**, persistable, reusing `bundles.py:146-166`; UMAP gated on scale; trustworthiness shipped; area encoding; declutter rule. | “Fixed coordinates” and a growing cue set are incompatible under UMAP, and no fitted reducer is persisted anywhere in this codebase. Separately, `validate.py:31-40` measured UMAP producing silhouette 0.88 from *shuffled* data at n=180 — the pilot's exact regime. |
+| 7.1.1–7.1.3 (new) | Landscape is **PCA**, persistable, reusing `bundles.py`'s `_pca_rows` (now returning a `PCAFit`, `bundles.py:179`); UMAP gated on scale; trustworthiness shipped; area encoding; declutter rule. | “Fixed coordinates” and a growing cue set are incompatible under UMAP, and no fitted reducer is persisted anywhere in this codebase. Separately, `validate.py:31-40` measured UMAP producing silhouette 0.88 from *shuffled* data at n=180 — the pilot's exact regime. |
 | 7.1.2 (new) | Colour by preregistered strata; never by a discovered cluster. | `validate.py:41-46` and the README's 0.46–0.62 seed ARI show cluster boundaries are not stable findings at this scale. |
 | 7.2.1 (new) | `indeterminate` associate channel via frequency-difference CI. | 1/40 vs 0/40 is noise, but a set-difference rule rendered it as “model-specific” at full visual weight. |
 | 7.3 | Added: every positioned view states what position means; area not radius. | Generalized from the §16 audit. |
@@ -2024,3 +2211,22 @@ prerequisite that was already blocking `nebulai compare` regardless of this
 feature. The two changes that cost trials — split R/G confirmation arms, and
 minimum within-block counts — apply to the confirmation partition, which is the
 smallest one, and both buy claims the study could not otherwise make.
+
+### 17.4 — 2026-09-11/12 implementation
+
+The build the sections above were written for. Recorded here because until now
+it existed only inline and scattered.
+
+| what | where it landed |
+|---|---|
+| **The Behavior pill, and the page behind it.** `APP_PAGES.nebulai` became four pages; the page shipped as one `BehaviorPage.tsx` with the landscape, ranked/table view, cue inspector and Runs as internal components (§10.2). | `viewer/src/app/slices/shell.ts`, `viewer/src/chrome/BehaviorPage.tsx` |
+| **Phase 0 executed — and its gate FAILED.** The positive control fired on real outputs before a paid trial was spent, and both GPT-2 arms failed it: `cap_small` 0.100, `cap_xl` 0.209 against 0.50 (§6.7.2). The study is halted there. | `out/behavior/positive-control-2026-09-12/`, commits `d631708`, `9c33f5f` |
+| **The calibration report a person reads**, with the achievable p-floor drawn per cue rather than asserted (§6.7.1). | `nebulai behavior calibrate`, `calibration.{json,md}` + `calibration_p_floor.svg`, commit `626b598` |
+| **One writer per store.** Four concurrent `behavior run` processes made no progress for half an hour and corrupted nothing; `TrialStore.claim_writer` now takes a single-writer lock (§11 Phase 1 gate). | `behavior/store.py`, commits `a4a197e`, `211e753` |
+| **Publishing is a deliberate, labelled act.** `nebulai behavior publish` copies one study's `behavior.json` to the path the page reads and stamps `published_as: "study" \| "example"`; nothing is published as a side effect of `analyze`. | `behavior/cli.py`, commit `cc8989a` |
+| **Per-arm run records**, in the shape the Runs view declares. | `behavior/export.py`, commit `992d318` |
+| **The persisted PCA transform** (§7.1.1 item 2). `_pca_rows` returns a `PCAFit`; the exporter writes `pca_mean` / `pca_axes` / `pca_axes_shape`; later cues are placed, not refitted. | `backend/interp/bundles.py`, `behavior/export.py`, `tests/test_behavior_export.py` |
+| **The torch boundary, enforced.** `behavior-local` pins `torch==2.14.0`, `transformers==5.17.0`, `sentence-transformers==6.0.1`; the base install stays torch-free by test. | `pyproject.toml`, `tests/test_behavior_optional_dep.py`, commit `c7b361d` |
+
+Not built, and deliberately so: the `confirm` verb, the held-out partition, and
+any xAI collection — Phase 3 is blocked on a human ToS review and a paid key.

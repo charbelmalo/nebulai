@@ -51,7 +51,14 @@ from typing import Any
 #: Bumped when the patterns or the field registry change, so a log can say
 #: which rules produced it. A reader comparing two exports needs this to know
 #: whether a field's absence means "redacted" or "never existed".
-RULESET = "r1"
+#:
+#: r2 — added the decided-effect keys (`effect_fidelity`, `effect_rule`), the
+#: per-file edit-extent fidelity (`lines_fidelity`, `via`, `n_patch_files`,
+#: `n_deduped`), and the git-snapshot keys (`phase`, `head`, `status_hash`,
+#: `status_lines`, `dirty`, `root_id`, and their fidelities). All
+#: metadata: counts, enum values, and a hash that is deliberately not the
+#: thing it hashes.
+RULESET = "r2"
 
 REDACTED = "<seer:redacted>"
 
@@ -98,19 +105,30 @@ _METADATA = frozenset({
     "cache_write_fidelity", "capture_gaps", "chars", "cli_version",
     "clock_resolution_s", "codex_bin", "compatible", "context_window",
     "cost_usd", "counted", "cumulative", "cwd", "decision", "delta",
-    "duration_api_ms", "duration_ms", "duration_s", "effort", "exit_code",
+    "dirty", "duration_api_ms", "duration_ms", "duration_s",
+    # How an effect label was decided and by which named rule. Enum value and
+    # a rule name we wrote; neither carries anything the agent said.
+    "effect_fidelity", "effect_rule",
+    "effort", "exit_code",
     "first_hook", "golden_version", "gone_since_golden", "has_name",
+    # The git snapshot. `status_hash` is a SHA-256 of `git status --porcelain`
+    # precisely so the paths of a researcher's dirty files never travel; the
+    # rest are a sha, a repo root, a count and two enum values.
+    "head", "head_fidelity", "phase", "root_id", "status_fidelity",
+    "status_hash", "status_lines",
     "history_mode", "is_error", "joined_midstream", "kind", "label",
-    "limit_type", "lines_added", "lines_removed", "mcp_failed",
+    "limit_type", "lines_added", "lines_fidelity", "lines_removed",
+    "mcp_failed",
     "missing_notifications", "missing_requests", "model_requested",
-    "n_changes", "n_events", "n_parts", "n_tools", "n_turns",
+    "n_changes", "n_deduped", "n_events", "n_parts", "n_patch_files",
+    "n_tools", "n_turns",
     "native_categories", "native_session_id", "needs_action",
     "new_since_golden", "note", "num_turns", "outcome", "output_chars",
     "path", "paths", "permission_mode", "provisional", "reasoning",
     "reasoning_fidelity", "reasoning_tokens_estimated", "recovered",
     "request_id", "resets_at", "source", "state", "status", "status_category",
     "stop_reason", "tags", "terminal_reason", "text_retained", "tool",
-    "tools", "total_lines", "transport", "ttft_ms",
+    "tools", "total_lines", "transport", "ttft_ms", "via",
     "unmapped_notifications", "unmapped_requests", "usage", "using_overage",
 })
 

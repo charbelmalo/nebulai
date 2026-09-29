@@ -28,7 +28,7 @@ export interface BootResult {
 export async function bootApp(
   page: Page,
   rung: Rung,
-  opts: { view?: View; frozen?: boolean } = {},
+  opts: { view?: View; frozen?: boolean; hash?: string } = {},
 ): Promise<BootResult> {
   const errors: string[] = [];
   page.on("console", (msg) => {
@@ -45,7 +45,12 @@ export async function bootApp(
   const params = new URLSearchParams({ gpu: rung });
   if (opts.frozen !== false) params.set("frozen", "1"); // pin t for goldens
   if (opts.view && opts.view !== "atlas") params.set("view", opts.view);
-  await page.goto(`/?${params.toString()}`);
+  // The permalink is read ONCE, at boot (boot-shell.ts) — there is no
+  // hashchange listener, by design: a hash rewritten mid-session is this app
+  // mirroring its own state, and re-applying it would fight the store. So a
+  // spec that tests a permalink key has to arrive with it in the URL.
+  const hash = opts.hash ? (opts.hash.startsWith("#") ? opts.hash : `#${opts.hash}`) : "";
+  await page.goto(`/?${params.toString()}${hash}`);
 
   await page.waitForFunction(
     () => window.__perf.bootMs !== undefined && window.__store.getState().dataset !== null,

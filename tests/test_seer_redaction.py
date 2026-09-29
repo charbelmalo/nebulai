@@ -467,4 +467,12 @@ _EXPECTED_KEYS = {
     "terminal_reason", "text_retained", "tool", "tools", "total_lines",
     "transport", "ttft_ms", "unmapped_notifications", "unmapped_requests",
     "usage", "using_overage",
+    # r2 — the decided-effect label and the rule that decided it
+    "effect_fidelity", "effect_rule",
+    # r2 — per-file edit extent from an `apply_patch` envelope, and the
+    # de-duplication of a patch Codex reports twice
+    "lines_fidelity", "n_deduped", "n_patch_files", "via",
+    # r2 — the git snapshot taken at run start and run end
+    "dirty", "head", "head_fidelity", "phase", "root_id",
+    "status_fidelity", "status_hash", "status_lines",
 }

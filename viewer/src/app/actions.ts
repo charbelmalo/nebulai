@@ -20,6 +20,19 @@ export interface AppActions {
    *  uniform), so these are commands, not store writes — the tour reports back
    *  through `$compareTour`. No-ops off the compare view. */
   compareTour(cmd: CompareTourCommand): void;
+  /** Play one step of an episode (P5).
+   *
+   *  A step may name a different model from the one on screen, and loading a
+   *  model is asynchronous, which is exactly why this cannot live in
+   *  `tours.ts`: the store write that installs a dataset must happen here,
+   *  where the loader is. It installs the dataset with `{ keepTour: true }` so
+   *  the episode driving the switch survives its own step — every other caller
+   *  still clears the tour, because a tour's captions name units of the model
+   *  they were written for.
+   *
+   *  Resolves once the step is fully applied, so a caller can await the step
+   *  before advancing rather than racing the fetch. */
+  runEpisodeStep(episodeId: string, step: number): Promise<void>;
 }
 
 export type CompareTourCommand =
@@ -95,4 +108,18 @@ export function requestFlyToPoint(id: number): void {
 
 export function requestCompareTour(cmd: CompareTourCommand): void {
   handlers?.compareTour(cmd);
+}
+
+/** Fire-and-forget an episode step (for click handlers). */
+export function requestEpisodeStep(episodeId: string, step: number): void {
+  handlers
+    ?.runEpisodeStep(episodeId, step)
+    .catch((e) => console.error("[nebulai] episode step failed", e));
+}
+
+/** Awaitable form, for callers that must know the step landed (URL restore,
+ *  tests) rather than assuming it did. Resolves immediately when no shell has
+ *  registered handlers — a chrome-only render has nothing to drive. */
+export function runEpisodeStep(episodeId: string, step: number): Promise<void> {
+  return handlers?.runEpisodeStep(episodeId, step) ?? Promise.resolve();
 }

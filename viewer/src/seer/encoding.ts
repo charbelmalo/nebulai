@@ -148,6 +148,74 @@ export function markInk(action: Action | null | undefined, fidelity: Fidelity): 
   return action ? ACTION_COLOR[action] : NEUTRAL_INK;
 }
 
+// ── R7: foreign data wears foreign clothes ───────────────────────────────────
+//
+// A point on a trajectory is a claim, and the claims are not all the same
+// strength. A turn placed by running the pinned model's own forward pass and
+// projecting its residual stream through a frozen basis is a measurement of
+// that model. A turn placed by a text embedder is a measurement of a *sentence*
+// — a different instrument, reading a closed model we cannot open (the Sydney
+// transcript is the case this exists for). They may sit a millimetre apart in
+// the same frame, so they cannot be drawn the same way.
+//
+// The rule lives here, keyed off `placement_source` from `placement.json` and
+// off nothing else, and `seer-encoding.test.ts` fails if a source has no glyph.
+
+/** Where a coordinate came from. Mirrors `place.py`'s `SOURCE_*` constants;
+ *  `none` is a turn that was never placed, which is a third thing and not a
+ *  coordinate at the origin. */
+export const PLACEMENT_SOURCES = ["pinned_model", "text_embedder", "none"] as const;
+export type PlacementSource = (typeof PLACEMENT_SOURCES)[number];
+
+export interface PlacementGlyph {
+  /** how the path between two placed turns is stroked */
+  stroke: "solid" | "dashed";
+  /** SVG/canvas dash pattern in px; empty for a solid stroke */
+  dash: number[];
+  /** how the turn itself is marked */
+  node: "filled" | "hollow" | "absent";
+  /** the words that must appear beside any figure drawn this way */
+  label: string;
+}
+
+export const PLACEMENT_GLYPH: Record<PlacementSource, PlacementGlyph> = {
+  pinned_model: {
+    stroke: "solid",
+    dash: [],
+    node: "filled",
+    label: "model-internal",
+  },
+  text_embedder: {
+    stroke: "dashed",
+    dash: [4, 3],
+    node: "hollow",
+    label: "NOT model-internal — placed by a text embedder",
+  },
+  none: {
+    stroke: "dashed",
+    dash: [1, 4],
+    node: "absent",
+    label: "not placed — this turn has no coordinate",
+  },
+};
+
+/** The glyph for a placement source, degrading an unknown string to `none`.
+ *
+ *  Unknown degrades to the *weakest* glyph, never to the strongest: a source
+ *  this build has never heard of is by definition not one we can vouch for, and
+ *  drawing it solid would be the single failure R7 exists to prevent. */
+export function placementGlyph(source: string | null | undefined): PlacementGlyph {
+  if (!source) return PLACEMENT_GLYPH.none;
+  return PLACEMENT_GLYPH[source as PlacementSource] ?? PLACEMENT_GLYPH.none;
+}
+
+/** True when a placement may be compared, differenced, or clustered against
+ *  another one. Two different instruments do not share a coordinate system
+ *  even when they share a frame. */
+export function comparablePlacements(a: string | null | undefined, b: string | null | undefined): boolean {
+  return !!a && a === b && a !== "none";
+}
+
 /** Ink for a session state.
  *
  *  Takes a bare string because `time_in_state` arrives from the server keyed by

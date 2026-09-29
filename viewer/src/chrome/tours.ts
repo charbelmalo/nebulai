@@ -11,17 +11,78 @@
  *  findings are: the induction/IOI/SAE stories were computed on gpt2.
  */
 
+import type { Selection as MapSelection } from "../app/slices/atlas";
 import { appStore, type InterpSelection } from "../app/store";
+import { selectSteer, type SteerCell } from "../scene/interp/steer";
 
 export interface TourStep {
-  /** registry feature id to show */
-  feature: string;
+  /** registry feature id to show. Omit for a step that lives on the Map page. */
+  feature?: string;
   /** trace slug for per-trace features; omit for ownPrompts views */
   trace?: string;
   /** cross-view selection to pin (applied via setInterpSelection) */
   selection?: InterpSelection;
+  /** which (alpha, prompt) cell of an intervention sweep this step is about.
+   *  Applied through the same `selectSteer` the slider calls, so an episode
+   *  step and a user drag leave the app in identical states — and so a caption
+   *  that quotes a cell's numbers is standing next to that cell. */
+  steer?: SteerCell;
+
+  /* ── map-page steps (P5 episodes) ─────────────────────────────────────── */
+  /** which page this step is told on; defaults to "interp" */
+  page?: "map" | "interp";
+  /** dataset id to load first. A step may change model mid-episode. */
+  dataset?: string;
+  /** channel id to light the lens with, or null to put the lens away */
+  channel?: string | null;
+  /** filter window in the channel's RAW units — the numbers the caption quotes */
+  channelWindow?: [number, number] | null;
+  /** keyword search to run on the map (the labels the caption names) */
+  search?: string;
+  /** map-page pick to pin — a cluster or a point index in THIS dataset */
+  mapSelection?: MapSelection | null;
+  /** direction id to lay the map out on, or null to put the axis away. Same
+   *  three-state convention as `channel`: `undefined` leaves it alone. */
+  axis?: string | null;
+  /** how far onto that axis, 0–1. Ignored unless `axis` is set. */
+  axisT?: number;
+
   title: string;
   caption: string;
+}
+
+/** What an episode needs in order to be told truthfully.
+ *
+ *  An episode is a claim about a specific artifact: "these eleven tokens sit
+ *  1.53 from the raw centroid" is true of `out/gpt2/channels.json` and of
+ *  nothing else. A deploy that ships without that file must therefore not
+ *  render the episode with the numbers missing, and must not quietly substitute
+ *  another model — it must say what is absent and why (§2.2: a pinned model id
+ *  is never substituted, and absence is "not measured").
+ *
+ *  Every field is a hard requirement, checked against what the app can actually
+ *  see before the episode is offered. */
+export interface TourManifest {
+  /** map dataset id that must be present in `out/index.json` */
+  dataset?: string;
+  /** channel ids that must exist in that dataset's `channels.json` */
+  channels?: string[];
+  /** direction ids that must exist in that dataset's `directions.json`.
+   *
+   *  Checked for PRESENCE, not for renderability. An episode may legitimately
+   *  be about a direction that cannot be drawn — the refusal-style one below
+   *  is exactly that — and gating such an episode on the very property it
+   *  exists to explain would delete the explanation along with the figure. */
+  directions?: string[];
+  /** Internals feature ids that must be live in the registry */
+  features?: string[];
+  /** the space tag every quantity in this episode lives in (see spaces.py).
+   *  Recorded rather than checked: it is what stops a later step from plotting
+   *  this episode's numbers against a quantity from a different basis. */
+  space?: string;
+  /** printed verbatim beside the episode when a requirement is missing, to say
+   *  what would have to exist for it to run */
+  unavailable?: string;
 }
 
 export interface Tour {
@@ -31,6 +92,7 @@ export interface Tour {
   /** tours quote bundle-specific numbers — only offered on this model */
   model: string;
   steps: TourStep[];
+  manifest?: TourManifest;
 }
 
 const IOI = "when-mary-and-john-went-to-the-store-joh";
@@ -173,14 +235,139 @@ export function findTour(id: string): Tour | undefined {
   return TOURS.find((t) => t.id === id);
 }
 
+/** Add an episode to the registry (replacing one with the same id).
+ *
+ *  The three tours above are declared inline because they predate the registry;
+ *  everything since is registered from `episodes.ts`, so that adding an episode
+ *  touches exactly one file and nothing here has to import from the chrome it
+ *  is rendered by. Replacement-by-id rather than append keeps a hot reload from
+ *  stacking duplicates. */
+export function register(tour: Tour): Tour {
+  const at = TOURS.findIndex((t) => t.id === tour.id);
+  if (at >= 0) TOURS[at] = tour;
+  else TOURS.push(tour);
+  return tour;
+}
+
+/** What the app can actually see, for `episodeAvailability` to check against.
+ *  Passed in rather than read from module state so the rule is testable
+ *  without a store, a network, or a built bundle. */
+export interface EpisodeContext {
+  /** dataset ids present in `out/index.json` */
+  datasets: string[];
+  /** channel ids for a dataset, or null when it has no `channels.json`
+   *  (or when the sidecar has not been fetched yet) */
+  channelsFor(datasetId: string): string[] | null;
+  /** live Internals feature ids */
+  features: string[];
+  /** true once the channel sidecar for a dataset has been fetched — "still
+   *  loading" and "measured and absent" must not render the same way */
+  channelsLoaded?(datasetId: string): boolean;
+  /** direction ids for a dataset, or null when it has no `directions.json`
+   *  (or when that sidecar has not been fetched yet) */
+  directionsFor?(datasetId: string): string[] | null;
+  /** true once the direction sidecar for a dataset has been fetched */
+  directionsLoaded?(datasetId: string): boolean;
+}
+
+export type EpisodeAvailability =
+  | { state: "ready" }
+  | { state: "pending"; reason: string }
+  | { state: "unavailable"; reason: string };
+
+/** May this episode be told, and if not, exactly what is missing.
+ *
+ *  Three outcomes, not two. "Pending" exists because a sidecar that has not
+ *  arrived yet is not the same as one that does not exist, and telling the user
+ *  an episode is unavailable while its data is in flight is its own small lie. */
+export function episodeAvailability(tour: Tour, ctx: EpisodeContext): EpisodeAvailability {
+  const m = tour.manifest;
+  if (!m) return { state: "ready" };
+  const hint = m.unavailable ? ` ${m.unavailable}` : "";
+
+  if (m.dataset && !ctx.datasets.includes(m.dataset)) {
+    return {
+      state: "unavailable",
+      reason: `needs the ${m.dataset} map, which this deploy does not ship.${hint}`,
+    };
+  }
+  if (m.channels?.length) {
+    const dsId = m.dataset ?? tour.model;
+    const loaded = ctx.channelsLoaded?.(dsId) ?? true;
+    const have = ctx.channelsFor(dsId);
+    if (!loaded && have === null) {
+      return { state: "pending", reason: `reading ${dsId}/channels.json…` };
+    }
+    const missing = m.channels.filter((c) => !(have ?? []).includes(c));
+    if (missing.length) {
+      return {
+        state: "unavailable",
+        reason:
+          `needs ${missing.join(", ")} in ${dsId}/channels.json — ` +
+          `run \`nebulai channels ${tour.model}\`.${hint}`,
+      };
+    }
+  }
+  if (m.directions?.length) {
+    const dsId = m.dataset ?? tour.model;
+    const loaded = ctx.directionsLoaded?.(dsId) ?? true;
+    const have = ctx.directionsFor?.(dsId) ?? null;
+    if (!loaded && have === null) {
+      return { state: "pending", reason: `reading ${dsId}/directions.json…` };
+    }
+    const missing = m.directions.filter((d) => !(have ?? []).includes(d));
+    if (missing.length) {
+      return {
+        state: "unavailable",
+        reason: `needs ${missing.join(", ")} in ${dsId}/directions.json.${hint}`,
+      };
+    }
+  }
+  if (m.features?.length) {
+    const missing = m.features.filter((f) => !ctx.features.includes(f));
+    if (missing.length) {
+      return {
+        state: "unavailable",
+        reason: `needs the ${missing.join(", ")} view, which is not live here.${hint}`,
+      };
+    }
+  }
+  return { state: "ready" };
+}
+
 /** Apply one tour step through the ordinary store actions. Selection rides the
  *  2a cross-view plumbing (InterpPage pushes it to the driver once ready), so
- *  a step behaves exactly like a user clicking the same entity. */
+ *  a step behaves exactly like a user clicking the same entity.
+ *
+ *  This is the SYNCHRONOUS half: everything that is a plain store write. A step
+ *  that changes model needs a fetch, so loading is `actions.runEpisodeStep`'s
+ *  job and it calls this once the dataset is in place. */
 export function applyTourStep(tour: Tour, stepIdx: number): void {
   const step = tour.steps[stepIdx];
   if (!step) return;
   const st = appStore.getState();
-  st.setInterpFeature(step.feature);
-  if (step.trace !== undefined) st.setInterpTrace(step.trace);
-  st.setInterpSelection(step.selection ?? null);
+  if (step.feature) {
+    st.setInterpFeature(step.feature);
+    if (step.trace !== undefined) st.setInterpTrace(step.trace);
+    st.setInterpSelection(step.selection ?? null);
+  }
+  // Applied after the feature switch: the driver publishes its own opening
+  // selection while loading, and this must be the one that survives.
+  if (step.steer) selectSteer(step.steer);
+  if (step.page === "map") {
+    // `channel: undefined` means "leave the lens as the previous step set it";
+    // `channel: null` means "put it away". They are different instructions and
+    // the distinction is what lets one episode narrate a lens across steps.
+    if (step.channel !== undefined) st.setChannel(step.channel, step.channelWindow ?? null);
+    else if (step.channelWindow !== undefined) st.setChannelWindow(step.channelWindow);
+    if (step.search !== undefined) st.setMapQuery(step.search);
+    if (step.mapSelection !== undefined) st.setSelection(step.mapSelection);
+    // The axis is applied AFTER the selection because `setAxisDirection` does
+    // not touch the selection and the reverse is also true — order is only
+    // fixed so a reader of a step can predict the final state exactly.
+    if (step.axis !== undefined) {
+      st.setAxisDirection(step.axis);
+      if (step.axis !== null) st.setAxisT(step.axisT ?? 1);
+    } else if (step.axisT !== undefined) st.setAxisT(step.axisT);
+  }
 }

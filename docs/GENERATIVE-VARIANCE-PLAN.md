@@ -1,13 +1,16 @@
 # Generative variance — grounding audit, research plan, and UX plan
 
-Status: **approved 2026-08-16; the two unblockable build items have landed, and
-the study itself has not started.** No story has been generated, no scorer has
-been run, **no paid call has been made**, and the question set is not frozen —
-so Phase 0's substance (items 1–7, §10) is still ahead, and it is gated on human
-annotation time rather than on code (§8.4).
+Status: **approved 2026-08-16; scaffolding, drafts and analysis tooling have
+landed 2026-09-11/12, and the study itself has not started.** Items 1, 2, 4, 5,
+6, 8 and 9 of §10 have shipped as drafts or as tooling; item 3 is blocked on a
+paid key and item 7 — the one-way door — is deliberately still shut. No story
+has been generated, no scorer has been run, **no paid call has been made**, and
+the question set is not frozen, so Phase 0's substance is still ahead and what
+remains of it is gated on human annotation time rather than on code (§8.4).
 
 What exists as of this revision is the scaffolding that had to precede any
-spending, both landed with tests:
+spending, plus the drafts and the analysis tooling that landed 2026-09-11/12 —
+all with tests:
 
 - **The §8.3 cost gate**, all three requirements — `cost_gate(...,
   require_price=True)` fails closed on an unpriceable model, `llm.RunBudget`
@@ -19,6 +22,22 @@ spending, both landed with tests:
   instruments. It ships **no questions**: the template in `docs/instruments/`
   documents the format and cannot be frozen, because choosing the real questions
   is the study's central scientific act and is gated on §6.2–6.4.
+- **The annotation kit** — `nebulai variance annotate-sheet`
+  (`backend/variance_cli.py:212`) emits the 50 × 30 sheets, one per annotator
+  plus the §6.5 blind-repeat block, as CSV a human fills in a spreadsheet and
+  JSON the analysis reads back. The instrument hash is stamped into every
+  sheet, so sheets filled against two versions of the questions can never be
+  silently pooled.
+- **The agreement engine** — `backend/agreement.py` behind `nebulai variance
+  agreement` (`:329`): weighted Cohen's κ, Krippendorff's α verified against
+  that paper's published 15-unit example, PABAK, Gwet's AC1, bootstrap CIs and
+  `intra_rater_check`. 30 tests, every one of them on synthetic sheets, because
+  there is no annotation data to run it on.
+
+Alongside those, the two draft instruments landed — 31 `draft_`-prefixed
+questions and 30 `draft_`-prefixed prompts (§10 items 1–2) — and `corpus.py`'s
+prices were re-verified against the live catalogue (§0.3, §10 item 9). None of
+it touched a paid endpoint.
 
 Everything else below remains a proposal to be amended or rejected.
 
@@ -72,7 +91,7 @@ replication, OOV handling — **does not apply to this study at all** (§0.2).
 | What does that do to the cost gate? | Moves it from optional to **mandatory and pre-flight**. `cost_gate` failed OPEN on any model without a corpus price (§0.1 A7), which is exactly the configuration that would let an overnight run bill unbounded. **Fixed 2026-08-16** — opt-in fail-closed, a cumulative run ceiling, and an explicit approval step (§8.3). |
 | What is the headline number? | **The variance ratio `ρ̂` = between-model MMD² ÷ mean within-model MMD²**, with a CI. Not a raw between-model distance. A between-distance with no within-denominator is the exact error §2.2 attributes to the source study. |
 | Does W1 need an embedder? | **No.** The architecture scores *are* the trial vector. This deletes four sections' worth of machinery the sibling plan needs (§0.2). |
-| Does this get a new viewer page? | **No.** Recommend a CLI report + static JSON + a Guide section. The "Behavior" pill the brief assumes is **unbuilt**, and the six pages are a pinned partition across two instruments (§9). |
+| Does this get a new viewer page? | **No.** Recommend a CLI report + static JSON + a Guide section. The "Behavior" pill went to the behavioural-divergence study and **is now built** (seven pinned pages across two instruments); W1 still gets no page and no pill, for the reasons in §9. |
 | What is the scorer floor? | Per-question κ whose **lower CI bound** clears a floor set *relative to the human–human ceiling of 0.7385*, not an absolute 0.8 (§6.2). |
 | Biggest one-way door? | The **question set**. Scores are only comparable within a fixed instrument; changing a question after data collection invalidates every trial already scored (§6.5). |
 | Biggest reversible choice? | Model, trial count, and prompt set. All three can be extended in a later run without invalidating earlier data, provided the question set and scorer are pinned. |
@@ -98,8 +117,8 @@ the brief's stated premise does not match the repository.
 | **A6** | Corpus has four models with pinned endpoints and prices. | **True.** `src/nebulai/corpus.py:52-155`. muse-glimmer-30b ($0.35/$1.50 per M), gemma-4-26b (**$0.00/$0.00**, tied embeddings, the W_E/W_U control), ling-2.6-flash ($0.010/$0.030), mistral-nemo ($0.019/$0.030). `DEFAULT_MAX_COST_USD = 1.00` at :173. `estimate_naming_cost` at :186-195 documents its own shape as an **upper bound** ("Rounded up per batch"). | Gives W1 real prices for §8 rather than guesses. **gemma-4-26b at $0.00 is the obvious W1 subject** — it makes the priority workstream nearly free. But it is an MoE with tied embeddings (:88, :96), which is a *different* generator from the dense untied models, so W1-on-gemma does not generalize to W2's arms without saying so. |
 | **A7** | House rules forbid silent substitution and silent budget downgrade. | **True as written, but per-caller in practice, and the budget gate FAILS OPEN.** `llm.py:55` `IdentityError`, `:64` `BudgetError` are centrally defined. `cost_gate` (:175) returns `None` — permitting the call — when the model has no corpus price, printing that "the ceiling cannot be enforced for it" (:198). It is invoked from only four sites: `backend/name.py:782,858` and `frontends/probe.py:420,432` (via `_probe_cost_gate`, :261-269). `chat_openai` (:448) has **no gate of its own**. | **This is the single most important operational finding for W1.** A new W1 runner calling `chat_openai` directly inherits *no* budget protection, and a model outside `CORPUS` silently bypasses the ceiling. Since GPT-2 cannot participate (A12) every W1 arm is paid, so this is a live financial risk. §8.3 makes closing it a Phase 0 gate. **Closed 2026-08-16**: `require_price=True` fails closed, `RunBudget` adds the cumulative ceiling the per-call gate never had, and `chat_openai`'s gap is addressed by routing responses through `RunBudget.charge_response` rather than by adding a fifth per-call gate. |
 | **A8** | Projection-honesty validators exist and are applied. | **True, and still applied.** `backend/validate.py:91` `trustworthiness_score`, `:134` `seed_stability`, `:210` `null_baseline`. `scale_cluster_kwargs` (:66) is genuinely called at :401. The docstring at :33-46 records the two measured caveats: silhouette **0.88 on shuffled noise vs 0.43 on real data** at n=180, and leaf-mode ARI 0.37 vs eom 1.00. | W1 inherits a working honesty harness for free. The shuffled-noise result is a **direct warning for W1's own scale**: ~30 prompts × 40 trials = ~1,200 points is above the n=180 danger zone, but any *per-prompt* view (40 points) is far below it. Per-prompt projections must be null-tested or not shipped. |
-| **A9** | The feature would be "a mode inside the Behavior page." | **FALSE — the Behavior page does not exist.** Nebul.AI's nav is **three** pills: `viewer/src/chrome/apps/nav.ts:APP_CHROME.nebulai.nav` = Semantic map / Internals / Guide. `viewer/src/app/slices/shell.ts:36` types exactly six pages; `:46-49` partitions them `nebulai: ["map","interp","guide"]`, `seer: ["seer","sessions","snapshot"]`. `viewer/tests/unit/app-pages.test.ts:29` hardcodes `ALL_PAGES` as those six and pins pills == `APP_PAGES` in order, no page owned twice, none orphaned. There is no `BehaviorPage.tsx` in `viewer/src/chrome/`. | The brief's integration target is a mode inside an **unbuilt page**. `BEHAVIORAL-DIVERGENCE-PLAN.md` §8.1 already reserves that same unbuilt pill for a *different* study. Adding one for W1 means editing four files *and* a pinned test invariant, to fight a sibling plan for a slot neither has built. **§9 recommends not doing it.** |
-| **A10** | A PCA projection is persistable for a fixed coordinate system. | **FALSE as implemented.** `backend/interp/bundles.py:146-166` `_pca_rows` computes the mean at :152 and the axes at :158-164 as **locals**, then returns only `(coords, evr, total_var)` at :166. The transform is discarded. | `BEHAVIORAL-DIVERGENCE-PLAN.md` §7.1.1 point 2 assumes this function yields a persistable transform. It does not. **If** W1 ever ships a fixed prompt-landscape, `_pca_rows` needs a variant returning `(mean, axes)` too. Since §9 recommends no projection for W1, this is *deferred, not fixed* — flagged so the sibling plan does not inherit the wrong assumption. |
+| **A9** | The feature would be "a mode inside the Behavior page." | **FALSE — the Behavior page does not exist.** Nebul.AI's nav is **three** pills: `viewer/src/chrome/apps/nav.ts:APP_CHROME.nebulai.nav` = Semantic map / Internals / Guide. `viewer/src/app/slices/shell.ts:36` types exactly six pages; `:46-49` partitions them `nebulai: ["map","interp","guide"]`, `seer: ["seer","sessions","snapshot"]`. `viewer/tests/unit/app-pages.test.ts:29` hardcodes `ALL_PAGES` as those six and pins pills == `APP_PAGES` in order, no page owned twice, none orphaned. There is no `BehaviorPage.tsx` in `viewer/src/chrome/`. | The brief's integration target is a mode inside an **unbuilt page**. `BEHAVIORAL-DIVERGENCE-PLAN.md` §8.1 already reserves that same unbuilt pill for a *different* study. Adding one for W1 means editing four files *and* a pinned test invariant, to fight a sibling plan for a slot neither has built. **§9 recommends not doing it.** **Superseded 2026-09-11:** the page was built by the sibling study — `viewer/src/chrome/BehaviorPage.tsx` exists, `APP_PAGES.nebulai` is four pills (`map`, `behavior`, `interp`, `guide`) and the pinned `ALL_PAGES` is seven. See §9. W1's recommendation — no page — is unchanged. |
+| **A10** | A PCA projection is persistable for a fixed coordinate system. | **FALSE as implemented.** `backend/interp/bundles.py:146-166` `_pca_rows` computes the mean at :152 and the axes at :158-164 as **locals**, then returns only `(coords, evr, total_var)` at :166. The transform is discarded. | `BEHAVIORAL-DIVERGENCE-PLAN.md` §7.1.1 point 2 assumes this function yields a persistable transform. It does not. **If** W1 ever ships a fixed prompt-landscape, `_pca_rows` needs a variant returning `(mean, axes)` too. Since §9 recommends no projection for W1, this is *deferred, not fixed* — flagged so the sibling plan does not inherit the wrong assumption. **Closed 2026-09-11:** `_pca_rows` (`bundles.py:179`) now returns a `PCAFit` carrying `mean` and `axes`, and `pca_transform()` (`:164`) re-projects new rows into that fitted frame. See §9's A10 note. W1's n≈40 objection to shipping a projection at all is untouched. |
 | **A11** | An embedder is reachable on **port 11435** (not stock 11434). | **True per the tree's own corrected record; not re-probed by me.** `backend/embed.py:17-31` documents the 2026-08-13 correction verbatim, including that the earlier "nothing serves it" verdict was wrong *because it probed :11434*. It records mxbai-embed-large, 334M params, F16 GGUF, 1024-dim on :11435. **I did not send a probe**, so I am reporting the file's record, not a measurement. Note :45-51: the ollama tag is a **mutable** F16 GGUF, so it cannot satisfy "pinned to an exact revision". | Moot for W1 — §0.2 shows W1 needs no embedder. Recorded so the next reader does not repeat the :11434 mistake. If a prompt-landscape is ever added, the mutable-tag problem at :45-51 applies and must be solved, not ignored. |
 | **A12** | GPT-2 could serve as a free local arm. | **FALSE, on three grounds — two now measured.** (1) *No generation path*: `backend/interp/gpt2_numpy.py` has `forward` (:129) and `logit_lens` (:183) and **no `generate`, no sampling, no KV cache**; `__init__` (:88) refuses any non-gpt2 id. (2) **Hard architectural cap, measured**: the loaded model reports **`n_ctx = 1024`**. A ~5,000-word story is ~6,700 tokens, so GPT-2 **cannot represent one at all** — it tops out near 750 words. This is a wall, not a slowdown. (3) **Speed, measured**: forward-pass wall clock on this machine was 0.384–0.412 s at T=16–64, 0.557 s at T=256, and **1.052 s at T=512**, with the materialized trace reaching **349.9 MB at T=512** and growing quadratically in the attention term. With no KV cache, generating *k* tokens costs *k* full forward passes over the whole prefix — so even a maximum-length 1024-token (~750-word) story is **roughly 12–15 minutes**, and 1,200 of them is on the order of **250+ hours** single-threaded. | **Every W1 and W2 arm is a paid API call**, and the reason is now stronger than "too slow": at `n_ctx = 1024` GPT-2 is *categorically incapable* of the task, so no amount of compute rescues it. This promotes the cost gate from a nicety to a Phase 0 blocker (§8.3) and makes gemma-4-26b's $0.00 endpoint (A6) strategically important rather than incidental. |
 
@@ -148,9 +167,38 @@ measurement:
   `nebulai-data/` directory on this machine. Either the path is stale or the
   directory is elsewhere. **Consequence:** do not rely on those backups
   existing when planning any re-export.
+  **RESOLVED 2026-09-11 — the path was right and the search was wrong.** The
+  directory exists at `/Users/charbelmalo/Developer/nebulai-data/.pre-redaction-backup/`
+  (20 MB, 5 files). It is a dotted directory inside a location `mdfind` does
+  not index, which is why two searches missed it. `docs/ONBOARDING.md` now
+  carries the verified path, size and file list.
 - **Live pricing.** `corpus.py` prices were verified 2026-08-12 *by its own
   header comment* (:50-51). I did not re-query OpenRouter. All §8 figures
   inherit that staleness and must be re-checked at Phase 0.
+  **RE-VERIFIED 2026-09-11 against the live public catalogue** (443 entries,
+  `https://openrouter.ai/api/v1/models`, no key required, via
+  `scripts/probe_endpoints.py`). Drift found, per §10 item 9:
+
+  | corpus key | endpoint | recorded in/out (USD per M) | live in/out | drift |
+  |---|---|---|---|---|
+  | `muse-glimmer-30b` | `meta/muse-glimmer-30b` | 0.35 / 1.50 | **0.30 / 1.10** | **CHANGED** (−0.05 / −0.40) |
+  | `gemma-4-26b` | `google/gemma-4-26b-a4b-it:free` | 0.0 / 0.0 | 0.0 / 0.0 | none |
+  | `mistral-nemo` | `mistralai/mistral-nemo` | 0.019 / 0.030 | 0.019 / 0.030 | none |
+  | `ling-2.6-flash` | `inclusionai/ling-2.6-flash` | 0.01 / 0.03 | **not listed** | **MISSING** |
+
+  Two consequences, and neither is "update the numbers and move on":
+
+  1. `muse-glimmer-30b` got **cheaper**, so every §8 cost figure that used it
+     is an over-estimate rather than an under-estimate. Budgets built on it are
+     safe; the numbers are simply wrong in the harmless direction. They are
+     still wrong, and the drift after four weeks is the argument for re-probing
+     at the start of every paid phase rather than trusting a header comment.
+  2. `ling-2.6-flash` is **not in the catalogue at all**. That is recorded as
+     `missing`, not as free and not as unchanged, and it is emphatically not
+     resolved to a similar id: `llm.py`'s `cost_gate(..., require_price=True)`
+     fails closed on exactly this, and substituting a near-match id is the
+     failure mode the pinned-id rule exists to prevent. Any phase that wants
+     this model must first establish where it is served and at what price.
 
 ---
 
@@ -339,9 +387,11 @@ What W1 takes from the existing system, and what it must build.
 | Cost ceiling | **Reuse `cost_gate`, after fixing its fail-open branch** — **built 2026-08-16** as `cost_gate(..., require_price=True)` plus `llm.RunBudget` for the cumulative run ceiling | `llm.py:175,198`. A7. See §8.3 — this was a build, not a pure reuse. |
 | Budget/identity errors | **Reuse `BudgetError` / `IdentityError`** | `llm.py:55,64`. |
 | Instrument freeze | **Built 2026-08-16** — `backend/instrument.py`: file format, content hash, `require_frozen()`, load-time tamper check, `require_compatible()`. Ships no questions. | §6.5's one-way door, mechanised. The trial matrix it emits is exactly the `Units.vectors` shape above, so the reuse win is realised rather than asserted. |
-| Persistable PCA transform | **Build, only if a landscape ships** | A10 — `bundles.py:146-166` discards mean and axes. §9 recommends deferring. |
+| Persistable PCA transform | **Already built (2026-09-11) — reuse if a landscape ever ships** | `bundles.py` `PCAFit` (:147) + `pca_transform` (:164), built by the sibling study. §9 still recommends no projection for W1. |
 | Story generation runner | **Build** | Nothing in the tree generates long-form fiction. |
 | Architecture scorer | **Build** | The core new component, and the only one §6 governs. |
+| Agreement / reliability statistics | **Built 2026-09-11** — `backend/agreement.py`, `backend/variance_cli.py` | §6.2–§6.5 mechanised: weighted κ, α, PABAK, AC1, bootstrap CIs, floor-on-lower-bound, intra-rater check. 30 tests on synthetic sheets. |
+| Annotation sheets | **Built 2026-09-11** — `nebulai variance annotate-sheet` | The 50 × 30 grid plus the §6.5 repeat block, instrument-hash stamped. Emits empty sheets only; nothing here fills one. |
 | Embedder integration | **Do not build** | §0.2 — not needed for this study. |
 
 Net: W1 builds **three** things (generation runner, scorer, cost-gate fix) and
@@ -350,9 +400,10 @@ because §6.5 described it as a policy rather than as code. Policies that are
 only written down are not mechanisms, and this one guards the study's most
 expensive irreversible step.
 
-**As of 2026-08-16 the cost-gate fix and the instrument freeze are built and
-tested; the generation runner and the scorer are not.** Both remaining items sit
-behind Phase 0 items 1–6, which are human work.
+**As of 2026-09-11 the cost-gate fix, the instrument freeze, the annotation kit
+(`variance annotate-sheet`) and the agreement engine (`backend/agreement.py`)
+are built and tested; the generation runner and the scorer are not.** Both
+remaining items sit behind Phase 0 items 1–6, which are human work.
 
 ---
 
@@ -493,9 +544,13 @@ later without invalidating earlier data.
 
 ## 8. Cost envelope
 
-All figures use `corpus.py` prices (G8), which were verified 2026-08-12 by that
-file's own header and **not re-verified by me** (§0.3). They are estimates from
-token arithmetic, not measurements, and must be re-derived at Phase 0.
+All figures use `corpus.py` prices (G8). **Re-verified 2026-09-11 against the
+live OpenRouter catalogue (§0.3): `muse-glimmer-30b` moved to 0.30 / 1.10 and
+`ling-2.6-flash` is no longer listed at all.** Except where a row says
+otherwise, the figures below still use the 2026-08-12 numbers and are therefore
+over-estimates. They are estimates from token arithmetic, not measurements, and
+must be re-derived — with `nebulai variance prices` — immediately before
+Phase 1.
 
 ### 8.1 W1 generation
 
@@ -507,10 +562,11 @@ Assume ~6,700 output tokens per ~5,000-word story, short prompts, 1,200 trials:
 | **gemma-4-26b** | 0.00 / 0.00 | **$0.00** |
 | ling-2.6-flash | 0.010 / 0.030 | ≈ $0.245 |
 | mistral-nemo | 0.019 / 0.030 | ≈ $0.248 |
-| muse-glimmer-30b | 0.35 / 1.50 | ≈ **$12.19** |
+| muse-glimmer-30b | 0.30 / 1.10 (live 2026-09-11; was 0.35 / 1.50) | ≈ **$8.95** |
 
-**muse-glimmer-30b alone exceeds `DEFAULT_MAX_COST_USD = 1.00` by ~12×**
-(`corpus.py:173`). At frontier pricing (~$3/$15) the same run is ≈ $121.68.
+**muse-glimmer-30b alone exceeds `DEFAULT_MAX_COST_USD = 1.00` by ~9×**
+(`corpus.py:173`) at the live price, and by ~12× at the price recorded in
+`corpus.py`. At frontier pricing (~$3/$15) the same run is ≈ $121.68.
 
 ### 8.2 W1 scoring
 
@@ -611,6 +667,18 @@ studies competing for one unbuilt pill is a coordination problem, and W1 —
 which is a **measurement**, not an interactive instrument — is the weaker
 claimant.
 
+> **Contention resolved 2026-09-11.** The "Behavior" pill went to the
+> behavioral-divergence study, which has now built it: `APP_PAGES.nebulai` is
+> `["map", "behavior", "interp", "guide"]`, `shell.ts`'s `Page` gained
+> `"behavior"`, and `app-pages.test.ts`'s `ALL_PAGES` is seven pages with every
+> invariant intact. W1 keeps the recommendation below unchanged — **no page, no
+> pill** — and ships a CLI report plus a static JSON artifact. This is not W1
+> losing an argument it might re-open later: the reasoning above (a table does
+> not need a 3-D scene; a landscape at n≈40 per prompt sits in the regime this
+> project measured as manufacturing islands) is unaffected by who holds the
+> pill. Recorded in `BEHAVIORAL-DIVERGENCE-PLAN.md` §8.1 as well, so the two
+> plans cannot disagree about it.
+
 **What W1 actually needs to show** is a ranked table of questions by variance
 contribution, each with κ, CI, and evidence state. That is a table. It does not
 need a 3-D scene, and it does not need the shared bundle.
@@ -627,6 +695,14 @@ where this project *measured* silhouette 0.88 on shuffled noise (G4). Not
 worth it for a table. If it is ever built, `_pca_rows` must first be extended
 to return `(mean, axes)`.
 
+> **A10 closed 2026-09-11.** `backend/interp/bundles.py`'s `_pca_rows` now
+> returns a `PCAFit` carrying `mean` and `axes` alongside the coordinates, and
+> `pca_transform(rows, mean, axes)` re-projects new rows into a fitted frame.
+> The three bundles that use it gained `pca_mean`, `pca_axes` and
+> `pca_axes_shape` additively — no existing key changed. **This removes the
+> blocker, not the objection**: the n≈40 argument above stands on its own, and
+> W1 still gets no projection.
+
 ---
 
 ## 10. Phases and gates
@@ -637,15 +713,66 @@ Each gate has a stop condition. A gate that cannot fail is not a gate.
 
 *No stories are generated in this phase.*
 
-1. Draft ~30 architecture questions with explicit scoring rubrics. — *open;
-   authored by a human, not by the tooling that validates them.*
-2. Draft ~30 prompts. — *open.*
-3. Generate a **small** pilot set of stories for the gold set only. — *open.*
+1. Draft ~30 architecture questions with explicit scoring rubrics. — **DRAFT
+   landed 2026-09-11, still open as an instrument.** `docs/instruments/story-architecture.draft.json`
+   holds 31 questions (13 likert, 14 binary, 4 unit), each with a `note`
+   beginning `RUBRIC` that says what a rater must see to answer. Every id is
+   `draft_`-prefixed, which `freeze()` refuses (item 7 stays shut). Three
+   questions are written so a story that does not address them yields a
+   MISSING answer rather than a default, because a rubric with no "cannot tell"
+   branch manufactures agreement. **This is a draft for a human to edit, not an
+   instrument.** The plan's requirement that a human author the questions is
+   not satisfied by this file; what the file removes is the blank page.
+2. Draft ~30 prompts. — **DRAFT landed 2026-09-11, same status; its design
+   claim corrected 2026-09-12.** `docs/instruments/story-prompts.draft.json`
+   holds 30 `draft_`-prefixed prompts stratified on four preregistered axes —
+   `constraint` (open|moderate|specified), `frame` (none|named), `subject`
+   (domestic|remote), `length_cue` (absent|present) — so the prompt set can
+   carry a design rather than being thirty unrelated sentences. **It is a
+   one-factor-at-a-time (star) design, not a crossing, and an earlier version
+   of this line said "crossed", which was wrong.** Measured from the file:
+   `frame` and `length_cue` have 4 of 30 prompts on their off-level and
+   `subject` has 6, and **10 of the 24 cells of the full crossing are
+   occupied**. That supports a main-effect contrast against the base prompt
+   `draft_p01_open_domestic`; it supports no interaction and no per-axis
+   between-prompt variance component, because such a component would be
+   estimated from four cells. The file now carries a `design` block stating
+   this, and `tests/test_variance_agreement.py` recomputes every count in that
+   block from the prompts, so the description cannot drift back into a wish
+   when a prompt is added or re-stratified. The human who takes item 2 over
+   must choose: preregister main effects against the base only, or expand
+   toward the crossing first.
+3. Generate a **small** pilot set of stories for the gold set only. — **BLOCKED,
+   not open.** This needs a paid generator, and there is no OpenRouter,
+   Anthropic, OpenAI or xAI key on this machine. The local models available
+   (GPT-2 small/XL, SmolLM2-135M) cannot produce stories an architecture
+   instrument could be validated on, and using them would validate the
+   instrument against a text distribution the study will never score. Nothing
+   was generated and nothing was faked. Unblocking condition: one key with a
+   ceiling, plus §8.3's `cost_gate` — and re-running `nebulai variance prices`
+   (item 9's tool) at that moment, because the ceiling is only as good as the
+   prices it is set against.
 4. Two annotators independently label 50 stories × 30 questions. — *open, and
-   this is the binding constraint (§8.4), not a code task.*
+   this is the binding constraint (§8.4), not a code task.* **The kit is
+   built**: `nebulai variance annotate-sheet` emits per-annotator CSV/JSON
+   sheets (50 × 30) from a question set and a story list, so the human work
+   starts from a filled-in grid instead of a spreadsheet someone invents.
+   Sheets also carry the §6.5 blind-repeat block and are stamped
+   `"instrument_frozen": false` while the set is a draft, so a draft-filled
+   sheet can never be silently pooled with a real one.
 5. Compute `κ_H` (human–human), `κ_M` (human–model), α, PABAK/AC1, raw
-   agreement — **per question**, with CIs. — *open.*
-6. Run the intra-rater repeatability check (§6.5). — *open.*
+   agreement — **per question**, with CIs. — **TOOLING DONE 2026-09-11; no data
+   to run it on.** `backend/agreement.py` implements weighted Cohen's κ
+   (unweighted/linear/quadratic), Krippendorff's α (nominal/ordinal/interval,
+   verified against Krippendorff 2011's published 15-unit example: 0.6914 /
+   0.8067 / 0.8108 against 0.691 / 0.807 / 0.811), PABAK generalized to k
+   categories, Gwet's AC1, and item-level percentile bootstrap CIs.
+   `nebulai variance agreement` runs it per question over filled sheets and
+   applies the §6.2 floor **relative to the measured κ_H ceiling**, never
+   against 1.0. 30 tests on synthetic sheets with designed answers.
+6. Run the intra-rater repeatability check (§6.5). — **TOOLING DONE; no data.**
+   `intra_rater_check()` compares the re-rate agreement against the inter-rater
+   figure and returns the §3.3 "the ruler is moving" verdict.
 7. Freeze the question set and record its hash. — **mechanism done
    2026-08-16, freeze not performed and must not be.** `backend/instrument.py`
    provides `QuestionSet.freeze()`, a content hash over `(id, text, scale)` in
@@ -656,10 +783,24 @@ Each gate has a stop condition. A gate that cannot fail is not a gate.
    `example_` id namespace, which `freeze()` refuses outright — so the format
    can be read without the template becoming an instrument. The freeze itself
    waits on items 1–6, by design.
+   **Extended 2026-09-11:** the reserved namespace is now
+   `RESERVED_ID_PREFIXES = ("example_", "draft_")`, so the ~60 draft questions
+   and prompts added under items 1–2 are refused by `freeze()` for the same
+   reason the template is. **The one-way door remains CLOSED.** Verified by
+   test, not by inspection: `tests/test_variance_agreement.py` asserts that
+   freezing the shipped draft set raises.
 8. Fix `cost_gate` per §8.3. — **done 2026-08-16.** See §8.3 for what landed.
-9. Re-verify `corpus.py` prices against live pricing (§0.3). — *open; requires
-   checking live provider pricing, and it must be redone immediately before
-   Phase 1 regardless, since a price verified weeks early is not verified.*
+9. Re-verify `corpus.py` prices against live pricing (§0.3). — **DONE
+   2026-09-11**, against the live public OpenRouter catalogue with no key
+   (`scripts/probe_endpoints.py`, 443 entries). One price changed
+   (`muse-glimmer-30b`, downward) and one model is **not listed at all**
+   (`ling-2.6-flash`, recorded as `missing`, never resolved to a near-match).
+   The table and both consequences are in §0.3. The instruction in the previous
+   wording still stands and is now evidence-backed rather than precautionary:
+   **this must be redone immediately before Phase 1**, because a price that
+   moved once in four weeks can move again in one. The re-check is now a
+   shipped verb — `nebulai variance prices` (`backend/variance_cli.py:552`) —
+   so redoing it is one command rather than a script re-run.
 
 **GATE 0 — stop conditions.** Halt and report if: fewer than ~20 questions
 clear the §6.2 floor on their lower CI bound (an instrument too thin to carry a
@@ -726,10 +867,13 @@ has been added (§4.2).
 
 Ranked by value per unit of risk. Includes a rejection, as requested.
 
-1. **Fix the fail-open `cost_gate` regardless of whether W1 proceeds.**
-   `llm.py:198` permits unbounded spend for any model absent from `CORPUS`, and
-   `chat_openai` (:448) has no gate at all. This is a standing financial defect
-   in the repo, not a W1-specific one. Cheapest, highest-value item here.
+1. ~~**Fix the fail-open `cost_gate` regardless of whether W1 proceeds.**~~ —
+   **DONE 2026-08-16** (§8.3, §10 item 8): `cost_gate(..., require_price=True)`
+   fails closed, `llm.RunBudget` adds the cumulative ceiling, and spending
+   requires a printed pre-flight estimate followed by an explicit `approve()`.
+   The original entry read: `llm.py:198` permits unbounded spend for any model
+   absent from `CORPUS`, and `chat_openai` (:448) has no gate at all — a
+   standing financial defect in the repo, not a W1-specific one.
 
 2. **Run Phase 0 alone and treat it as its own deliverable.** A per-question
    reliability table for a 30-question narrative-architecture instrument,
@@ -742,22 +886,22 @@ Ranked by value per unit of risk. Includes a rejection, as requested.
    future plan in this repo that declares an absolute κ floor is one measurement
    away from discarding a scorer for outperforming its ground truth.
 
-4. **Give `_pca_rows` a persistable variant now, while it is cheap.**
-   `bundles.py:146-166` discards mean and axes;
-   `BEHAVIORAL-DIVERGENCE-PLAN.md` §7.1.1 already assumes it does not. Returning
-   `(mean, axes)` is a small additive change today and a data-migration
-   tomorrow.
+4. ~~**Give `_pca_rows` a persistable variant now, while it is cheap.**~~ —
+   **DONE 2026-09-11**: `_pca_rows` (`bundles.py:179`) returns a `PCAFit` with
+   `mean` and `axes` and `pca_transform()` re-projects, built by the
+   behavioural-divergence page rather than by W1. W1 still ships no projection,
+   for the n≈40 reason in §9.
 
-5. **Resolve the "Behavior" pill contention before either study builds
-   anything.** Two plans claim one unbuilt slot (A9). Decide now whether
-   Behavior is one page with modes or two separate surfaces — the
-   `app-pages.test.ts` partition invariant makes this expensive to get wrong.
+5. ~~**Resolve the "Behavior" pill contention before either study builds
+   anything.**~~ — **RESOLVED 2026-09-11**: the pill went to behavioural
+   divergence, which built it as its own page; W1 ships a CLI report plus
+   static JSON and no pill (§9). The `app-pages.test.ts` partition invariant
+   now pins seven pages across the two instruments.
 
-6. **Locate or write off `nebulai-data/.pre-redaction-backup/`.**
-   `docs/ONBOARDING.md:170` claims it holds pre-redaction originals; I could not
-   find it anywhere on this machine (§0.3). Either fix the path or correct the
-   doc, because a recovery plan that points at a missing directory is worse than
-   no recovery plan.
+6. ~~**Locate or write off `nebulai-data/.pre-redaction-backup/`.**~~ —
+   **RESOLVED 2026-09-11** (§0.3): the directory exists (20 MB, 5 files) and
+   `docs/ONBOARDING.md` now carries the verified path. The path was right and
+   the search was wrong — it is a dotted directory `mdfind` does not index.
 
 7. **REJECTED — crossing W1 with Seer to measure "agent run variance."**
    Superficially the same shape (repeated trials, structured scoring,
@@ -806,3 +950,22 @@ Ranked by value per unit of risk. Includes a rejection, as requested.
   the additive change, the three unaffected callers, and the round-trip test
   that would make the promise real. This is A10 in this document's audit,
   propagated to the plan that depends on it.
+- **2026-09-11 — drafts, annotation kit, agreement engine, price
+  re-verification; A9 and A10 closed by the sibling study.** §10 items 1, 2, 4,
+  5, 6 and 9 landed: two `draft_`-namespaced instruments no `freeze()` will
+  accept, `nebulai variance annotate-sheet` and `nebulai variance agreement`
+  over `backend/agreement.py`, and a re-probe of `corpus.py`'s prices against
+  the live catalogue that found one price moved and one model missing. In the
+  same window the sibling study built the Behavior page (A9) and gave
+  `_pca_rows` a persistable `PCAFit` (A10), so both audit rows, the §5 reuse
+  map and recommendations 4 and 5 are now closed rather than outstanding. The
+  study still has not started: no story generated, no sheet filled, no paid
+  call made, and the question set deliberately unfrozen.
+- **2026-09-12 — the draft prompt set's design claim corrected.** §10 item 2
+  described the 30 draft prompts as *crossed* on four axes. They are not: the
+  file is a one-factor-at-a-time (star) design around `draft_p01_open_domestic`,
+  with 4, 4 and 6 prompts on the off-levels of `frame`, `length_cue` and
+  `subject`, and 10 of the full crossing's 24 cells occupied. The file now
+  carries a `design` block saying so and `tests/test_variance_agreement.py`
+  re-derives every count in it from the prompts themselves, so the claim cannot
+  drift back into a wish.

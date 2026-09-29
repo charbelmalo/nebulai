@@ -255,6 +255,25 @@ def load_token_units(
                 resolved = revision
 
     V = np.ascontiguousarray(V, dtype=np.float32)
+
+    # The glitch-lens channels, computed on the PRE-CENTRED rows.
+    #
+    # This is the whole SolidGoldMagikarp experiment and the reason these two
+    # numbers are taken here rather than downstream: a glitch token's signature
+    # is that its embedding row never moved from initialisation, which is a fact
+    # about the raw matrix. Three lines below, `V` is mean-centred — that is the
+    # map's geometry, and it is a DIFFERENT space (`W_E.centered`). Computing
+    # the norm after centring would measure distance-to-centroid twice and the
+    # low-norm knot would vanish into it.
+    #
+    # `centroid_dist` is distance to the mean row of the CURATED set actually
+    # mapped, not of the full vocabulary, because that is the set whose points
+    # the channel is aligned to; the formula string says so.
+    V64 = V.astype(np.float64)
+    raw_mean = V64.mean(axis=0)
+    we_norm = np.linalg.norm(V64, axis=1)
+    we_centroid_dist = np.linalg.norm(V64 - raw_mean, axis=1)
+
     if center:
         # mean-centering counters the anisotropy of token embedding spaces
         V = V - V.mean(axis=0, keepdims=True)
@@ -275,6 +294,39 @@ def load_token_units(
     if spec is not None and source == "remote-range":
         # the honest headline: what the map did NOT download to exist
         meta["total_gb_not_downloaded"] = spec.total_gb
+
+    # The glitch lens, handed to the CLI through the `_`-prefixed side channel
+    # `backend/export.py:public_meta` strips — `meta` is otherwise copied verbatim
+    # into nebulai.json, and 2 × 50k floats do not belong in a map's meta block.
+    # The CLI turns these into `channels.json`; nothing else reads them.
+    raw_space = "W_E.raw" if which == "input" else "W_U.raw"
+    matrix = "W_E" if which == "input" else "W_U"
+    meta["_channels"] = [
+        {
+            "id": "we_norm",
+            "label": f"row norm ‖{matrix}[t]‖₂",
+            "space": raw_space,
+            "method": "l2",
+            "formula": f"sqrt(sum({matrix}[t]**2)) on the raw stored rows",
+            "fidelity": "deterministic",
+            "units": "l2",
+            "values": we_norm,
+        },
+        {
+            "id": "we_centroid_dist",
+            "label": f"distance to the {matrix} centroid",
+            "space": raw_space,
+            "method": "l2_to_mean",
+            "formula": (
+                f"sqrt(sum(({matrix}[t] − mean_row)**2)); mean_row is the mean "
+                f"over the CURATED rows this map contains, on the raw stored "
+                f"matrix (before the map's own mean-centering)"
+            ),
+            "fidelity": "deterministic",
+            "units": "l2",
+            "values": we_centroid_dist,
+        },
+    ]
 
     return Units(
         ids=ids,

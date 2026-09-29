@@ -30,6 +30,29 @@
  *  simply is not there and the chart above it is exactly as legible. Nothing a
  *  researcher reads off this page depends on it.
  *
+ *  ## Why there is no ensemble envelope here (Attractors P3)
+ *
+ *  The plan asks for the fan's envelope in `SessionFieldDriver` **and** here.
+ *  It is built there and deliberately NOT built here, which is a deviation and
+ *  is recorded rather than skipped.
+ *
+ *  An envelope is a per-step band: at step k of a protocol, the ensemble's runs
+ *  were spread from p10 to p90 of some quantity. Every part of that sentence is
+ *  something this file has just finished refusing. There is no step — the x
+ *  axis is wall-clock time inside a window, and two runs of one protocol do not
+ *  reach step k at the same instant, so a band drawn across this axis would be
+ *  a quantile over runs that are at different places in the protocol. There is
+ *  no quantity — one mote per event, and an event has no magnitude, so the only
+ *  thing a band could be a band OF is the recency channel, which is a clock and
+ *  not a measurement. And there is no ensemble on this page: the live view
+ *  watches whatever is running now, which is a fleet, not a repeat of one
+ *  protocol under one seed base.
+ *
+ *  The right home for the envelope is therefore the sessions field, where a
+ *  turn has a step index, a position and a magnitude, and where the ensemble's
+ *  membership arrives from the document that defines it. See
+ *  `scene/sessions/envelope.ts` and `SessionFieldDriver#buildEnvelope`.
+ *
  *  Positions come from `LiveDriver.field()`. This file never touches the time
  *  window, the lane geometry or the encoding — see `FieldSample`.
  */
@@ -181,7 +204,11 @@ export class LiveField {
     this.h = Math.max(1, h);
     this.dpr = dpr;
     if (!this.renderer) return;
-    this.renderer.setPixelRatio(dpr);
+    // Cap at 2 like every other driver in the repo. This one is fragment-bound
+    // (one full-viewport additive sprite), so cost scales with the pixel count:
+    // a 3x display was rendering 2.25x the fragments of the capped path for a
+    // difference no one can see on a glow field.
+    this.renderer.setPixelRatio(Math.min(dpr, 2));
     this.renderer.setSize(this.w, this.h, false);
     // Pixel space, y down, matching the 2D canvas exactly: (0,0) top-left.
     this.camera.left = 0;

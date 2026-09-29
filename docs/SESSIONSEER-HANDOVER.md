@@ -4,9 +4,13 @@ What exists, what does not, and the things that took a while to learn and would
 otherwise have to be learned again. The design and its justification live in
 [`SESSIONSEER.md`](SESSIONSEER.md); this file is about the state of the build.
 
-As of 2026-08-05: **M0 through M5 are shipped and tested.** The build is
-feature-complete against the plan except for the two things §6 says were never
-built.
+As of 2026-09-12: **M0 through M5 are shipped and tested**, and the build has
+since grown past the plan: `seer place` (P2/D5), `seer run --repeat` +
+`seer ensemble` with its own cost gate (P3), and four public-corpus adapters
+behind `seer import` (D7). Three things §6 once listed as unbuilt now exist
+(the novelty ledger behind `Effect.NO_NEW_INFORMATION`, `apply_patch` line
+counts, git snapshots); a fourth, the Hermes TUI gateway, was investigated and
+refused in writing. Two remain, and §6 says which and why.
 
 ---
 
@@ -14,9 +18,9 @@ built.
 
 | | |
 |---|---|
-| Python | `src/nebulai/seer/` — ~11.6k lines incl. `adapters/` |
-| Tests | `tests/test_seer_*.py` — 445 tests across 13 files |
-| Viewer | `viewer/src/seer/{contract,client}.ts`, `viewer/src/chrome/SeerPage.tsx` |
+| Python | `src/nebulai/seer/` — ~17.0k lines incl. `adapters/` |
+| Tests | `tests/test_seer_*.py` — 551 tests across 18 files |
+| Viewer | `viewer/seer.html` → `viewer/src/seer-main.ts`; `viewer/src/seer/{contract,client,live,encoding}.ts`; `viewer/src/chrome/{SeerPage,SeerLive,SeerThoughts,ComparePanel,EnsemblePanel}.tsx` |
 | Styles | `viewer/src/styles/chrome.css` (`.seer-*`) |
 | Fixtures | `tests/fixtures/seer/` — recorded output from all three agents, plus `vocabulary-golden.json` |
 
@@ -28,6 +32,10 @@ Two M5 modules sit off that path and are easier to read once the rest makes
 sense: `redaction.py` (the field registry that computes an event's content
 level, and the export-time redactor) and `recover.py` (what happens to a run
 whose capture process died).
+
+Three more sit off the path and are best read last: `budget.py` (why a repeat
+can refuse to price itself), `ensemble.py` (the fan), `place.py` (the Nebul.AI
+seam).
 
 ## 2. Running it
 
@@ -54,7 +62,10 @@ PYTHONPATH=src "$REPO"/.venv/bin/python -m pytest tests/ -q
 cd viewer && npx vitest run && npx tsc --noEmit -p tsconfig.json
 ```
 
-Current: **646 Python tests, 93 vitest, tsc clean.**
+Current (re-run 2026-09-12): **2000 Python tests** — 1999 pass, 1 skipped, none
+fail; `test_compare.py::test_palette_covers_every_built_map`, the one failure
+the previous count recorded, passes again against the local `out/`. **704
+vitest across 44 files, tsc clean.**
 
 Regenerating the vocabulary golden — deliberately, never to make a red test
 green (see §3, M5):
@@ -63,13 +74,17 @@ green (see §3, M5):
 PYTHONPATH=src "$REPO"/.venv/bin/python tests/test_seer_vocabulary.py --write
 ```
 
-CLI verbs: `run attach reconcile protocol list show compare export analyze serve
-reindex delete install uninstall watch import-spool`. `export` takes
-`--redact {metadata,command,content}`; `delete` refuses without `--yes` and
-describes the run instead.
-HTTP routes: `/seer/{health,runs,run/<id>,run/<id>/analysis,compare,export,live,
-start,attach,reconcile,cancel,reindex,annotate}`, plus
-`DELETE /seer/run/<id>`. `/seer/export` accepts `?redact=<level>`.
+CLI verbs: `run attach reconcile protocol list show ensemble place compare
+export analyze serve reindex delete install uninstall watch import
+import-spool`. `export` takes `--redact {metadata,command,content}`; `delete`
+refuses without `--yes` and describes the run instead. `run` takes
+`--repeat N` / `--seed-base` / `--max-cost-usd` / `--acknowledge-unpriced`;
+`import` takes `{amongus,ctfish,village,transcript}` and a local path (nothing
+is downloaded).
+HTTP routes: `/seer/{health,runs,run/<id>,run/<id>/analysis,ensembles,
+ensemble/<id>,compare,export,live,start,attach,reconcile,cancel,reindex,
+annotate}`, plus `DELETE /seer/run/<id>`. `/seer/export` accepts
+`?redact=<level>`.
 
 ## 3. What each milestone actually delivered
 
@@ -148,6 +163,11 @@ each of the 57 native kinds produced the day it was captured — event types and
 action. Same rule as the protocol gate: fail closed on removal, open on
 addition.
 
+**Beyond the plan (Attractors P2/P3/D7).** `place.py` projects a run's turns
+into a frozen persona space; `ensemble.py` + `budget.py` turn `run --repeat N`
+into a fan with a cost gate; `adapters/corpus_*.py` import Among Us / ctfish /
+AI Village / transcript records as `RECONCILED` runs.
+
 ## 4. Decisions worth not re-litigating
 
 **The plan's "hooks add < 5 ms p95" exit criterion was replaced.** Measured on
@@ -164,16 +184,24 @@ the agent is unaffected when nothing is listening. (Timing used zsh's
 `Edit` inputs contain the text; counting its newlines at the adapter and keeping
 only the integers means churn is computable without any file content entering
 the log. This stays inside the `metadata` privacy tier. `taxonomy.edit_extent()`
-returns `None` for tool shapes that carry no line information — Codex's
-`apply_patch` among them — and that `None` is what makes `edit_churn` say
-"missing" for a Codex run instead of `0.0`.
+returns `None` for tool shapes that carry no line information, and that `None`
+is what makes `edit_churn` say "missing" instead of `0.0`. Codex's `apply_patch`
+used to be one of those shapes; it is now counted one level up, by
+`adapters/patches.py`, from the patch envelope the model wrote (see §6).
+`edit_extent()` itself still returns `None` for it, deliberately — it reads a
+tool input and has no envelope parser, and two layers counting the same edit
+would be worse than one layer declining to.
 
-**`no_new_information_streak` reports `missing`, not `0`.** No adapter currently
-emits `Effect.NO_NEW_INFORMATION`, so the rule cannot run. Reporting `0` would
-say "we looked and there were none". The second loop rule,
-`repeat_read_without_change`, was designed to be decidable from the log alone:
-if nothing edited the target between two identical reads, the second read cannot
-have returned anything new.
+**`no_new_information_streak` reports `missing` when nothing was decidable, not
+`0`.** The live adapters now emit `Effect.NO_NEW_INFORMATION`, but only under
+the three `NoveltyLedger` rules in §6 and never on a guess, so a run in which no
+span carried an information effect still reports `missing` — reporting `0` would
+say "we looked and there were none". When the rule does run it also reports the
+weakest `effect_fidelity` among the spans it counted and the `rules_used`, so a
+streak assembled from the heuristic rule cannot be read as a counted one. The
+second loop rule, `repeat_read_without_change`, was designed to be decidable
+from the log alone: if nothing edited the target between two identical reads,
+the second read cannot have returned anything new.
 
 **`progress_evidence` has no headline number, deliberately.** Its eight items
 are not commensurable and "68% done" would be a worse instrument than the
@@ -249,6 +277,20 @@ of what we wrote, so it leaves with the rest. Take it and the round trip is
 byte-exact; leave it and every install/uninstall cycle grows the file by one
 line.
 
+**The first run of a protocol has no cost estimate at all** — `missing`, never
+`$0`, because the agent's spend leaves through a door this process cannot see.
+An unpriced `--repeat` needs `--acknowledge-unpriced`, and the acknowledgement
+is recorded in the ensemble.
+
+**Placement crosses the boundary as HTTP + a file, not an import.** `nebulai`
+never imports `seer`, so `place` calls a running `live_server` and writes
+`placement.json`; `--in-process` exists and is deliberately not the default.
+
+**Corpus fidelity is per field, not per run.** A record with real timestamps
+and no token usage cannot be described by one envelope `Fidelity`; ctfish has
+no clock at all, so `ts` is synthetic, marked missing, and flagged
+`order_only`.
+
 ## 5. Gotchas that cost time
 
 - **A running `seer serve` does not reload changed code.** An adapter fix that
@@ -295,25 +337,141 @@ line.
 
 ## 6. What is left
 
-Nothing from the milestone plan. The things below were noticed during the build
-and deliberately not done:
+Nothing from the milestone plan. The things §6 used to list as *not built* now
+exist, and three whole surfaces landed after them (P2/P3/D7); what remains is
+below them, with the reason each one stayed out.
 
-- **The Hermes TUI gateway was not built.** M3's plan named it alongside the
-  Codex app-server; Hermes exposes no equivalent control surface, so Hermes is
-  captured driven (`hermes -z`) or observed (hooks) only. There is no attached
-  or reconciled Hermes run, and nothing pretends otherwise.
-- **Git/fs snapshots were not built.** A run records the branch and repo root it
-  started in, not the tree it left behind.
+### Built since the first handover
+
+- **`Effect.NO_NEW_INFORMATION` is emitted, but only where a payload decides
+  it.** `adapters/novelty.py` holds a `NoveltyLedger` with exactly three rules
+  and no fourth: **R-A `repeat_read`** — the same lookup key
+  (tool name plus the arguments that determine its answer) seen twice with no
+  intervening edit, `DETERMINISTIC`; **R-B `identical_output`** — this call's
+  output is byte-identical to the previous invocation's, compared by SHA-256 so
+  no text is retained, `DETERMINISTIC`; **R-C `zero_result_search`** — a search
+  whose result text matches a sentinel list ("no matches found", "no files
+  found", …), `HEURISTIC`, because the sentinel list is a stated rule over a
+  proxy and not the payload itself. Anything else gets no label at all: the
+  adapters never guess. Two fidelities are carried side by side and must not be
+  merged — `Source.fidelity` still describes the *event* (`NATIVE` when the
+  agent told us the call finished), and a new payload pair
+  `effect_fidelity` / `effect_rule` describes the *effect label we attached*.
+  Collapsing them would either downgrade a native event or launder a guess as a
+  fact. `SpanRecord` carries both through the reducer, and
+  `no_new_information_streak` now reports `hits`, the **weakest** fidelity of
+  any labelled span, and the `rules_used` that produced them — so a streak built
+  out of R-C reads `heuristic` at the analysis layer and cannot be mistaken for
+  a counted one. A run in which nothing was decidable still reports `missing`,
+  never `0`. Invalidation is scoped on purpose: a lookup that names a file is
+  retired only by an edit to *that* file; a search that ranges over a tree the
+  payload does not bound is retired by **any** edit, because the conservative
+  error (declining to label) is the cheap one.
+- **`edit_churn` counts Codex `apply_patch` hunks.** `adapters/patches.py`
+  parses the `*** Begin Patch` envelope — which is not a unified diff — and
+  returns a per-file `FileEdit`. Counted files are `DETERMINISTIC`. A file whose
+  extent cannot be counted exactly is `MISSING` with a note, never `0`: a
+  `*** Delete File:` directive says a file is gone and never says how big it
+  was, an unrecognised hunk-body line poisons only its own file, and a patch
+  with no `*** End Patch` makes every file in it missing because we cannot tell
+  which one was truncated. One uncountable file does not poison its counted
+  siblings. `taxonomy.edit_extent()` still returns `None` for `apply_patch` —
+  it reads a tool *input* and has no envelope parser, and two layers counting
+  the same edit would be worse than one layer declining to. Double counting is
+  prevented by a consume-once `_patch_extents` ledger in the Codex adapters: a
+  native `file_change` item for a path a shell `apply_patch` already counted
+  pops one pending entry and emits nothing (it carries no counts anyway), so a
+  genuinely later edit to the same file still counts. A `file_change` item with
+  nothing pending is emitted with `lines_fidelity: "missing"`.
+- **Git snapshots bracket every driven run.** `runner.git_snapshot()` records,
+  at run start and immediately before run completion, the HEAD sha and a
+  SHA-256 of `git status --porcelain` (the hash, not the paths — a researcher's
+  dirty file names are not something a captured run needs to carry, and
+  equality is all the comparison needs). They ride on the existing store as
+  `EventType.GIT_SNAPSHOT` events distinguished by `phase`; there is no second
+  store. Git is addressed as `/usr/bin/git -C <root>` with an explicit `cwd`,
+  never a bare `git`, because the agent's environment is passed through
+  unchanged by design and its `PATH` is not ours to trust for a provenance
+  record. The honesty rule here is one line wide: `git status --porcelain`
+  prints nothing for a clean tree **and** prints nothing when it errors, so the
+  helper returns `None` and never `""`. Outside a repository, or when git fails
+  or times out, `head`/`status_hash`/`status_lines` are `None`,
+  `head_fidelity`/`status_fidelity` are `MISSING`, `dirty` is `None` (not
+  `False`), and a `note` states the reason. A repository with no commits has no
+  HEAD and a perfectly readable tree, and reports exactly that — half present,
+  half missing. `_repo_context()` still returns `None` outside a repository,
+  because `store._index` and `attach.py` both read `None` as "no repo" and that
+  contract is older than this change.
+- **The Hermes TUI gateway was investigated and deliberately not built.** The
+  paragraph below is the reason, in full, so nobody re-opens it on a hunch.
+- **Placement (P2/D5).** `place.py` projects a captured run's turns into a
+  frozen Nebul.AI persona space. Nothing is fitted; an uncaptured turn gets no
+  coordinate.
+- **The fan and its cost gate (P3).** `seer run --repeat N` plus
+  `seer ensemble`, over `ensemble.py`'s per-step median and envelope, Wilson
+  intervals and split-half reliability, with `budget.py` refusing to invent a
+  price it cannot see.
+- **Four public-corpus adapters (D7).** `seer import
+  {amongus,ctfish,village,transcript}` maps somebody else's finished record into
+  the canonical vocabulary as a `RECONCILED` run, with per-field fidelity.
+
+### Why there is no attached Hermes capture
+
+An *attached* capture needs one thing SessionSeer cannot get from Hermes: a
+read-only side channel onto a session it did not itself start. Codex provides
+exactly that — `codex app-server` is a long-lived JSON-RPC server with
+`thread/list` and `thread/read`, so the app-server adapter can enumerate threads
+it never drove and replay their items. Hermes has four surfaces and none of them
+is that.
+
+`hermes -z` prints only the final response text; there is no event stream to
+parse, which is why `HermesOneshotAdapter` emits lifecycle events and nothing
+else, and why `--pass-session-id` is no help (it injects the id into the
+*system prompt*, not into stdout). The ACP surface (`hermes acp --check`) is a
+bidirectional JSON-RPC **client** protocol: it carries `tool_call`,
+`agent_thought_chunk`, `agent_message_chunk` and `plan`, but no token usage and
+no thread-history or replay method — it is a way to *be* the front end, not a
+way to watch one. The TUI gateway itself (`~/.hermes/hermes-agent/tui_gateway/`:
+`entry.py`, `server.py`, `ws.py`, `transport.py`, `event_publisher.py`) is
+spawned by `hermes --tui` over **stdio**; it opens no listener and binds no
+port, so there is nothing to connect to. `tui_gateway/ws.py::handle_ws` is a
+*mountable handler*, not a server, and its single mount is the dashboard's own
+FastAPI app (`hermes_cli/web_server.py:9729`, `@app.websocket("/api/ws")`),
+gated behind `_DASHBOARD_EMBEDDED_CHAT_ENABLED`, `_ws_auth_ok` and
+`_ws_request_is_allowed` — so reaching it means standing up and authenticating
+against the Hermes dashboard, not attaching to a TUI.
+
+Even granted a connection, the gateway is architecturally single-tenant.
+`tui_gateway/server.py:838` — `dispatch(req, transport)` — does
+`t = transport or _stdio_transport; token = bind_transport(t)`, which pins every
+write produced by a request, *including events the handler emits*, to the
+transport that asked; and `_close_sessions_for_transport` (`server.py:539`)
+shows sessions are owned by the transport that created them. A second client
+therefore observes only the sessions it drives itself, which is a *driven*
+capture with extra steps, not an attached one. The one genuine fan-out is the
+`/api/pub` sidecar, and it is reachable only via `HERMES_TUI_SIDECAR_URL`, read
+from the environment at TUI process start (`ui-tui/src/gatewayClient.ts:40`)
+and set by the dashboard's `/api/pty` when *it* spawns the child
+(`web_server.py:9462`) — so it cannot be attached to an already-running TUI.
+Finally, `session.history` (`server.py:4463`) needs a live in-process session
+and otherwise falls back to reading `state.db`, which SessionSeer's
+`HermesStateDbReconciler` already reads directly and at a lower fidelity it
+declares. Hermes is therefore captured driven (`hermes -z`), observed (hooks),
+or reconciled (`state.db`) — never attached, and nothing pretends otherwise.
+
+### Still not built
+
 - **The vocabulary golden covers the two stream adapters and the three hook
   adapters, not the app-server.** Its 68 notification kinds are pinned by
   `protocol.py` against the build's own generated schema, which is a stronger
   check than a recorded replay — but it is a different mechanism, and the two
   are not one gate.
-- `Effect.NO_NEW_INFORMATION` is never emitted (see §4). An adapter that could
-  label it — a search returning zero hits, a read of a file already in context —
-  would turn one loop rule from `missing` into a number.
-- `edit_churn` is blind on Codex until `apply_patch` inputs are parsed for
-  hunk line counts. The patch format carries them; nothing reads it yet.
 - The CSV export is spans-only by design, and says so in its own first line. If
   someone wants a flat *event* CSV, that is a new format, not a change to this
   one.
+- **`place` has no HTTP route.** It is a CLI verb that calls Nebul.AI's live
+  server and writes `placement.json`; the Seer server does not expose one, so a
+  viewer cannot ask for a placement it does not already have on disk.
+- **The ensemble fan has one axis: the completed turn.** `FAN_METRICS` counts
+  events and actions per step; there is no depth series — nothing below the turn
+  — so a fan cannot yet be drawn over sub-turn structure.

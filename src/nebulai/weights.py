@@ -126,6 +126,15 @@ def load_safetensor_f32(
 
 HF_ENDPOINT = os.environ.get("HF_ENDPOINT", "https://huggingface.co")
 
+# Per-request socket timeout, in seconds. 60 s is right on a healthy link and
+# wrong on a congested one: a 64 MiB coalesced span at 8 KB/s cannot finish
+# inside any fixed budget chosen for a fast network, and the retry loop then
+# burns four attempts before failing a build that was merely slow. The override
+# exists so a long remote build can be made to *wait* rather than to fail, and
+# it is an environment variable rather than a flag because it is a property of
+# the machine's link, not of the map being built.
+DEFAULT_TIMEOUT_S = float(os.environ.get("NEBULAI_HTTP_TIMEOUT", "60"))
+
 INDEX_NAME = "model.safetensors.index.json"
 SINGLE_NAME = "model.safetensors"
 
@@ -206,7 +215,7 @@ def resolve_revision(
     *,
     endpoint: str = HF_ENDPOINT,
     opener: Opener | None = None,
-    timeout: float = 30.0,
+    timeout: float = DEFAULT_TIMEOUT_S,
 ) -> str:
     """Resolve a branch/tag/sha to the commit sha it currently points at.
 
@@ -272,7 +281,7 @@ class RemoteCheckpoint:
         *,
         endpoint: str = HF_ENDPOINT,
         opener: Opener | None = None,
-        timeout: float = 60.0,
+        timeout: float = DEFAULT_TIMEOUT_S,
     ) -> None:
         self.repo = repo
         self.revision = revision  # resolved sha (see .open)
@@ -297,7 +306,7 @@ class RemoteCheckpoint:
         *,
         endpoint: str = HF_ENDPOINT,
         opener: Opener | None = None,
-        timeout: float = 60.0,
+        timeout: float = DEFAULT_TIMEOUT_S,
     ) -> "RemoteCheckpoint":
         """Pin the revision, then map keys to shards. No tensor bytes are read."""
         token = token if token is not None else hf_token_from_env()

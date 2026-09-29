@@ -1,8 +1,9 @@
 /* seer.css — Seer's stylesheet barrel (entry: src/seer-main.ts).
    The mirror of nebulai.css: the same shared base + chrome primitives, then
-   only Seer's three page partials. Nebulai's map and Internals sheets are not
-   here, so a Seer document does not download the styling for pages it cannot
-   navigate to.
+   Seer's four page partials and the one component sheet shared between two of
+   them (the local-session picker, which both the Snapshot Map and the Sessions
+   plotter mount). Nebulai's map and Internals sheets are not here, so a Seer
+   document does not download the styling for pages it cannot navigate to.
 
    chrome.responsive.css is shared and still LAST — it deliberately overrides
    earlier rules and depends on winning the cascade by load order. It carries a
@@ -12,7 +13,9 @@
 
 @import "./chrome.base.css";
 @import "./chrome.primitives.css";
+@import "./seer.picker.css";
 @import "./seer.snapshot.css";
 @import "./seer.sessions.css";
 @import "./seer.live.css";
+@import "./seer.keyword.css";
 @import "./chrome.responsive.css";

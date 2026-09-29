@@ -75,9 +75,17 @@ def _run_tokens(args: argparse.Namespace) -> None:
     if args.source == "api":
         from .frontends.api_tokens import load_api_token_units
 
+        # Same rule as `compare`: an in-process encoder has no endpoint, so
+        # never resolve one — a discovery probe would fire and a LAN address
+        # would end up stamped into an artifact that never touched it.
+        from .backend import embed as _embed_mod
+
+        api_embed_host = (
+            _embed_mod.LOCAL_EMBED_HOST if args.embed_api == "local" else args.embed_host
+        )
         units = load_api_token_units(
             args.model,
-            embed_host=args.embed_host,
+            embed_host=api_embed_host,
             embed_model=args.embed_model,
             api=args.embed_api,
             api_key=os.environ.get("EMBED_API_KEY") or os.environ.get("OPENAI_API_KEY"),
@@ -87,7 +95,7 @@ def _run_tokens(args: argparse.Namespace) -> None:
         )
         print(
             f"[1/5] loaded {len(units)} token units from {args.model} via "
-            f"{args.embed_model}@{args.embed_host} — api text embeddings, "
+            f"{args.embed_model}@{units.meta['embed_host']} — api text embeddings, "
             f"NOT model-internal geometry (vocab {units.meta['vocab_size']}, "
             f"curated to {units.meta['kept']}) [{t()}]"
         )
@@ -227,10 +235,780 @@ def _run_tokens(args: argparse.Namespace) -> None:
             f"{geometry_line} -> UMAP -> HDBSCAN"
         ),
     )
+    # per-point scalars beside the map (glitch lens). A front-end that offers
+    # none writes no file at all — absence is "not measured", and the viewer
+    # renders no channel UI rather than an empty one.
+    from .backend.channels import CHANNELS_FILENAME, channels_from_meta, write_channels
+
+    chans = channels_from_meta(units.meta)
+    ch_path = None
+    if chans:
+        ch_path = write_channels(
+            out_dir / CHANNELS_FILENAME,
+            model=args.model,
+            revision=str(units.meta.get("revision", "")),
+            n_points=len(units),
+            channels=chans,
+        )
+
     _update_index(Path(args.out))
     print(f"[5/5] exported [{t()}]")
     for p in (json_path, png, html):
         print(f"  {p}")
+    if ch_path is not None:
+        print(f"  {ch_path}  ({', '.join(c.id for c in chans)})")
+
+
+def _run_channels(args: argparse.Namespace) -> None:
+    """Recompute `channels.json` for an already-built map.
+
+    Channels and coordinates have separate lifetimes — the same argument that
+    gives `nebulai rename` its own subcommand. A channel is a scalar per point;
+    adding one must not cost a UMAP run, and must not be able to move a single
+    point of a map whose goldens are pinned.
+
+    The alignment is checked rather than assumed: `channels.json` is aligned to
+    `nebulai.json` BY INDEX, so if the curated vocabulary has shifted under the
+    map (a tokenizer revision moved, `--max-tokens` differs) every point past
+    the first change would be mislabelled. This refuses instead.
+    """
+    from .backend.channels import CHANNELS_FILENAME, channels_from_meta, write_channels
+    from .frontends.tokens import load_token_units
+
+    out_root = Path(args.out)
+    for model in args.models:
+        dataset_id = model.replace("/", "__")
+        out_dir = out_root / dataset_id
+        map_path = out_dir / "nebulai.json"
+        if not map_path.exists():
+            raise SystemExit(f"no map at {map_path} — build it with `nebulai tokens {model}`")
+
+        doc = json.loads(map_path.read_text())
+        meta = doc["meta"]
+        unit = meta.get("unit", "")
+        if unit not in ("token_embedding", "token_unembedding"):
+            raise SystemExit(
+                f"{dataset_id}: channels are only defined for token maps "
+                f"(this map's unit is {unit!r}). Phase 0 ships the W_E glitch "
+                f"lens; SAE/neuron channels are a later front-end change, not a "
+                f"reinterpretation of this file."
+            )
+
+        ch_path = out_dir / CHANNELS_FILENAME
+        if ch_path.exists() and not args.recompute:
+            print(f"{dataset_id}: {ch_path} exists — pass --recompute to rewrite")
+            continue
+
+        t = _timer()
+        want = [int(p["unit_ref"]["index"]) for p in doc["points"]]
+        units = load_token_units(
+            meta.get("model", model),
+            center=bool(meta.get("centered", True)),
+            # `--max-tokens` truncates the curated list from the front, so
+            # rebuilding the full curation and clipping it reproduces any
+            # truncated map exactly — and the identity check below proves it did
+            max_tokens=len(want),
+            revision=str(meta.get("revision", "main")),
+            which=meta.get("which", "input"),
+        )
+        if list(units.ids) != want:
+            first = next(
+                (i for i, (a, b) in enumerate(zip(units.ids, want)) if a != b), "length"
+            )
+            raise SystemExit(
+                f"{dataset_id}: the curated vocabulary no longer matches the "
+                f"built map ({len(units.ids)} rows vs {len(want)} points, first "
+                f"difference at {first}). channels.json is aligned by INDEX, so "
+                f"writing it now would mislabel every point past that "
+                f"difference. Rebuild the map."
+            )
+
+        chans = channels_from_meta(units.meta)
+        if not chans:
+            print(f"{dataset_id}: this front-end offers no channels — nothing written")
+            continue
+        write_channels(
+            ch_path,
+            model=meta.get("model", model),
+            revision=str(units.meta.get("revision", "")),
+            n_points=len(want),
+            channels=chans,
+        )
+        print(f"{dataset_id}: wrote {len(chans)} channels to {ch_path} [{t()}]")
+        for c in chans:
+            s = c.stats()
+            print(
+                f"  {c.id:<20} {c.space:<14} min {s['min']:.3f}  "
+                f"max {s['max']:.3f}  mean {s['mean']:.3f}  missing {s['n_missing']}"
+            )
+
+
+def _map_space(meta: dict) -> str:
+    """The space tag of a built map's own point vectors.
+
+    Read from the map's `meta`, never guessed: `centered` decides between
+    `W_E.raw` and `W_E.centered`, and those are deliberately different spaces
+    (the whole glitch-token experiment is about rows that never moved from
+    initialisation, which is a fact about the raw rows).
+    """
+    from .spaces import Space, SpaceFamily, we_space
+
+    unit = meta.get("unit", "")
+    if unit == "token_unembedding":
+        return str(Space(SpaceFamily.WU_RAW))
+    if unit == "token_embedding":
+        return str(we_space(bool(meta.get("centered", True))))
+    raise SystemExit(
+        f"directions are defined over token maps for now; this map's unit is "
+        f"{unit!r}. An SAE or neuron map's points live in a different space and "
+        f"need their own space tag before a direction can be projected onto "
+        f"them (D2 is not a warning that can be waived)."
+    )
+
+
+def _load_map_vectors(
+    out_dir: Path, model: str
+) -> tuple[dict, np.ndarray, list[int], str]:
+    """(map doc, source vectors, unit indices, resolved revision) for a token map.
+
+    The revision comes back from the loader rather than out of `nebulai.json`:
+    a map built before the meta carried one has no `revision` key at all, and
+    writing the empty string into a sidecar would silently replace a resolved
+    commit sha with nothing (§2.2 — the sha is recorded, never blank).
+
+    Rebuilds the front-end's `Units` and proves the curation still lines up with
+    the exported points, exactly as `_run_channels` does — a direction projected
+    onto a shifted vocabulary would mislabel every point past the shift, and the
+    resulting channel would look perfectly ordinary.
+    """
+    from .frontends.tokens import load_token_units
+
+    jp = out_dir / "nebulai.json"
+    if not jp.exists():
+        raise SystemExit(f"no map at {jp} — build it with `nebulai tokens {model}`")
+    doc = json.loads(jp.read_text())
+    meta = doc["meta"]
+    _map_space(meta)  # refuses a non-token map before the expensive load
+    want = [int(p["unit_ref"]["index"]) for p in doc["points"]]
+    units = load_token_units(
+        meta.get("model", model),
+        center=bool(meta.get("centered", True)),
+        max_tokens=len(want),
+        revision=str(meta.get("revision", "main")),
+        which=meta.get("which", "input"),
+    )
+    if list(units.ids) != want:
+        first = next((i for i, (a, b) in enumerate(zip(units.ids, want)) if a != b), "length")
+        raise SystemExit(
+            f"{out_dir.name}: the curated vocabulary no longer matches the built "
+            f"map (first difference at {first}). Projections are aligned by "
+            f"INDEX — refusing to write one. Rebuild the map."
+        )
+    return (
+        doc,
+        np.asarray(units.vectors, dtype=np.float32),
+        want,
+        str(units.meta.get("revision", "")),
+    )
+
+
+def _direction_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
+    from .backend.channels import CHANNELS_FILENAME
+    from .backend.directions import DIRECTIONS_FILENAME
+
+    out_dir = Path(args.out) / args.model.replace("/", "__")
+    return out_dir, out_dir / DIRECTIONS_FILENAME, out_dir / CHANNELS_FILENAME
+
+
+def _run_intervene(args: argparse.Namespace) -> None:
+    """Sweep one intervention over alpha and write a curve bundle.
+
+    The bundle is what an episode reads; it is a measurement, never a model.
+    D6 is enforced by absence here as everywhere else: this command has no
+    `--save-model`, no `--export-weights`, and no code path that could grow one
+    without `tests/test_intervene.py::test_no_weight_export` failing.
+
+    The alpha grid always contains 0, and the 0 row installs no hook at all, so
+    its `identical_to_baseline` flag is a real assertion about the run rather
+    than a label. If it ever prints False, the bundle is telling you the
+    harness is broken — which is the only honest thing for it to do.
+    """
+    import datetime as _dt
+    import json as _json
+
+    from .backend.interp import intervene as _iv
+    from .backend.interp.gpt2_numpy import GPT2Numpy
+
+    out_dir, dpath, _ = _direction_paths(args)
+    t = _timer()
+    model = GPT2Numpy(args.model)
+
+    alphas = [float(a) for a in args.alpha]
+    if 0.0 not in alphas:
+        alphas = [0.0] + alphas
+        print("[intervene] alpha=0 added: a sweep without its control is a line, not a result")
+    alphas.sort()
+    prompts = list(args.prompt)
+    if not prompts:
+        raise SystemExit("--prompt is required (repeat it for more than one)")
+
+    sae_tensors = None
+    meta_extra: dict = {}
+    if args.verb == "clamp":
+        if args.feature is None:
+            raise SystemExit("--feature is required for clamp")
+        from .backend.interp.bundles import SAE_HOOK, SAE_REPO, load_sae_weights
+
+        cfg, sae_tensors, _sp = load_sae_weights()
+        hook_layer = _iv.hook_layer(
+            f"sae.L{int(cfg['hook_point_layer'])}.{SAE_REPO}", n_layer=model.n_layer
+        )
+        meta_extra = {
+            "sae_repo": SAE_REPO,
+            "sae_hook": SAE_HOOK,
+            "sae_hook_layer": int(cfg["hook_point_layer"]),
+            "hook_layer": hook_layer,
+            "hook_layer_note": (
+                f"{SAE_HOOK} is the stream ENTERING block "
+                f"{int(cfg['hook_point_layer'])}, i.e. the output of block "
+                f"{hook_layer} — which is the layer the hook fires at"
+            ),
+        }
+        base_value = float(args.value)
+
+        def make(a: float) -> "_iv.Intervention":
+            return _iv.Intervention(
+                verb="clamp",
+                layer=hook_layer,
+                feature=int(args.feature),
+                value=base_value,
+                alpha=a,
+                sae_repo=SAE_REPO,
+                sae_hook=SAE_HOOK,
+            )
+
+    elif args.verb == "cap":
+        if args.layer is None:
+            raise SystemExit("--layer is required for cap")
+        if args.lo is None and args.hi is None:
+            raise SystemExit("cap needs at least one of --lo / --hi")
+        lo, hi = args.lo, args.hi
+
+        def make(a: float) -> "_iv.Intervention":
+            # alpha scales how far the bound is pulled in: alpha 0 = no bound
+            # at all (the identity), alpha 1 = the bound as given. A cap has no
+            # natural continuous knob otherwise, and a sweep needs one.
+            if a == 0.0:
+                return _iv.Intervention(verb="cap", layer=int(args.layer), lo=None, hi=None)
+            return _iv.Intervention(
+                verb="cap",
+                layer=int(args.layer),
+                lo=None if lo is None else lo / a,
+                hi=None if hi is None else hi / a,
+            )
+
+        meta_extra = {
+            "cap_note": (
+                "alpha scales the bound: the reported lo/hi are divided by "
+                "alpha, so alpha 0 is no bound (the identity) and alpha 1 is "
+                "the --lo/--hi given"
+            )
+        }
+
+    else:  # add / ablate
+        from .backend.directions import Direction, read_directions
+
+        doc = read_directions(dpath)
+        if doc is None:
+            raise SystemExit(f"{out_dir.name}: no directions.json — nothing to intervene with")
+        by_id = {d["id"]: Direction.from_json(d) for d in doc.get("directions", [])}
+        d = by_id.get(args.direction)
+        if d is None:
+            raise SystemExit(
+                f"unknown direction {args.direction!r}; have {sorted(by_id)}"
+            )
+        if d.d != model.d:
+            raise SystemExit(
+                f"direction {d.id!r} is {d.d} wide; this model's stream is {model.d}"
+            )
+        layer = (
+            int(args.layer)
+            if args.layer is not None
+            else (None if args.verb == "ablate" else _iv.hook_layer(d.space, n_layer=model.n_layer))
+        )
+        meta_extra = {
+            "direction": {
+                "id": d.id,
+                "label": d.label,
+                "space": d.space,
+                "method": d.method,
+                "protocol": d.source.get("protocol", ""),
+            },
+            "layer_note": (
+                "the layer is the direction's own space unless --layer overrode "
+                "it; a direction fitted at one depth and injected at another is "
+                "a different experiment"
+            ),
+        }
+
+        def make(a: float) -> "_iv.Intervention":
+            return _iv.Intervention(
+                verb=args.verb,
+                layer=layer,
+                vector=np.asarray(d.vector, dtype=np.float64),
+                direction_id=d.id,
+                space=d.space,
+                alpha=a,
+            )
+
+    bundle = _iv.sweep(
+        model,
+        prompts,
+        make,
+        alphas,
+        max_tokens=int(args.max_tokens),
+        sae=sae_tensors,
+        targets=list(args.target) if args.target else None,
+    )
+    bundle["model"] = args.model
+    bundle["n_layer"] = int(model.n_layer)
+    bundle["d_model"] = int(model.d)
+    bundle["verb"] = args.verb
+    bundle["meta"] = {
+        "generated": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+        "revision": _resolve_revision_or_branch(args.model, args.revision),
+        "digest": _iv.sweep_digest(bundle),
+        **meta_extra,
+    }
+
+    ctrl = [r for r in bundle["rows"] if r["is_identity"]]
+    for r in ctrl:
+        if not r["identical_to_baseline"]:
+            raise SystemExit(
+                "the alpha = 0 row is NOT bit-identical to the baseline. "
+                "Refusing to write a bundle whose control is not a control."
+            )
+
+    # the interp/ subdir, with every other bundle the viewer fetches — an
+    # intervention curve is read by a driver exactly like patch.json is.
+    dest = out_dir / "interp"
+    dest.mkdir(parents=True, exist_ok=True)
+    name = args.name or f"intervene_{args.verb}"
+    # `--name foo` used to write a file with no extension, which the viewer's
+    # fetch then missed; the suffix is added here rather than documented away
+    path = dest / (name if name.endswith(".json") else f"{name}.json")
+    path.write_text(_json.dumps(bundle, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"[intervene] {path} ({t()})")
+    from .backend.interp.bundles import register_bundle
+
+    if register_bundle(dest, path.name):
+        print(f"[intervene] listed {path.name} in {dest / 'index.json'}")
+    for r in bundle["rows"]:
+        flag = " (control, no hook installed)" if r["is_identity"] else ""
+        print(f"  alpha {r['alpha']:+8.3f}  KL mean {r['kl_bits_mean']:8.4f}  max {r['kl_bits_max']:8.4f}{flag}")
+    print()
+    print(bundle["claim"])
+
+
+def _resolve_revision_or_branch(model: str, revision: str | None) -> str:
+    """A sha when one can be resolved, the branch name when it cannot.
+
+    Never a blank and never a silently-substituted "main" pretending to be a
+    pin: honesty rule 2.2 — the resolved commit sha is recorded, and when it is
+    genuinely unavailable the artifact says which branch it was, not nothing.
+    """
+    rev = str(revision or "main")
+    if rev in ("", "main"):
+        from .weights import resolve_revision
+
+        try:
+            return resolve_revision(model, "main", None)
+        except Exception:
+            return "main"
+    return rev
+
+
+def _run_direction_list(args: argparse.Namespace) -> None:
+    """Print the registry, and say of each entry whether it can be drawn."""
+    from .backend.channels import read_channels
+    from .backend.directions import read_directions, renderable
+
+    out_dir, dpath, cpath = _direction_paths(args)
+    doc = read_directions(dpath)
+    if doc is None:
+        print(f"{out_dir.name}: no directions.json — nothing is measured here")
+        return
+    ok, drops = renderable(doc, read_channels(cpath))
+    reason = dict(drops)
+    print(f"{out_dir.name}: {len(doc['directions'])} direction(s), {len(ok)} renderable")
+    for d in doc["directions"]:
+        did = d.get("id", "?")
+        status = "renderable" if did not in reason else "NOT RENDERABLE"
+        print(
+            f"  {did:<34} {d.get('space', ''):<16} {d.get('method', ''):<14} "
+            f"d={d.get('d', '?'):<6} {status}"
+        )
+        print(f"      {str((d.get('source') or {}).get('protocol', ''))[:140]}")
+        stats = (d.get("projection") or {}).get("stats") or {}
+        if stats:
+            print(
+                f"      vs null: cohen's d {stats.get('cohens_d')}  "
+                f"overlap {stats.get('overlap')}  n {stats.get('n')}"
+            )
+        con = (d.get("source") or {}).get("contrast") or {}
+        if con:
+            hd = con.get("heldout_cohens_d", "missing")
+            hd_s = hd if hd == "missing" else f"{hd:+}"
+            print(
+                f"      on its own two sets: cohen's d {con.get('cohens_d')} "
+                f"(in sample)  held out {hd_s}  "
+                f"random directions mean |d| {con.get('null_cohens_d_mean')}"
+            )
+        if did in reason:
+            print(f"      reason: {reason[did]}")
+
+
+def _run_direction_add(args: argparse.Namespace) -> None:
+    """Import a published direction, refusing anything this model cannot carry."""
+    from .backend import import_directions as imp
+    from .backend.directions import write_directions
+
+    out_dir, dpath, _ = _direction_paths(args)
+    doc, vectors, _, revision = _load_map_vectors(out_dir, args.model)
+    space = _map_space(doc["meta"])
+    target_d = int(vectors.shape[1])
+
+    if args.source == "refusal":
+        if not args.run:
+            raise SystemExit(
+                f"--run is required; published runs: {sorted(imp.REFUSAL_RUNS)}"
+            )
+        d = imp.from_refusal_direction(args.run, id=args.id)
+    elif args.source == "amongus":
+        d = imp.from_among_us_probe(args.checkpoint, id=args.id)
+    elif args.source == "neuronpedia":
+        if not args.feature:
+            raise SystemExit("--feature is required, e.g. gpt2-small/8-res-jb/12345")
+        d = imp.from_neuronpedia(args.feature, id=args.id)
+    elif args.source == "persona":
+        d = imp.from_persona_vectors(args.trait or "evil")
+    else:
+        d = imp.from_assistant_axis()
+
+    imp.check_dimensionality(
+        d,
+        target_model=doc["meta"].get("model", args.model),
+        target_d=target_d,
+        target_space=space,
+    )
+    write_directions(
+        dpath,
+        model=doc["meta"].get("model", args.model),
+        revision=revision,
+        directions=[d],
+    )
+    print(f"{out_dir.name}: imported {d.id} ({d.method}, d={d.d}, {d.space})")
+    print(f"  {d.source['protocol']}")
+    print(f"  not renderable until `nebulai direction project {args.model} {d.id}`")
+
+
+def _run_direction_survey(args: argparse.Namespace) -> None:
+    """What every published artefact would do against this model, measured.
+
+    Prints the table the phase-1 report quotes. It exists because "the refusal
+    direction does not fit" is a claim, and a claim about numbers should be
+    produced by reading the numbers.
+    """
+    from .backend import import_directions as imp
+
+    out_dir, _, _ = _direction_paths(args)
+    doc, vectors, _, revision = _load_map_vectors(out_dir, args.model)
+    target_d = int(vectors.shape[1])
+    model = doc["meta"].get("model", args.model)
+    print(f"{out_dir.name}: {model} has d={target_d}, space {_map_space(doc['meta'])}")
+    for r in imp.survey(target_d, model):
+        mark = "IMPORTABLE" if r["importable"] else "refused"
+        dd = "—" if r["d"] is None else str(r["d"])
+        print(
+            f"  {r['artefact']:<42} d={dd:<6} {str(r['space'] or '—'):<14} "
+            f"{mark:<11} {r.get('reason', '')}"
+        )
+
+
+def _run_direction_make(args: argparse.Namespace) -> None:
+    """Diff-of-means between two clusters (or two explicit index sets).
+
+    The two-selection gesture of R6, on the command line. The direction is named
+    after its two inputs: `make` never takes a free-text claim about what the
+    difference *means*, because a label is the one part of a direction nobody
+    can check.
+    """
+    from .backend.directions import from_two_selections, write_directions
+
+    out_dir, dpath, _ = _direction_paths(args)
+    doc, vectors, _, revision = _load_map_vectors(out_dir, args.model)
+    space = _map_space(doc["meta"])
+    points = doc["points"]
+    titles = {c["id"]: c["title"] for c in doc.get("clusters", [])}
+
+    if args.a_cluster is not None or args.b_cluster is not None:
+        if args.a_cluster is None or args.b_cluster is None:
+            raise SystemExit("--a-cluster and --b-cluster come as a pair")
+        if args.a_cluster == args.b_cluster:
+            raise SystemExit("a cluster does not differ from itself")
+        for cid in (args.a_cluster, args.b_cluster):
+            if cid not in titles:
+                raise SystemExit(f"no cluster {cid} in this map")
+        a = [i for i, p in enumerate(points) if p["cluster_id"] == args.a_cluster]
+        b = [i for i, p in enumerate(points) if p["cluster_id"] == args.b_cluster]
+        auto_id = f"c{args.a_cluster}-minus-c{args.b_cluster}"
+        label = f"{titles[args.a_cluster]} − {titles[args.b_cluster]}"
+        protocol = (
+            f"diff of means over this map's own point vectors: cluster "
+            f"{args.a_cluster} ({titles[args.a_cluster]!r}, n={len(a)}) minus "
+            f"cluster {args.b_cluster} ({titles[args.b_cluster]!r}, n={len(b)}); "
+            f"space {space}; map {out_dir.name}"
+        )
+    else:
+        if not (args.a_ids and args.b_ids):
+            raise SystemExit("pass either --a-cluster/--b-cluster or --a-ids/--b-ids")
+        a, b = [int(x) for x in args.a_ids], [int(x) for x in args.b_ids]
+        auto_id = f"sel-{len(a)}v{len(b)}"
+        label = f"{len(a)} points − {len(b)} points"
+        protocol = f"diff of means over explicit point ids in {out_dir.name}; space {space}"
+
+    d = from_two_selections(
+        a,
+        b,
+        vectors,
+        space,
+        id=args.id or auto_id,
+        label=args.label or label,
+        protocol=protocol,
+    )
+    write_directions(
+        dpath,
+        model=doc["meta"].get("model", args.model),
+        revision=revision,
+        directions=[d],
+    )
+    print(f"{out_dir.name}: made {d.id} — {d.label}")
+    print(f"  {d.space}  d={d.d}  n_pos={d.source['n_pos']}  n_neg={d.source['n_neg']}")
+    c = d.source.get("contrast") or {}
+    if c:
+        print(
+            f"  contrast on its own two sets: cohen's d {c['cohens_d']:+.4f}, "
+            f"overlap {c['overlap']:.4f}"
+        )
+        print(
+            f"  the same two sets on {c['null_n']} random unit directions "
+            f"(seed {c['null_seed']}): mean |d| {c['null_cohens_d_mean']:.4f}, "
+            f"p95 |d| {c['null_cohens_d_p95']:.4f}"
+        )
+        hd = c.get("heldout_cohens_d")
+        if hd == "missing":
+            print("  held out: missing — a set with fewer than 4 members cannot be split")
+        else:
+            print(
+                f"  held out (fit on half, scored on the other half, "
+                f"n={c['heldout_n_pos']}/{c['heldout_n_neg']}): cohen's d "
+                f"{hd:+.4f}, overlap {c['heldout_overlap']:.4f}"
+            )
+    if not args.no_project:
+        _project_one(args, d.id)
+
+
+def _run_direction_prompts(args: argparse.Namespace) -> None:
+    """Fit a direction on two frozen prompt sets, in the model's own residual stream.
+
+    This is the branch that exists because the import branch always refuses.
+    `nebulai direction survey` prints the reason in full: every published
+    refusal direction is 2048-5120 numbers wide and every model here is
+    512-1024, so `check_dimensionality` rejects all of them. Rather than leave
+    the story at "we could not get one", this computes one - and records, in
+    the protocol string that travels with it, exactly which 64 strings, which
+    layer, which token position and which model produced it.
+
+    The result is almost never renderable on a token map, and that is correct
+    rather than a bug: the direction lives in `resid.L<k>` and the map's points
+    live in `W_E.centered`. Projecting one onto the other yields a number, and
+    that number would mean nothing (D2). `direction list` says so per entry.
+    """
+    from .backend.directions import diff_of_means, write_directions
+    from .backend.interp.gpt2_numpy import GPT2Numpy
+    from .backend.prompt_sets import PROMPT_SETS
+    from .spaces import resid
+
+    out_dir, dpath, _ = _direction_paths(args)
+    ps = PROMPT_SETS.get(args.set)
+    if ps is None:
+        raise SystemExit(f"unknown prompt set {args.set!r}; have {sorted(PROMPT_SETS)}")
+
+    t = _timer()
+    model = GPT2Numpy(args.model)
+    layer = args.layer if args.layer >= 0 else model.n_layer + args.layer
+    if not (-1 <= layer < model.n_layer):
+        raise SystemExit(
+            f"--layer {args.layer} is outside this model's {model.n_layer} blocks"
+        )
+
+    def rows(prompts) -> np.ndarray:
+        out = []
+        for text in prompts:
+            tr = model.forward(text)
+            # resid[L] is the input to block L, so the output of block L is
+            # resid[L+1]; layer -1 is the embedding output before block 0.
+            out.append(tr.resid[layer + 1][args.position].astype(np.float64))
+        return np.stack(out)
+
+    pos, neg = rows(ps.pos), rows(ps.neg)
+    # Resolve "main" to the commit sha the weights actually came from. A
+    # direction whose protocol says "main" pins nothing: the branch moves and
+    # the protocol string silently starts describing a different model.
+    revision = str(args.revision)
+    if revision in ("", "main"):
+        from .weights import resolve_revision
+
+        try:
+            revision = resolve_revision(args.model, "main", None)
+        except Exception:  # offline: say "main", do not pretend to a sha
+            revision = "main"
+
+    d = diff_of_means(
+        pos,
+        neg,
+        str(resid(layer)),
+        id=args.id or f"{ps.id}-L{layer}",
+        label=args.label or ps.label,
+        protocol=ps.protocol(
+            model=args.model, revision=revision, layer=layer, position=args.position
+        ),
+        source={
+            "prompt_set": ps.id,
+            "prompt_set_sha": ps.sha,
+            "layer": layer,
+            "token_position": args.position,
+            "axis": ps.axis,
+        },
+    )
+    write_directions(dpath, model=args.model, revision=revision, directions=[d])
+    print(f"{out_dir.name}: fitted {d.id} on {len(ps.pos)}+{len(ps.neg)} prompts [{t()}]")
+    print(f"  {d.space}  d={d.d}  set sha {ps.sha}")
+    c = d.source.get("contrast") or {}
+    if c:
+        print(
+            f"  contrast on its own two sets: cohen's d {c['cohens_d']:+.4f}, "
+            f"overlap {c['overlap']:.4f}"
+        )
+        print(
+            f"  the same two sets on {c['null_n']} random unit directions "
+            f"(seed {c['null_seed']}): mean |d| {c['null_cohens_d_mean']:.4f}, "
+            f"p95 |d| {c['null_cohens_d_p95']:.4f}"
+        )
+        hd = c.get("heldout_cohens_d")
+        if hd == "missing":
+            print("  held out: missing - a set with fewer than 4 members cannot be split")
+        else:
+            print(
+                f"  held out (fit on half, scored on the other half, "
+                f"n={c['heldout_n_pos']}/{c['heldout_n_neg']}): cohen's d "
+                f"{hd:+.4f}, overlap {c['heldout_overlap']:.4f}"
+            )
+    print(
+        "  NOT RENDERABLE on this map by construction: the direction is in "
+        f"{d.space} and the map's points are in a W_E space. That is D2, not a "
+        "missing step."
+    )
+
+
+def _project_one(args: argparse.Namespace, direction_id: str) -> None:
+    """Compute a direction's four channels and mark it renderable."""
+    from .backend.channels import write_channels
+    from .backend.directions import (
+        Direction,
+        projection_channels,
+        read_directions,
+        write_directions,
+    )
+
+    out_dir, dpath, cpath = _direction_paths(args)
+    reg = read_directions(dpath)
+    if reg is None:
+        raise SystemExit(f"no {dpath} — make or add a direction first")
+    raw = next((x for x in reg["directions"] if x.get("id") == direction_id), None)
+    if raw is None:
+        raise SystemExit(
+            f"no direction {direction_id!r} in {dpath}; have "
+            f"{[x.get('id') for x in reg['directions']]}"
+        )
+    d = Direction.from_json(raw)
+    doc, vectors, _, revision = _load_map_vectors(out_dir, args.model)
+    space = _map_space(doc["meta"])
+    if d.space != space:
+        raise SystemExit(
+            f"{d.id} is in space {d.space!r} but this map's points are in "
+            f"{space!r} — refusing to project (D2). Different bases are never "
+            f"comparable, and a number would come out regardless."
+        )
+    t = _timer()
+    chans = projection_channels(
+        d, vectors.astype(np.float64), n_null=args.null_n, seed=args.seed
+    )
+    write_channels(
+        cpath,
+        model=doc["meta"].get("model", args.model),
+        revision=revision,
+        n_points=len(doc["points"]),
+        channels=chans,
+    )
+    write_directions(
+        dpath,
+        model=doc["meta"].get("model", args.model),
+        revision=revision,
+        directions=[d],
+    )
+    s = d.projection["stats"]
+    print(f"{out_dir.name}: projected {d.id} onto {len(doc['points'])} points [{t()}]")
+    for c in chans:
+        st = c.stats()
+        print(
+            f"  {c.id:<38} min {st['min']:>9.4f}  max {st['max']:>9.4f}  "
+            f"mean {st['mean']:>9.4f}"
+        )
+    print(
+        f"  real vs null ({d.null['n']} random unit vectors, seed "
+        f"{d.null['seed']}): cohen's d {s['cohens_d']}, histogram overlap "
+        f"{s['overlap']}, n {s['n']}"
+    )
+
+
+def _run_direction_project(args: argparse.Namespace) -> None:
+    _project_one(args, args.id)
+
+
+def _run_direction_drop(args: argparse.Namespace) -> None:
+    """Remove a direction and, unless told otherwise, its four channels."""
+    from .backend.channels import drop_channels
+    from .backend.directions import drop_directions, read_directions
+
+    out_dir, dpath, cpath = _direction_paths(args)
+    reg = read_directions(dpath)
+    if reg is None:
+        raise SystemExit(f"no {dpath}")
+    ch_ids: list[str] = []
+    for did in args.ids:
+        raw = next((x for x in reg["directions"] if x.get("id") == did), None)
+        if raw is None:
+            continue
+        ch_ids += [
+            (raw.get("projection") or {}).get("channel"),
+            (raw.get("projection") or {}).get("orth_channel"),
+            (raw.get("null") or {}).get("channel"),
+            (raw.get("null") or {}).get("orth_channel"),
+        ]
+    n = drop_directions(dpath, args.ids)
+    m = 0 if args.keep_channels else drop_channels(cpath, [c for c in ch_ids if c])
+    print(f"{out_dir.name}: dropped {n} direction(s) and {m} channel(s)")
 
 
 def _run_sae(args: argparse.Namespace) -> None:
@@ -970,6 +1748,69 @@ def _run_rename(args: argparse.Namespace) -> None:
         print(f"  {r['id']:<52} {r['was']} -> {r['namer']}")
 
 
+def _run_route_b(args: argparse.Namespace, out_root: Path) -> None:
+    """`nebulai compare --route-b A B` — the raw-geometry alignment test.
+
+    Deliberately a mode of `compare` rather than its own verb: it answers the
+    same question ("how do these two models relate?") from the other end, and
+    keeping the two under one command is what makes the *choice* between them
+    visible. Route A works across tokenizers and never touches raw geometry;
+    Route B needs a shared tokenizer and touches nothing else.
+    """
+    from .backend.compare import RouteBError, route_b_procrustes
+
+    if len(args.models) != 2:
+        raise SystemExit(
+            f"--route-b takes exactly two models, got {len(args.models)}. A "
+            f"Procrustes alignment is defined between a pair; averaging several "
+            f"pairwise residuals into one figure would hide which pair aligned."
+        )
+    t = _timer()
+    try:
+        rep = route_b_procrustes(
+            args.models[0],
+            args.models[1],
+            max_tokens=args.route_b_max_tokens,
+            n_permutations=args.route_b_permutations,
+            holdout_fraction=args.route_b_holdout,
+            seed=args.seed,
+        )
+    except RouteBError as e:
+        raise SystemExit(f"route B refused this pair:\n  {e}") from e
+
+    cmp_dir = out_root / "compare"
+    cmp_dir.mkdir(parents=True, exist_ok=True)
+    slug = f"{args.models[0]}__{args.models[1]}".replace("/", "__")
+    path = cmp_dir / f"route_b__{slug}.json"
+    path.write_text(json.dumps(rep, indent=1), encoding="utf-8")
+
+    kind = "rotation" if rep["square_rotation"] else "semi-orthogonal projection"
+    print(f"  route B: {rep['model_a']} -> {rep['model_b']}  ({kind}) [{t()}]")
+    print(
+        f"    shared tokens      {rep['n_shared_tokens']} "
+        f"({rep['vocab_overlap']:.1%} of the larger vocabulary); "
+        f"{rep['dim_a']}d -> {rep['dim_b']}d"
+    )
+    print(f"    residual (fit)     {rep['residual_fit']:.4f} on {rep['n_fit']} tokens")
+    print(
+        f"    residual (held-out) {rep['residual_heldout']:.4f} on "
+        f"{rep['n_heldout']} tokens   <- the number that means something"
+    )
+    if rep["null_residual_mean"] is not None:
+        print(
+            f"    permutation null    mean {rep['null_residual_mean']:.4f}, "
+            f"best {rep['null_residual_min']:.4f} over "
+            f"{rep['n_permutations_effective']} shuffles"
+        )
+    print(f"    p                   {rep['p_value']}")
+    print(f"  wrote {path}")
+    print(
+        "\n  This says whether two models arrange a shared vocabulary the same "
+        "way up to a change of basis.\n  It says nothing about behaviour, and "
+        "it ranks neither model."
+    )
+
+
 def _run_compare(args: argparse.Namespace) -> None:
     import os
 
@@ -978,6 +1819,10 @@ def _run_compare(args: argparse.Namespace) -> None:
     from .backend.viewer import write_viewer
 
     out_root = Path(args.out)
+
+    if getattr(args, "route_b", False):
+        _run_route_b(args, out_root)
+        return
 
     # `all` is not a convenience — hand-listing eleven dataset ids is how a
     # comparison silently ends up missing the front-ends it exists to contrast
@@ -1015,11 +1860,17 @@ def _run_compare(args: argparse.Namespace) -> None:
     # resolve_embed_host turns a discovery sentinel ("auto"/"m4"/...) — whether it
     # arrives via --embed-host or NEBULAI_EMBED_HOST — into the dynamically located
     # M4 URL, and passes any concrete URL (or None) through untouched.
-    embed_host = (
-        embed_mod.resolve_embed_host(args.embed_host)
-        or embed_mod.resolve_embed_host(os.environ.get(embed_mod.EMBED_HOST_ENV))
-        or args.ollama_host
-    )
+    if args.embed_api == "local":
+        # An in-process encoder has no endpoint. Resolving one anyway would
+        # fire the M4 discovery probe and, worse, stamp a LAN address into an
+        # artifact that never touched it.
+        embed_host = embed_mod.LOCAL_EMBED_HOST
+    else:
+        embed_host = (
+            embed_mod.resolve_embed_host(args.embed_host)
+            or embed_mod.resolve_embed_host(os.environ.get(embed_mod.EMBED_HOST_ENV))
+            or args.ollama_host
+        )
     try:
         comp = build_comparison(
             json_paths,
@@ -1058,7 +1909,16 @@ def _run_compare(args: argparse.Namespace) -> None:
     )
     print("\n  concept overlap (Jaccard):")
     for k, v in comp["stats"]["jaccard"].items():
-        print(f"    {k}: {v}")
+        print(f"    {k}: {'not measured' if v is None else v}")
+    unnamed = comp["stats"].get("unnamed_models") or []
+    if unnamed:
+        print(
+            f"\n  {len(unnamed)} of {len(comp['meta']['models'])} maps carry "
+            f"placeholder cluster titles, so every pair involving one reads\n"
+            f"  'not measured' above rather than a number: "
+            + ", ".join(unnamed)
+        )
+        print(f"  {comp['stats']['unnamed_reason']}.")
 
 
 def _add_llm_args(sp: argparse.ArgumentParser) -> None:
@@ -1109,6 +1969,357 @@ def _add_llm_args(sp: argparse.ArgumentParser) -> None:
     )
 
 
+# ── persona space (Attractors P2 / D4) ──────────────────────────────────────
+# A persona space is a *fixed* PCA coordinate system for trajectories. These
+# two verbs are deliberately separate: `build` runs the model and writes a
+# space; `verify` re-runs only the control against an existing space and
+# refuses if the frozen prompt set has moved underneath it.
+
+
+def _persona_model(args):
+    from .backend.interp.llama_numpy import LlamaNumpy
+
+    return LlamaNumpy(args.model, revision=args.revision, local_dir=args.local_dir)
+
+
+def _persona_progress(quiet: bool):
+    if quiet:
+        return None
+    state = {"last": -1}
+
+    def fn(done: int, total: int) -> None:
+        pct = int(done * 100 / total)
+        if pct // 5 != state["last"] // 5:
+            state["last"] = pct
+            print(f"  activations {done}/{total} ({pct}%)", flush=True)
+
+    return fn
+
+
+def _persona_report(space, *, wrote=None) -> None:
+    c = space.control
+    print(f"space_id  {space.space_id}")
+    print(f"model     {space.model} @ {space.revision}")
+    print(f"layer     {space.layer}  pooling {space.pooling}")
+    print(f"prompts   {space.prompt_set['id']} sha256={space.prompt_set['sha256'][:12]} "
+          f"n={space.prompt_set['n']}")
+    print(f"control   {c.method} n={c.n}")
+    print(f"          pc1_evr        {c.pc1_evr:.4f}")
+    print(f"          null p95       {c.pc1_evr_null_p95:.4f} (mean {c.pc1_evr_null_mean:.4f})")
+    if c.p_value == c.p_value:  # not NaN
+        print(f"          p              {c.p_value:.4f} (one-sided, permutation)")
+    print(f"          verdict        {c.verdict}")
+    if c.cross_check is not None:
+        # The null that was run first and failed stays on screen, not just in
+        # the file: a control that got swapped has to show both numbers.
+        x = c.cross_check
+        print(f"cross     {x['method']} n={x['n']}")
+        print(f"          null p95       {x['pc1_evr_null_p95']:.4f} "
+              f"(mean {x['pc1_evr_null_mean']:.4f}) -> {x['verdict']}")
+        import textwrap
+
+        print(textwrap.fill(x["note"], 78, initial_indent="          ",
+                            subsequent_indent="          "))
+    if c.verdict != "above_null":
+        print(
+            "\n  PC1 does NOT clear its null. This space is written and readable, "
+            "but it is NOT the default trajectory frame: the viewer gates the "
+            "default on `above_null`, and a figure drawn in it must carry the "
+            "verdict. The plan's response is to escalate model size, then fall "
+            "back to a user-chosen Direction pair (D4b)."
+        )
+    if wrote is not None:
+        print(f"\nwrote {wrote}")
+
+
+def _run_persona_build(args) -> None:
+    from .backend.persona import build_space, write_space
+
+    model = _persona_model(args)
+    print(f"{model.model_id} @ {model.revision} — {model.n_layer} layers, d={model.d}")
+    space = build_space(
+        model,
+        prompt_set_id=args.prompt_set,
+        layer=args.layer,
+        batch_size=args.batch_size,
+        control_n=args.control_n,
+        progress=_persona_progress(args.quiet),
+    )
+    path = write_space(space, Path(args.out) / "persona")
+    _persona_report(space, wrote=path)
+
+
+def _run_persona_verify(args) -> None:
+    from .backend.persona import read_space, verify_space, write_index
+
+    root = Path(args.out) / "persona"
+    space = read_space(args.space_id, root)
+    # The space on disk already names its model and its commit, and `--model`
+    # carries the 135M default for `build`'s sake. Left alone, that default would
+    # point verify at the wrong checkpoint, so the space's own provenance wins
+    # unless the operator overrode it on the command line — and the substitution
+    # is printed, because a run that silently picked its own model is not a check.
+    if args.model == _PERSONA_DEFAULT_MODEL and space.model != args.model:
+        print(f"--model not given; using the space's own {space.model}")
+        args.model = space.model
+    if args.revision == "main" and space.revision:
+        args.revision = space.revision
+    model = _persona_model(args)
+    got = verify_space(space, model, control_n=args.control_n)
+    print(f"space_id  {space.space_id}")
+    print(f"recorded  pc1_evr {space.control.pc1_evr:.4f}  null p95 "
+          f"{space.control.pc1_evr_null_p95:.4f}  {space.control.verdict}")
+    print(f"re-run    pc1_evr {got.pc1_evr:.4f}  null p95 "
+          f"{got.pc1_evr_null_p95:.4f}  {got.verdict}")
+    # The index is derived from what is on disk, so refreshing it here costs
+    # nothing and repairs a deploy whose spaces were built before it existed.
+    write_index(root)
+    if got.verdict != space.control.verdict:
+        raise SystemExit(
+            f"VERDICT MOVED: {space.control.verdict} -> {got.verdict}. The space "
+            f"on disk no longer describes what this model does; rebuild it."
+        )
+    print("verdict reproduced")
+
+
+def _run_persona_list(args) -> None:
+    from .backend.persona import list_spaces, read_space
+
+    root = Path(args.out) / "persona"
+    ids = list_spaces(root)
+    if not ids:
+        print(f"no persona spaces under {root}")
+        return
+    for sid in ids:
+        s = read_space(sid, root)
+        print(f"{sid}  L{s.layer}  pc1_evr={s.control.pc1_evr:.4f} "
+              f"null_p95={s.control.pc1_evr_null_p95:.4f}  {s.control.verdict}")
+
+
+_PERSONA_DEFAULT_MODEL = "HuggingFaceTB/SmolLM2-135M-Instruct"
+
+
+def _add_persona_model_args(q) -> None:
+    q.add_argument(
+        "--model",
+        default=_PERSONA_DEFAULT_MODEL,
+        help="instruct model the space is built in (default: SmolLM2-135M-Instruct)",
+    )
+    q.add_argument(
+        "--revision",
+        default="main",
+        help="pinned commit sha. With --local-dir this is the *claim* about which "
+        "commit those bytes are, and it is what lands in the space's provenance",
+    )
+    q.add_argument(
+        "--local-dir",
+        default=None,
+        help="directory holding config.json / model.safetensors / tokenizer.json, "
+        "instead of downloading from the hub",
+    )
+    q.add_argument("--out", default="out", help="output directory root")
+    q.add_argument(
+        "--control-n",
+        type=int,
+        default=500,
+        help="label-permutation draws (default: 500). Lower it only to iterate; "
+        "a published space uses 500",
+    )
+
+
+# ── absorbing state (Attractors P3 / the Waluigi test) ──────────────────────
+# Self-play under a persona rule, judged by a stated regex, then P(violate at
+# t+1 | violated at t) against the base rate AND against a null that keeps
+# each conversation's own violation rate. The judge is deterministic and is
+# printed with the result — no model judges these transcripts.
+
+
+def _absorbing_model(args):
+    from .backend.interp.llama_numpy import LlamaNumpy
+
+    return LlamaNumpy(args.model, revision=args.revision, local_dir=args.local_dir)
+
+
+def _absorbing_progress(quiet: bool, start: int = 0):
+    """Progress lines for a study run.
+
+    `start` is the conversation the loop began at, which is non-zero on a
+    resume. Without it the rate would be computed from conversations an earlier
+    run paid for against this run's clock, and the ETA it printed would be an
+    encouraging lie.
+    """
+    if quiet:
+        return None
+
+    def fn(done: int, total: int, secs: float) -> None:
+        made = done - start
+        rate = made / secs if secs > 0 else 0.0
+        eta = (total - done) / rate if rate > 0 else float("nan")
+        print(f"  conversations {done}/{total}  {rate*60:.1f}/min  "
+              f"eta {eta/60:.0f} min", flush=True)
+
+    return fn
+
+
+def _absorbing_report(doc: dict) -> None:
+    m, s = doc["meta"], doc["stats"]
+    r = doc["rule"]
+    print(f"study_id  {m['study_id']}")
+    print(f"model     {m['model']} @ {m['revision']}")
+    print(f"rule      {r['id']}  /{r['pattern']}/")
+    print(f"          {r['statement']}")
+    print(f"judge     {r['judge']}")
+    cfg = m["config"]
+    print(f"n         {s['n_conversations']} conversations x {cfg['n_turns']} turns "
+          f"= {s['n_turns']} judged turns, {s['n_transitions']} transitions")
+    if cfg.get("n_conversations_run") != cfg.get("n_conversations_requested"):
+        print(f"          STOPPED EARLY at {cfg['n_conversations_run']} of "
+              f"{cfg['n_conversations_requested']} (deadline {cfg['deadline_s']}s)")
+    c = s["counts"]
+    print("transition matrix (rows = state at t, cols = state at t+1)")
+    print(f"          in-character  ->  {c['n00']:6d} in-character   {c['n01']:6d} violation")
+    print(f"          violation     ->  {c['n10']:6d} in-character   {c['n11']:6d} violation")
+    b = s["base_rate"]
+    a1 = s["p_violate_given_violated"]
+    a0 = s["p_violate_given_in_character"]
+    print(f"base rate {b['p']:.4f}  [{b['ci95'][0]:.4f}, {b['ci95'][1]:.4f}]  "
+          f"({b['k']}/{b['n']}, {b['over']})")
+    print(f"P(1|1)    {a1['p']:.4f}  [{a1['ci95'][0]:.4f}, {a1['ci95'][1]:.4f}]  "
+          f"({a1['k']}/{a1['n']})")
+    print(f"P(1|0)    {a0['p']:.4f}  [{a0['ci95'][0]:.4f}, {a0['ci95'][1]:.4f}]  "
+          f"({a0['k']}/{a0['n']})")
+    print(f"          P(1|1) interval {'SPANS' if s['interval_spans_base_rate'] else 'excludes'}"
+          f" the base rate")
+    n = s["null"]
+    print(f"null      {n['method']} n={n['n']} on {n['statistic']}")
+    print(f"          p95 {n['p95']:.4f} (mean {n['mean']:.4f})  p {n['p_value']:.4f}")
+    import textwrap
+
+    print(textwrap.fill(n["note"], 78, initial_indent="          ",
+                        subsequent_indent="          "))
+    print(f"verdict   {s['verdict']}")
+    if s["verdict"] != "absorbing_above_null":
+        print(
+            "\n  This is NOT evidence of an absorbing state. `not_absorbing` means "
+            "the conditional does not clear the base rate; "
+            "`above_base_rate_explained_by_heterogeneity` means it clears the base "
+            "rate but not the within-conversation null, i.e. conversations differ "
+            "from each other rather than a violation pulling the next turn."
+        )
+
+
+def _run_absorbing_run(args) -> None:
+    from .backend.absorbing import (
+        RULES,
+        choose_rule,
+        pilot_rates,
+        read_study,
+        resume_from,
+        run_study,
+        write_study,
+    )
+
+    model = _absorbing_model(args)
+    print(f"{model.model_id} @ {model.revision} — {model.n_layer} layers, d={model.d}")
+    resume = None
+    if args.resume:
+        resume = resume_from(read_study(args.resume, Path(args.out) / "absorbing"))
+        print(f"resuming {args.resume} at conversation {resume.start_index} "
+              f"({resume.elapsed_s/60:.0f} min already spent); its rule and every "
+              f"generation parameter must match or the run refuses")
+        if args.rule is None:
+            # the stored study already chose a rule by a pilot and recorded it;
+            # re-piloting would spend model time re-deriving that choice, and
+            # picking a different rule would not be a resume at all
+            args.rule = resume.rule_id
+    pilot = None
+    rule_id = args.rule
+    if rule_id is None:
+        print(f"pilot: {args.pilot_conversations} conversations x 4 turns per rule …")
+        rates = pilot_rates(model, n_conversations=args.pilot_conversations)
+        for rid in sorted(rates):
+            print(f"  {rid:16s} rate {rates[rid]:.3f}")
+        rule_id = choose_rule(rates)
+        pilot = {"rates": rates, "chosen": rule_id, "target": 0.35,
+                 "n_conversations": args.pilot_conversations, "n_turns": 4,
+                 "note": "the rule is chosen for headroom, before any transition "
+                         "is counted, so the choice cannot be tuned to the result"}
+        print(f"chose {rule_id}")
+    elif rule_id not in RULES:
+        raise SystemExit(f"unknown rule {rule_id!r}; have {sorted(RULES)}")
+    study = run_study(
+        model,
+        rule_id=rule_id,
+        n_conversations=args.conversations,
+        n_turns=args.turns,
+        batch_size=args.batch_size,
+        max_new_assistant=args.max_new_assistant,
+        max_new_user=args.max_new_user,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        seed_base=args.seed_base,
+        null_n=args.null_n,
+        pilot=pilot,
+        progress=_absorbing_progress(
+            args.quiet, 0 if resume is None else resume.start_index
+        ),
+        deadline_s=None if args.deadline_min is None else args.deadline_min * 60.0,
+        resume=resume,
+    )
+    if resume is not None and study.pilot is None:
+        # carry the original pilot forward: the rule was chosen by it, and a
+        # study whose `pilot` went null on resume would look like a study whose
+        # rule was picked by hand
+        study.pilot = (read_study(args.resume, Path(args.out) / "absorbing")
+                       or {}).get("pilot")
+    path = write_study(study, Path(args.out) / "absorbing")
+    _absorbing_report(study.to_dict())
+    print(f"\nwrote {path}")
+
+
+def _run_absorbing_report(args) -> None:
+    from .backend.absorbing import read_study
+
+    _absorbing_report(read_study(args.study_id, Path(args.out) / "absorbing"))
+
+
+def _run_absorbing_list(args) -> None:
+    from .backend.absorbing import read_study
+
+    root = Path(args.out) / "absorbing"
+    ids = sorted(p.name for p in root.glob("*") if (p / "absorbing.json").exists())
+    if not ids:
+        print(f"no absorbing studies under {root}")
+        return
+    for sid in ids:
+        d = read_study(sid, root)
+        s = d["stats"]
+        print(f"{sid}  n={s['n_conversations']}  "
+              f"P(1|1)={s['p_violate_given_violated']['p']:.4f} "
+              f"base={s['base_rate']['p']:.4f}  {s['verdict']}")
+
+
+def _add_absorbing_model_args(q) -> None:
+    q.add_argument(
+        "--model",
+        default="HuggingFaceTB/SmolLM2-135M-Instruct",
+        help="instruct model that plays BOTH sides (default: SmolLM2-135M-Instruct)",
+    )
+    q.add_argument(
+        "--revision",
+        default="main",
+        help="pinned commit sha. With --local-dir this is the *claim* about which "
+        "commit those bytes are, and it is what lands in the study's provenance",
+    )
+    q.add_argument(
+        "--local-dir",
+        default=None,
+        help="directory holding config.json / model.safetensors / tokenizer.json, "
+        "instead of downloading from the hub",
+    )
+    q.add_argument("--out", default="out", help="output directory root")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(
         prog="nebulai",
@@ -1141,10 +2352,14 @@ def main() -> None:
     )
     t.add_argument(
         "--embed-api",
-        choices=["ollama", "openai"],
+        choices=["ollama", "openai", "local"],
         default="ollama",
-        help="[--source api] transport: ollama /api/embed or OpenAI-compatible "
-        "/v1/embeddings (bearer key from EMBED_API_KEY or OPENAI_API_KEY)",
+        help="[--source api] transport: ollama /api/embed, OpenAI-compatible "
+        "/v1/embeddings (bearer key from EMBED_API_KEY or OPENAI_API_KEY), or "
+        "'local' to run a pinned fp32 sentence-transformers encoder in this "
+        "process (needs the optional behavior-local group; --embed-host is "
+        "ignored, and the pinned commit is stamped into the map so `nebulai "
+        "validate` can rebuild the vectors)",
     )
     t.add_argument(
         "--max-tokens",
@@ -1502,6 +2717,24 @@ def main() -> None:
     )
     e.set_defaults(fn=_run_edges)
 
+    ch = sub.add_parser(
+        "channels",
+        help="write per-point scalars (channels.json) beside an already-built "
+        "token map — the glitch lens, computed on the RAW W_E rows",
+    )
+    ch.add_argument(
+        "models",
+        nargs="+",
+        help="model ids already built with `tokens` (e.g. gpt2 distilgpt2)",
+    )
+    ch.add_argument("--out", default="out", help="output directory root")
+    ch.add_argument(
+        "--recompute",
+        action="store_true",
+        help="rewrite channels.json even when one already exists",
+    )
+    ch.set_defaults(fn=_run_channels)
+
     ip = sub.add_parser(
         "interp",
         help="compute real interp bundles (weight spectra, positional DFT, "
@@ -1726,13 +2959,324 @@ def main() -> None:
     )
     c.add_argument(
         "--embed-api",
-        choices=["ollama", "openai"],
+        choices=["ollama", "openai", "local"],
         default="ollama",
-        help="ollama /api/embed, or any OpenAI-compatible /v1/embeddings",
+        help="ollama /api/embed, any OpenAI-compatible /v1/embeddings, or "
+        "'local' to run a pinned fp32 sentence-transformers encoder in this "
+        "process (needs the optional behavior-local group; --embed-model must "
+        "then be a pinned id or 'repo@<40-hex sha>', and --embed-host is "
+        "ignored)",
     )
     c.add_argument("--embed-model", default="mxbai-embed-large")
     c.add_argument("--seed", type=int, default=42)
+    c.add_argument(
+        "--route-b",
+        action="store_true",
+        help="instead of the concept-space comparison, fit an orthogonal "
+        "Procrustes alignment between exactly TWO same-tokenizer models' raw "
+        "token clouds and test it on held-out tokens against a permutation "
+        "null. Needs no embedder; reads the weights, not the built maps.",
+    )
+    c.add_argument(
+        "--route-b-max-tokens",
+        type=int,
+        default=None,
+        help="[--route-b] curate to the N most frequent tokens before aligning "
+        "(default: the full curated vocabulary, ~49.9k for the gpt2 family)",
+    )
+    c.add_argument(
+        "--route-b-permutations",
+        type=int,
+        default=200,
+        help="[--route-b] permutation-null size; the reported p can never be "
+        "smaller than 1/(B+1)",
+    )
+    c.add_argument(
+        "--route-b-holdout",
+        type=float,
+        default=0.5,
+        help="[--route-b] fraction of shared tokens held out of the fit and "
+        "used for the reported residual",
+    )
     c.set_defaults(fn=_run_compare)
+
+    ivp = sub.add_parser(
+        "intervene",
+        help="sweep one intervention (clamp/add/ablate/cap) over alpha and "
+        "write a curve bundle — measures, never writes a modified checkpoint",
+    )
+    ivp.add_argument("model", help="model id (a real forward pass is run)")
+    ivp.add_argument("--out", default="out", help="output directory root")
+    ivp.add_argument(
+        "verb",
+        choices=["clamp", "add", "ablate", "cap"],
+        help="the intervention verb; nothing else is accepted",
+    )
+    ivp.add_argument(
+        "--prompt",
+        action="append",
+        default=[],
+        help="prompt to run (repeatable)",
+    )
+    ivp.add_argument(
+        "--alpha",
+        action="append",
+        default=[],
+        type=float,
+        help="alpha value (repeatable); 0 is added if absent",
+    )
+    ivp.add_argument("--direction", help="direction id, for add/ablate")
+    ivp.add_argument(
+        "--layer",
+        type=int,
+        default=None,
+        help="hook layer (output of block L; -1 = the embedding output). "
+        "Defaults to the direction's own space for add.",
+    )
+    ivp.add_argument("--feature", type=int, default=None, help="SAE feature index, for clamp")
+    ivp.add_argument(
+        "--value", type=float, default=0.0, help="the activation to pin, for clamp"
+    )
+    ivp.add_argument("--lo", type=float, default=None, help="cap lower bound")
+    ivp.add_argument("--hi", type=float, default=None, help="cap upper bound")
+    ivp.add_argument("--max-tokens", type=int, default=16, help="greedy tokens per generation")
+    ivp.add_argument(
+        "--target",
+        action="append",
+        default=[],
+        help="a completion whose teacher-forced logprob is measured before and "
+        "after (repeatable) — catches an effect the argmax hides",
+    )
+    ivp.add_argument("--revision", default="main")
+    ivp.add_argument("--name", default=None, help="output filename")
+    ivp.set_defaults(fn=_run_intervene)
+
+    dr = sub.add_parser(
+        "direction",
+        help="a direction as a first-class object: import, make, project, drop "
+        "(writes directions.json + projection/null channels — nebulai.json is "
+        "never touched)",
+    )
+    drsub = dr.add_subparsers(dest="dcmd", required=True)
+
+    def _common(sp):
+        sp.add_argument("model", help="model id of a map already built with `tokens`")
+        sp.add_argument("--out", default="out", help="output directory root")
+        return sp
+
+    dl = _common(drsub.add_parser("list", help="list directions and say which can be drawn"))
+    dl.set_defaults(fn=_run_direction_list)
+
+    dsv = _common(
+        drsub.add_parser(
+            "survey",
+            help="print every published artefact's dimensionality against this "
+            "model — the table behind the import refusals",
+        )
+    )
+    dsv.set_defaults(fn=_run_direction_survey)
+
+    da = _common(drsub.add_parser("add", help="import a published direction"))
+    da.add_argument(
+        "--source",
+        required=True,
+        choices=["refusal", "persona", "assistant-axis", "neuronpedia", "amongus"],
+    )
+    da.add_argument("--run", default=None, help="refusal: published run dir, e.g. gemma-2b-it")
+    da.add_argument("--trait", default=None, help="persona: trait name, e.g. evil")
+    da.add_argument(
+        "--feature", default=None, help="neuronpedia: <model>/<layer>-<release>/<index>"
+    )
+    da.add_argument(
+        "--checkpoint",
+        default="AmongUsDataset_probe_phi4",
+        help="amongus: checkpoint stem under linear-probes/checkpoints/",
+    )
+    da.add_argument("--id", default=None, help="override the direction id")
+    da.set_defaults(fn=_run_direction_add)
+
+    dm = _common(
+        drsub.add_parser(
+            "make",
+            help="diff-of-means between two clusters (or two explicit index "
+            "sets) of this map's own vectors",
+        )
+    )
+    dm.add_argument("--a-cluster", type=int, default=None)
+    dm.add_argument("--b-cluster", type=int, default=None)
+    dm.add_argument("--a-ids", nargs="+", default=None, help="point indices (0-based)")
+    dm.add_argument("--b-ids", nargs="+", default=None)
+    dm.add_argument("--id", default=None)
+    dm.add_argument("--label", default=None)
+    dm.add_argument("--null-n", type=int, default=32, help="how many null directions")
+    dm.add_argument("--seed", type=int, default=0, help="null seed")
+    dm.add_argument(
+        "--no-project",
+        action="store_true",
+        help="write the registry entry only — it stays NOT RENDERABLE until "
+        "`direction project` gives it a null",
+    )
+    dm.set_defaults(fn=_run_direction_make)
+
+    dpr = _common(
+        drsub.add_parser(
+            "prompts",
+            help="fit a diff-of-means direction on a frozen prompt set, in the "
+            "model's own residual stream (the branch that exists because every "
+            "published refusal direction is the wrong width - see `survey`)",
+        )
+    )
+    dpr.add_argument("--set", default="refusal-style-v1", help="frozen prompt-set id")
+    dpr.add_argument(
+        "--layer",
+        type=int,
+        default=8,
+        help="fit on the output of this block; -1 is the embedding output",
+    )
+    dpr.add_argument(
+        "--position",
+        type=int,
+        default=-1,
+        help="token position within each prompt (-1 = the last token)",
+    )
+    dpr.add_argument("--revision", default="main", help="recorded in the protocol string")
+    dpr.add_argument("--id", default=None)
+    dpr.add_argument("--label", default=None)
+    dpr.set_defaults(fn=_run_direction_prompts)
+
+    dp = _common(
+        drsub.add_parser(
+            "project",
+            help="compute a direction's parallel/orthogonal channels and its "
+            "null, appending them to channels.json",
+        )
+    )
+    dp.add_argument("id", help="direction id")
+    dp.add_argument("--null-n", type=int, default=32)
+    dp.add_argument("--seed", type=int, default=0)
+    dp.set_defaults(fn=_run_direction_project)
+
+    dd = _common(drsub.add_parser("drop", help="remove directions and their channels"))
+    dd.add_argument("ids", nargs="+")
+    dd.add_argument(
+        "--keep-channels",
+        action="store_true",
+        help="leave the projection/null channels in channels.json",
+    )
+    dd.set_defaults(fn=_run_direction_drop)
+
+    # ── persona (Attractors P2 / D4) ─────────────────────────────────────
+    pers = sub.add_parser(
+        "persona",
+        help="build/verify the persona PCA space trajectories are drawn in",
+    )
+    pers_sub = pers.add_subparsers(dest="persona_cmd", required=True)
+
+    pb = pers_sub.add_parser(
+        "build",
+        help="run the frozen archetype set through a model and fit the PCA space",
+    )
+    _add_persona_model_args(pb)
+    pb.add_argument(
+        "--prompt-set",
+        default="personas.v1",
+        help="frozen prompt set id (default: personas.v1). Changing a set's "
+        "contents makes a NEW space_id — it is never an edit in place",
+    )
+    pb.add_argument(
+        "--layer",
+        type=int,
+        default=None,
+        help="residual layer to read (default: two-thirds of the way up)",
+    )
+    pb.add_argument("--batch-size", type=int, default=16)
+    pb.add_argument("--quiet", action="store_true", help="no progress lines")
+    pb.set_defaults(fn=_run_persona_build)
+
+    pv = pers_sub.add_parser(
+        "verify",
+        help="re-run the control against an existing space and check the freeze",
+    )
+    pv.add_argument("space_id", help="space id under <out>/persona/")
+    _add_persona_model_args(pv)
+    pv.set_defaults(fn=_run_persona_verify)
+
+    pl = pers_sub.add_parser("list", help="list built persona spaces and their verdicts")
+    pl.add_argument("--out", default="out", help="output directory root")
+    pl.set_defaults(fn=_run_persona_list)
+
+    # ── absorbing (Attractors P3 / the Waluigi absorbing-state test) ─────
+    absb = sub.add_parser(
+        "absorbing",
+        help="self-play absorbing-state test: P(violate at t+1 | violated at t)",
+    )
+    absb_sub = absb.add_subparsers(dest="absorbing_cmd", required=True)
+
+    ar = absb_sub.add_parser(
+        "run",
+        help="run the self-play study and write absorbing.json",
+    )
+    _add_absorbing_model_args(ar)
+    ar.add_argument(
+        "--rule",
+        default=None,
+        help="persona rule id (default: pick one by a pilot, before any "
+        "transition is counted, so the choice cannot be tuned to the result)",
+    )
+    ar.add_argument("--pilot-conversations", type=int, default=24)
+    ar.add_argument("--conversations", type=int, default=2000)
+    ar.add_argument("--turns", type=int, default=6, help="assistant turns per conversation")
+    ar.add_argument("--batch-size", type=int, default=48)
+    ar.add_argument("--max-new-assistant", type=int, default=40)
+    ar.add_argument("--max-new-user", type=int, default=20)
+    ar.add_argument("--temperature", type=float, default=1.0)
+    ar.add_argument("--top-p", type=float, default=0.95)
+    ar.add_argument("--seed-base", type=int, default=1234)
+    ar.add_argument(
+        "--null-n",
+        type=int,
+        default=500,
+        help="within-conversation shuffle draws (default: 500)",
+    )
+    ar.add_argument(
+        "--deadline-min",
+        type=float,
+        default=None,
+        help="stop starting new batches after this many minutes and report the N "
+        "actually reached, marked stopped_early",
+    )
+    ar.add_argument(
+        "--resume",
+        default=None,
+        metavar="STUDY_ID",
+        help="continue a study that stopped early instead of recomputing it. The "
+        "stored N must be a multiple of --batch-size and the rule, model, "
+        "revision, turns, batch size, token budgets, temperature, top-p and "
+        "seed base must all match, because the seed is the batch's first index; "
+        "otherwise the run refuses rather than stitching two experiments",
+    )
+    ar.add_argument("--quiet", action="store_true", help="no progress lines")
+    ar.set_defaults(fn=_run_absorbing_run)
+
+    arp = absb_sub.add_parser("report", help="print an existing study's numbers")
+    arp.add_argument("study_id", help="study id under <out>/absorbing/")
+    arp.add_argument("--out", default="out", help="output directory root")
+    arp.set_defaults(fn=_run_absorbing_report)
+
+    aal = absb_sub.add_parser("list", help="list studies and their verdicts")
+    aal.add_argument("--out", default="out", help="output directory root")
+    aal.set_defaults(fn=_run_absorbing_list)
+
+    # Behavioral divergence (docs/BEHAVIORAL-DIVERGENCE-PLAN.md) and generative
+    # variance (docs/GENERATIVE-VARIANCE-PLAN.md) are separate studies, not new
+    # front-ends: neither produces `Units`, so each owns its own subcommand
+    # group rather than threading options through `tokens`/`sae`/`neurons`.
+    # Imported here so the base CLI keeps its current import cost.
+    from .behavior.cli import add_behavior_parser
+    from .backend.variance_cli import add_variance_parser
+
+    add_behavior_parser(sub)
+    add_variance_parser(sub)
 
     args = p.parse_args()
     args.fn(args)

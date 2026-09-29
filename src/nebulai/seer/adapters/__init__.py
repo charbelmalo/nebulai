@@ -15,15 +15,55 @@ from .base import Adapter, AdapterResult  # noqa: F401
 from .claude import ClaudeStreamAdapter  # noqa: F401
 from .codex import CodexExecAdapter  # noqa: F401
 from .codex_app_server import CodexAppServerAdapter  # noqa: F401
+from .corpus_amongus import AmongUsCorpusAdapter  # noqa: F401
+from .corpus_base import CorpusAdapter, CorpusError, CorpusRun, CorpusSource  # noqa: F401
+from .corpus_ctfish import CtfishCorpusAdapter  # noqa: F401
+from .corpus_transcript import TranscriptCorpusAdapter  # noqa: F401
+from .corpus_village import VillageCorpusAdapter, VillageUnavailable  # noqa: F401
 from .hermes import HermesOneshotAdapter  # noqa: F401
 
+#: corpus id → adapter class. `seer import <corpus>` reads this, so adding a
+#: fifth corpus is one import and one entry rather than a new CLI branch.
+CORPUS_ADAPTERS: dict[str, type[CorpusAdapter]] = {
+    "amongus": AmongUsCorpusAdapter,
+    "ctfish": CtfishCorpusAdapter,
+    "village": VillageCorpusAdapter,
+    "transcript": TranscriptCorpusAdapter,
+}
+
+
+def corpus_adapter(corpus: str, **kw) -> CorpusAdapter:
+    """Construct a corpus adapter by id, refusing an unknown one.
+
+    Same rule as `adapter_for`: an unknown corpus raises rather than falling
+    back, because a silently substituted mapping produces a plausible,
+    unlabelled, wrong trajectory.
+    """
+    cls = CORPUS_ADAPTERS.get(corpus.lower())
+    if cls is None:
+        raise ValueError(
+            f"no corpus adapter for {corpus!r} (have: {', '.join(sorted(CORPUS_ADAPTERS))})"
+        )
+    return cls(**kw)
+
 __all__ = [
+    "CORPUS_ADAPTERS",
     "Adapter",
     "AdapterResult",
+    "AmongUsCorpusAdapter",
     "ClaudeStreamAdapter",
     "CodexAppServerAdapter",
     "CodexExecAdapter",
+    "CorpusAdapter",
+    "CorpusError",
+    "CorpusRun",
+    "CorpusSource",
+    "CtfishCorpusAdapter",
     "HermesOneshotAdapter",
+    "TranscriptCorpusAdapter",
+    "VillageCorpusAdapter",
+    "VillageUnavailable",
+    "corpus_adapter",
 ]
 
 

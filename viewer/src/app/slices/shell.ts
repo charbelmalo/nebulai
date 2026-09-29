@@ -27,15 +27,35 @@ export type AppId = "nebulai" | "seer";
  *  interpretability drivers, each rendering one real computed quantity from an
  *  interp bundle); `guide` documents the exact math + source data behind every
  *  live feature; `sessions` is the transcript plotter (shown as
- *  "Transcripts"); `seer` is SessionSeer's live view — capture and comparison
+ *  "Transcripts"); `keyword` (shown as "Keywords") attributes a word in an
+ *  agent's context to whoever put it there — the operator, their standing
+ *  instructions, the harness, the model or the machine — by scanning Claude
+ *  Code's own session logs server-side; `seer` is SessionSeer's live view — capture and comparison
  *  of Codex / Claude / Hermes agent runs, served by `seer serve`.
  *
- *  The union stays all six on purpose: ONE shell type serves both instruments,
- *  so the chrome, the permalink layer and the signal bridge stay single. Which
- *  three of the six a given document may actually reach is `APP_PAGES`. */
-export type Page = "map" | "snapshot" | "interp" | "guide" | "sessions" | "seer";
+ *  `behavior` is the association study of docs/BEHAVIORAL-DIVERGENCE-PLAN.md.
+ *  It is a page rather than a view mode because it reads a different artifact
+ *  (`out/behavior/behavior.json`), makes a different kind of claim, and must
+ *  never be mistaken for the weight-geometry maps: everything else in this
+ *  instrument answers "what can this layer write", and this one answers "what
+ *  did these deployments actually say". Keeping them on separate pages is what
+ *  stops a reader carrying a causal reading from one to the other.
+ *
+ *  The union stays all eight on purpose: ONE shell type serves both
+ *  instruments, so the chrome, the permalink layer and the signal bridge stay
+ *  single. Which of the seven a given document may actually reach is
+ *  `APP_PAGES`. */
+export type Page =
+  | "map"
+  | "behavior"
+  | "snapshot"
+  | "interp"
+  | "guide"
+  | "sessions"
+  | "keyword"
+  | "seer";
 
-/** The three pages each instrument owns, in nav order — the authority for both
+/** The pages each instrument owns, in nav order — the authority for both
  *  "what may `setPage` accept" and "where does this app boot". Labels are NOT
  *  here: they are chrome, and live in `chrome/apps/nav.ts`, which is pinned
  *  against this table by tests/unit/app-pages.test.ts so the two cannot drift.
@@ -44,8 +64,8 @@ export type Page = "map" | "snapshot" | "interp" | "guide" | "sessions" | "seer"
  *  throwing: the callers are a permalink and a nav click, and neither has a
  *  sensible failure mode beyond "stay where you are". */
 export const APP_PAGES: Record<AppId, readonly Page[]> = {
-  nebulai: ["map", "interp", "guide"],
-  seer: ["seer", "sessions", "snapshot"],
+  nebulai: ["map", "behavior", "interp", "guide"],
+  seer: ["seer", "sessions", "keyword", "snapshot"],
 };
 
 /** Global render-quality settings — live-applied. Per-view appearance knobs
@@ -61,6 +81,17 @@ export interface Settings {
   /** Internals cross-view linking: clicking a head/token/SAE feature in one
    *  view highlights it in every other view that shows the same unit. */
   crossLink: boolean;
+  /** Webcam hand control (src/hands). Off by default and never auto-enabled:
+   *  turning it on is what triggers the camera permission prompt and the ~19 MB
+   *  of MediaPipe runtime + model, so it has to be an explicit act. */
+  handTracking: boolean;
+  /** Whether the free — non-steering — hand may cast the two visual effects.
+   *  Off by default: the rig's job is navigation, and an effect fired by someone
+   *  who was trying to pan is the failure that made the previous vocabulary
+   *  unusable. Held here rather than on the rig because it is a preference that
+   *  must survive the tracker being torn down and rebuilt, and because the
+   *  Settings UI has to read it without importing the tracker. */
+  handEffects: boolean;
 }
 
 export interface ShellSlice {
@@ -94,6 +125,8 @@ export const createShellSlice: StateCreator<AppState, [], [], ShellSlice> = (set
     animationSpeed: 1,
     reducedMotion: false,
     crossLink: true,
+    handTracking: false,
+    handEffects: false,
   },
   settingsOpen: false,
   page: "map",

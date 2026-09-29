@@ -317,6 +317,147 @@ export interface PatchPair {
   r: number[];
 }
 
+/** An intervention sweep — the P4 curve bundle (`nebulai intervene`).
+ *
+ *  One verb (clamp / add / ablate / cap) run at a grid of alpha over a set of
+ *  prompts, with the baseline beside every intervened run. Two fields carry
+ *  the honesty of the whole figure and the driver must never drop them:
+ *
+ *  · `is_identity` + `identical_to_baseline` — the alpha = 0 row installed NO
+ *    hook, and the producer asserted bit-identity before writing the file. A
+ *    row that says `identical_to_baseline: false` while claiming to be the
+ *    identity is a broken harness, and the view says so rather than plotting it.
+ *  · `claim` — the one causal sentence the amended contract permits (§2.4). It
+ *    is rendered ON the figure, never in a footer, and it is generated from the
+ *    measured numbers rather than written by hand.
+ */
+export interface InterveneTarget {
+  text: string;
+  baseline_logprob: number;
+  intervened_logprob: number;
+}
+
+export interface InterveneSide {
+  /** top-8 next-token candidates at the final position: [token, probability] */
+  top: [string, number][];
+  text: string;
+  tokens: string[];
+  ids: number[];
+  logprobs: number[];
+  mean_logprob: number | null;
+  decoding: string;
+}
+
+/** Where one prompt sat ON the intervention's direction, before and after.
+ *
+ *  The producer emits this for `add` / `ablate` only; for `clamp` and `cap` it
+ *  emits `{ refused }` with the reason, because those verbs name no direction
+ *  and a projection would be onto some other vector that happened to be in
+ *  scope. The union is deliberate — there is no optional-number form in which
+ *  "not measured" and "measured as zero" could be confused.
+ */
+export interface InterveneAxis {
+  direction_id: string;
+  space: string;
+  /** HOOK layer — the output of block L, the protocol's index */
+  layer: number;
+  resid_index: number;
+  observed_where: string;
+  token: string;
+  proj_baseline: number;
+  proj_intervened: number;
+  proj_delta: number;
+  orth_norm_baseline: number;
+  orth_norm_intervened: number;
+  orth_norm_delta: number;
+  unit: string;
+}
+
+export interface InterveneAxisRefused {
+  refused: string;
+}
+
+/** The same pair, averaged over the row's prompts. */
+export interface InterveneRowAxis {
+  direction_id: string;
+  space: string;
+  layer: number;
+  n_prompts: number;
+  proj_mean_baseline: number;
+  proj_mean_intervened: number;
+  proj_mean_delta: number;
+  orth_mean_delta: number;
+}
+
+export interface InterveneRun {
+  prompt: string;
+  intervention: {
+    verb: string;
+    layer: number | null;
+    alpha: number;
+    is_identity: boolean;
+    protocol: string;
+    direction_id?: string;
+    space?: string;
+    feature?: number;
+    sae_repo?: string;
+    sae_hook?: string;
+    value?: number;
+    lo?: number | null;
+    hi?: number | null;
+  };
+  /** logits bit-identical to the baseline's */
+  identical: boolean;
+  kl_bits: number;
+  resid_norm_baseline: number;
+  resid_norm_intervened: number;
+  /** Older bundles have no axis block at all; the reader treats absence and a
+   *  refusal the same way and says so. */
+  axis?: InterveneAxis | InterveneAxisRefused;
+  baseline: InterveneSide;
+  intervened: InterveneSide;
+  targets?: InterveneTarget[];
+}
+
+export interface InterveneRow {
+  alpha: number;
+  is_identity: boolean;
+  protocol: string;
+  kl_bits_mean: number;
+  kl_bits_max: number;
+  identical_to_baseline: boolean;
+  axis?: InterveneRowAxis;
+  axis_refused?: string;
+  runs: InterveneRun[];
+}
+
+export interface InterveneBundle {
+  kind: "intervention_sweep";
+  model: string;
+  verb: string;
+  n_layer: number;
+  d_model: number;
+  alphas: number[];
+  prompts: string[];
+  max_tokens: number;
+  rows: InterveneRow[];
+  claim: string;
+  notes: { decoding: string; control: string; d6: string; axis?: string };
+  meta: {
+    generated: string;
+    revision: string;
+    digest: string;
+    sae_repo?: string;
+    sae_hook?: string;
+    sae_hook_layer?: number;
+    hook_layer?: number;
+    hook_layer_note?: string;
+    direction?: { id: string; label: string; space: string; method: string; protocol: string };
+    layer_note?: string;
+    cap_note?: string;
+  };
+}
+
 export interface PatchBundle {
   meta: {
     model: string;
@@ -795,6 +936,12 @@ export function cachedBundle(url: string): unknown {
   return cache.get(url);
 }
 
+/** Drop every cached bundle. Tests only: two tests that stub different bodies
+ *  behind the same URL would otherwise see whichever ran first. */
+export function __resetInterpCache(): void {
+  cache.clear();
+}
+
 async function fetchJSON<T>(url: string): Promise<T> {
   for (const s of captures) s.add(url);
   const hit = cache.get(url);
@@ -848,6 +995,55 @@ export const loadComp = (model: string, base = DATA_BASE) =>
 
 export const loadPatch = (model: string, base = DATA_BASE) =>
   fetchJSON<PatchBundle>(`${interpBase(model, base)}/patch.json`);
+
+/** The shipped intervention sweep. `name` selects which one — a model can have
+ *  several (one per verb / per experiment) and they are not interchangeable:
+ *  each carries its own protocol string and its own claim sentence. */
+export const loadIntervene = (
+  model: string,
+  name = "intervene_golden_gate",
+  base = DATA_BASE,
+) => fetchJSON<InterveneBundle>(`${interpBase(model, base)}/${name}.json`);
+
+/** The sweep the Steer view should open, chosen rather than hard-coded.
+ *
+ *  A model may ship several — one per verb, one per experiment — and they are
+ *  not interchangeable. Exactly one property decides: whether the sweep
+ *  measured the prompt's position on a direction, because that is what the
+ *  rail's axis section reads. `clamp` and `cap` sweeps never can (they name no
+ *  direction), and a sweep produced before the `axis` block existed carries no
+ *  measurement either. So the index's `intervene_*` entries are tried in order
+ *  and the first one with a row-level `axis` wins; absent any, the first that
+ *  loads is returned, and the rail then shows that bundle's own refusal rather
+ *  than an empty panel. A name in the manifest that is not on disk is skipped,
+ *  not fatal: the manifest is a hint, the files are the truth.
+ */
+export async function loadSteerBundle(
+  model: string,
+  base = DATA_BASE,
+): Promise<InterveneBundle> {
+  let names: string[] = [];
+  try {
+    const idx = await loadInterpIndex(model, base);
+    names = (idx.bundles ?? []).filter((n) => /^intervene_.+\.json$/.test(n));
+  } catch {
+    names = [];
+  }
+  if (names.length === 0) names = ["intervene_golden_gate.json"];
+  let fallback: InterveneBundle | null = null;
+  for (const n of names) {
+    let b: InterveneBundle;
+    try {
+      b = await loadIntervene(model, n.replace(/\.json$/, ""), base);
+    } catch {
+      continue;
+    }
+    if (b.rows?.some((r) => r.axis)) return b;
+    fallback ??= b;
+  }
+  if (fallback) return fallback;
+  throw new Error(`no intervention sweep for ${model}`);
+}
 
 export const loadInduction = (model: string, base = DATA_BASE) =>
   fetchJSON<InductionBundle>(`${interpBase(model, base)}/induction.json`);

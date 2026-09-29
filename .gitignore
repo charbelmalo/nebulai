@@ -17,3 +17,7 @@ in/
 outputs/
 scratchpad-demo/
 viewer/design/
+
+# scripts/we_wu_overlap.py caches the fetched W_E/W_U rows here so a second
+# run costs no HTTP range reads. Derived data, never committed.
+.we_wu_cache/

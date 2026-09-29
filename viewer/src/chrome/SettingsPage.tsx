@@ -8,6 +8,7 @@ import { useEffect } from "preact/hooks";
 import { useSignal } from "@preact/signals";
 import { requestDataset, requestViewMode } from "../app/actions";
 import { appStore, type ViewMode } from "../app/store";
+import { handControlUnavailableReason, HAND_LEGEND } from "../hands/types";
 import {
   $buildHealth,
   $buildModels,
@@ -17,9 +18,19 @@ import {
   probeEndpoint,
   startBuild,
 } from "./probe";
+import { channelFor, channelsFor } from "../data/channels";
+import {
+  axisClaim,
+  axisMapClaim,
+  directionsFor,
+  renderableDirections,
+} from "../data/directions";
 import {
   $appearance,
+  $axis,
+  $behavior,
   $capabilities,
+  $channel,
   $compareData,
   $dataset,
   $datasetId,
@@ -41,9 +52,30 @@ import {
 } from "./sessionStore";
 import { ColorRow, RadioRow, SelectRow, SliderRow, Tabs, TextRow, ToggleRow } from "@psychix/viz/controls";
 import { CATEGORY_ORDER } from "./sessionlog";
-import type { SessionsAppearance, SessionsAxisMode } from "../scene/sessions/appearance";
+import type {
+  SessionsAppearance,
+  SessionsAxisMode,
+  SessionsProjection,
+} from "../scene/sessions/appearance";
+import {
+  isSelectableAsDefault,
+  loadSpace,
+  loadSpaceIndex,
+  verdictLabel,
+  verdictNote,
+  type PersonaSpace,
+} from "../data/persona";
 
-const TABS = ["General", "Appearance", "Model Probing", "Snapshot", "Sessions", "Data", "About"];
+const TABS = [
+  "General",
+  "Appearance",
+  "Behavior",
+  "Model Probing",
+  "Snapshot",
+  "Sessions",
+  "Data",
+  "About",
+];
 
 const STAGE_ORDER: readonly string[] = [
   "probing",
@@ -105,6 +137,7 @@ export function SettingsPage() {
         <div class="settings-body">
           {tab.value === "General" && <GeneralTab />}
           {tab.value === "Appearance" && <AppearanceTab />}
+          {tab.value === "Behavior" && <BehaviorTab />}
           {tab.value === "Model Probing" && <ProbingTab />}
           {tab.value === "Snapshot" && <SnapshotTab />}
           {tab.value === "Sessions" && <SessionsTab />}
@@ -116,11 +149,109 @@ export function SettingsPage() {
   );
 }
 
+// ── Behavior ───────────────────────────────────────────────────────────────
+
+/*  The Behavior page's knobs, per the Settings-home rule. Two of them carry a
+ *  claim, not just a preference, and their wording is load-bearing.
+ *
+ *  "Hide cues whose significance is indeterminate" is a DECLUTTER and is off by
+ *  default. Indeterminate is a third answer in this study — it means q could
+ *  not be computed for that cue, which is not the same as "no effect". A
+ *  default that hid them would silently convert "we could not tell" into
+ *  "nothing there", the exact move the plan's claim contract forbids.
+ *
+ *  "Reveal sensitive cue text" is off by default and hides RAW RESPONSES only.
+ *  It never changes a number: the metrics are computed over every trial
+ *  regardless, so turning it on reveals text and turning it off conceals text,
+ *  and neither reruns an analysis. */
+function BehaviorTab() {
+  const b = $behavior.value;
+  const set = appStore.getState();
+  return (
+    <>
+      <SettingsSection
+        title="Cue set"
+        hint="How the Behavior page presents the cues. These are view choices; none of them re-runs an analysis or changes a reported number."
+      >
+        <SelectRow
+          label="Default view"
+          value={b.view}
+          options={[
+            { value: "landscape", label: "Landscape (fixed PCA of the cue words)" },
+            { value: "ranked", label: "Ranked by effect" },
+            { value: "table", label: "Table of every metric" },
+          ]}
+          onChange={(v) => set.setBehaviorView(v as typeof b.view)}
+        />
+        <SelectRow
+          label="Sort"
+          value={b.sort}
+          options={[
+            { value: "effect", label: "Effect size |\u0394\u0302|" },
+            { value: "q", label: "q value" },
+            { value: "alpha", label: "Cue, alphabetical" },
+            { value: "reliability", label: "Split-half reliability" },
+          ]}
+          onChange={(v) => set.setBehaviorSort(v as typeof b.sort)}
+        />
+        <SelectRow
+          label="Filter"
+          value={b.filter}
+          options={[
+            { value: "all", label: "All cues, including gated and not-measured" },
+            { value: "measured", label: "Only cues with a computed effect" },
+            { value: "significant", label: "Only cues at or below the study's q threshold" },
+          ]}
+          onChange={(v) => set.setBehaviorFilter(v as typeof b.filter)}
+        />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Declutter"
+        hint="Indeterminate is a real answer in this study: it means q could not be computed for that cue, which is not the same as no effect. Hiding those tidies the plot; it does not change what was found."
+      >
+        <ToggleRow
+          label="Show cues whose significance is indeterminate"
+          checked={b.showIndeterminate}
+          onChange={(on) => set.setBehaviorFlag("showIndeterminate", on)}
+        />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Raw responses"
+        hint="Sample responses are read-only excerpts, never the analysis. Every metric is computed over all trials whether or not these are shown."
+      >
+        <ToggleRow
+          label="Show the sample-response panel"
+          checked={b.showSamples}
+          onChange={(on) => set.setBehaviorFlag("showSamples", on)}
+        />
+        <ToggleRow
+          label="Reveal text from cue packs marked sensitive"
+          checked={b.revealSensitive}
+          onChange={(on) => set.setBehaviorFlag("revealSensitive", on)}
+        />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Running a study"
+        hint="The viewer never calls a paid model on its own. A run is started from the command line, or from a loopback server you start yourself with `nebulai behavior serve`, and any paid arm prints its cost estimate and waits for an explicit approval before a single request is sent."
+      >
+        <p class="settings-note">
+          Studies are read from <code>out/behavior/behavior.json</code>. This page
+          displays a study; it does not collect one, and nothing on it can spend money.
+        </p>
+      </SettingsSection>
+    </>
+  );
+}
+
 // ── General ────────────────────────────────────────────────────────────────
 
 function GeneralTab() {
   const settings = $settings.value;
   const caps = $capabilities.value;
+  const handReason = handControlUnavailableReason();
   return (
     <>
       <SettingsSection
@@ -195,6 +326,40 @@ function GeneralTab() {
           hint={caps?.tier !== "webgpu" ? "webgpu only" : undefined}
           onChange={(v) => appStore.getState().setSetting("bloom", v)}
         />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Hand control"
+        hint="Steer the map with a webcam. Video is processed on this machine and never leaves it — no frame is uploaded, stored or sent anywhere."
+      >
+        <ToggleRow
+          label="Webcam hand control"
+          checked={settings.handTracking}
+          disabled={handReason !== null}
+          hint={
+            handReason ??
+            "asks for camera permission, then downloads ~19 MB of hand-tracking runtime once"
+          }
+          onChange={(v) => appStore.getState().setSetting("handTracking", v)}
+        />
+        <ToggleRow
+          label="Hand effects"
+          checked={settings.handEffects}
+          disabled={handReason !== null}
+          hint="lets your free hand throw a shockwave or snap the cloud bright — navigation only, when off"
+          onChange={(v) => appStore.getState().setSetting("handEffects", v)}
+        />
+        {/* The vocabulary in full. This is the one surface with room for it, and
+            it is short enough to print because the rebuild made it short: three
+            hand shapes, five outcomes, no modes to choose between. The rig's own
+            legend shows the same list without leaving the map. */}
+        <ul class="settings-note settings-gestures">
+          {HAND_LEGEND.map((entry) => (
+            <li key={entry.pose}>
+              <b>{entry.pose}</b> — {entry.effect}
+            </li>
+          ))}
+        </ul>
       </SettingsSection>
     </>
   );
@@ -400,6 +565,156 @@ const AXIS_MODES = [
   { value: "linear", label: "Linear" },
   { value: "eased", label: "Eased (asinh)" },
 ];
+
+/** The persona coordinate system (Attractors P2 / D4), as a Settings block.
+ *
+ *  Three knobs and one picker, and the picker is the one with a rule attached.
+ *  A persona space whose PC1 does not clear its label-permutation null may be
+ *  LOADED and looked at — that is how you find out it failed — but it can never
+ *  become the default coordinate system, and choosing it here is an explicit
+ *  act with the verdict printed next to it (§3.3). `isSelectableAsDefault` in
+ *  `data/persona.ts` is the single place that rule lives; this component asks
+ *  it rather than comparing the verdict string itself. */
+function SessionsProjectionControls(props: {
+  a: SessionsAppearance;
+  set: <K extends keyof SessionsAppearance>(key: K, value: SessionsAppearance[K]) => void;
+}) {
+  const { a, set } = props;
+  const sess = $sessions.value;
+  const spaces = useSignal<PersonaSpace[] | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    loadSpaceIndex()
+      .then(async (ids) => {
+        const loaded: PersonaSpace[] = [];
+        for (const { spaceId } of ids) {
+          try {
+            loaded.push(await loadSpace(spaceId));
+          } catch {
+            // a space that will not parse is not a space; it is skipped rather
+            // than listed as an option that cannot be selected
+          }
+        }
+        if (live) spaces.value = loaded;
+      })
+      .catch(() => {
+        if (live) spaces.value = [];
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const list = spaces.value;
+  const chosen = list?.find((s) => s.spaceId === sess.personaSpaceId) ?? null;
+  const havePersona = !!list && list.length > 0;
+
+  return (
+    <SettingsSection
+      title="Projection — which coordinate system a turn is drawn in"
+      hint="Usage space is derived from what the run cost (time × context read × context written). Persona space projects the pinned model's residual stream through a frozen basis. They share no axis, so switching cross-fades rather than morphing — a tween between them would draw a continuous path through coordinates that mean nothing."
+    >
+      <SelectRow
+        label="Coordinate system"
+        value={a.projection}
+        options={[
+          { value: "usage", label: "Usage (time × context × new context)" },
+          {
+            value: "persona",
+            label: "Persona (frozen basis)",
+            disabled: !havePersona || !sess.personaSpaceId,
+            hint: !havePersona
+              ? "no persona space in this deploy — run `nebulai persona build`"
+              : !sess.personaSpaceId
+                ? "pick a space below first"
+                : undefined,
+          },
+        ]}
+        onChange={(v) => set("projection", v as SessionsProjection)}
+      />
+
+      {list === null ? (
+        <p class="settings-hint">reading persona spaces…</p>
+      ) : list.length === 0 ? (
+        <p class="settings-hint">
+          This deploy ships no persona space. Build one with <code>nebulai persona build</code> —
+          until then the field draws in usage space only, which is not a fallback persona axis, it
+          is a different measurement.
+        </p>
+      ) : (
+        <>
+          <SelectRow
+            label="Persona space"
+            value={sess.personaSpaceId ?? ""}
+            options={[
+              { value: "", label: "none" },
+              ...list.map((s) => ({
+                value: s.spaceId,
+                label: `${s.spaceId} — ${verdictLabel(s.control.verdict)}`,
+              })),
+            ]}
+            onChange={(v) => {
+              const space = list.find((s) => s.spaceId === v) ?? null;
+              appStore.getState().setPersonaSpace(space ? space.spaceId : null, space?.control.verdict);
+              // a space that did not clear its null is viewable but is never
+              // the coordinate system the field comes back in by default
+              if (!space || !isSelectableAsDefault(space)) set("projection", "usage");
+            }}
+          />
+          {chosen && (
+            <>
+              <p class="settings-hint">
+                <b>{chosen.model}</b> @ <code>{chosen.revision.slice(0, 12)}</code> · layer{" "}
+                {chosen.layer} · prompt set <code>{chosen.promptSet.id}</code> (
+                {chosen.promptSet.n} prompts, sha <code>{chosen.promptSet.sha256.slice(0, 12)}</code>
+                )
+              </p>
+              <p class="settings-hint">{verdictNote(chosen)}</p>
+              {!isSelectableAsDefault(chosen) && (
+                <p class="settings-hint">
+                  Because this space did not clear its null it cannot be the default coordinate
+                  system. You can still switch to it above — the verdict travels with it and the
+                  field says so — but nothing drawn in it is a claim about personas.
+                </p>
+              )}
+              {chosen.control.crossCheck && (
+                <p class="settings-hint">
+                  A second control was run and kept: {chosen.control.crossCheck.method} returned{" "}
+                  {chosen.control.crossCheck.verdict}. {chosen.control.crossCheck.note}
+                </p>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      <SliderRow
+        label="Cross-fade"
+        value={a.projectionFade}
+        min={0}
+        max={3}
+        step={0.05}
+        format={(v) => (v === 0 ? "cut" : `${v.toFixed(2)} s`)}
+        onChange={(v) => set("projectionFade", v)}
+      />
+      <SliderRow
+        label="Trail length (persona)"
+        value={a.trailLength}
+        min={0}
+        max={400}
+        step={1}
+        format={(v) => (v === 0 ? "whole path" : `${Math.round(v)} turns`)}
+        onChange={(v) => set("trailLength", Math.round(v))}
+      />
+      <p class="settings-hint">
+        Persona space has no time axis, so the playback cursor degrades to a trail parameter: how
+        many turns of history stay lit behind it. The transport still scrubs turn order — it just
+        stops being a position.
+      </p>
+    </SettingsSection>
+  );
+}
 
 function SessionsAppearanceControls(props: { a: SessionsAppearance }) {
   const a = props.a;
@@ -610,6 +925,28 @@ function SessionsAppearanceControls(props: { a: SessionsAppearance }) {
           value={a.axisNewContext}
           options={AXIS_MODES}
           onChange={(v) => set("axisNewContext", v as SessionsAxisMode)}
+        />
+      </SettingsSection>
+
+      {/* ── Attractors P2 / D4: the persona coordinate system ──────────────
+          A clearly delimited block. Everything it touches is either an
+          `appearance.sessions` knob or the sessions slice's persona fields;
+          nothing above or below is reflowed. */}
+      <SessionsProjectionControls a={a} set={set} />
+
+      {/* ── Attractors P3: the fan ──────────────────────────────────────
+          Also a clearly delimited block, and also only `appearance.sessions`.
+          WHICH ensemble is on screen is a data selection and lives beside the
+          readout it labels, on the Sessions page; whether its spread is drawn
+          is a look, so it lives here with the other field knobs. */}
+      <SettingsSection
+        title="Ensemble — the fan"
+        hint="With an ensemble selected on the Sessions page, the field can draw where its runs actually were at each step: a p10–p90 box per step around the median path. Boxes, not a tube — a smooth surface between steps would interpolate a quantile that was never measured. A step reached by fewer than two runs gets no box at all, and nothing is drawn until at least three of the ensemble's runs are loaded."
+      >
+        <ToggleRow
+          label="Draw the p10–p90 envelope"
+          checked={a.showEnvelope}
+          onChange={(v) => set("showEnvelope", v)}
         />
       </SettingsSection>
 
@@ -1310,7 +1647,185 @@ function DataTab() {
           onChange={(v) => appStore.getState().setDims(v === "3" ? 3 : 2)}
         />
       )}
+      <ChannelLensRow />
+      <AxisRow />
     </SettingsSection>
+  );
+}
+
+/** The channel lens, in its Settings home.
+ *
+ *  It is reachable from the Search panel's chips as well; this is the canonical
+ *  place, per the SETTINGS_HOME rule, and it is also the only surface that
+ *  prints the lens's PROVENANCE — which space the numbers live in, the formula,
+ *  how they were obtained, and how many points have no value. A map with no
+ *  `channels.json` gets a disabled row that says what to run, rather than an
+ *  empty select that looks like a broken control. */
+function ChannelLensRow() {
+  const dsId = $datasetId.value;
+  const set = channelsFor(dsId);
+  const ui = $channel.value;
+  const active = channelFor(dsId, ui.id);
+
+  if (!set) {
+    return (
+      <SelectRow
+        label="Channel lens"
+        value=""
+        disabled
+        options={[
+          {
+            value: "",
+            label: dsId
+              ? `no channels for this map — run \`nebulai channels ${dsId}\``
+              : "no map loaded",
+          },
+        ]}
+        onChange={() => {}}
+      />
+    );
+  }
+
+  return (
+    <>
+      <SelectRow
+        label="Channel lens"
+        value={ui.id ?? ""}
+        options={[
+          { value: "", label: "off — colour by cluster" },
+          ...set.channels.map((c) => ({ value: c.id, label: c.label })),
+        ]}
+        onChange={(v) => appStore.getState().setChannel(v ? v : null)}
+      />
+      {active && (
+        <dl class="settings-dl">
+          <dt>Space</dt>
+          <dd>{active.space}</dd>
+          <dt>Formula</dt>
+          <dd>{active.formula || active.method || "—"}</dd>
+          <dt>Fidelity</dt>
+          <dd>{active.fidelity}</dd>
+          <dt>Range</dt>
+          <dd>
+            {active.stats.min === null || active.stats.max === null
+              ? "no measured values"
+              : `${active.stats.min.toFixed(3)} – ${active.stats.max.toFixed(3)}${
+                  active.units ? ` ${active.units}` : ""
+                }`}
+          </dd>
+          <dt>Not measured</dt>
+          <dd>
+            {active.stats.n_missing.toLocaleString()} of{" "}
+            {active.values.length.toLocaleString()} points
+          </dd>
+          <dt>Filter window</dt>
+          <dd>
+            {ui.window ? `${ui.window[0].toFixed(3)} – ${ui.window[1].toFixed(3)}` : "whole range"}
+          </dd>
+        </dl>
+      )}
+    </>
+  );
+}
+
+/** The direction axis, in its Settings home.
+ *
+ *  The map's own rail can drive the same three knobs; this is the canonical
+ *  place per the SETTINGS_HOME rule, and — like the channel row above it — the
+ *  only surface that prints a direction's full provenance: the space it lives
+ *  in, the protocol it was derived by, the held-out separation, and the
+ *  random-direction baseline that separation has to beat.
+ *
+ *  Two things it deliberately does NOT do. It never offers a direction the
+ *  gate refused, and it never hides one either: refused directions are listed
+ *  under the select with their reason, so a map whose axis will not draw says
+ *  why here rather than simply having one option fewer.
+ */
+function AxisRow() {
+  const dsId = $datasetId.value;
+  const ui = $axis.value;
+  const set = directionsFor(dsId);
+  const { ok, drops } = renderableDirections(dsId);
+  const active = ui.directionId ? (ok.find((d) => d.id === ui.directionId) ?? null) : null;
+
+  if (!set) {
+    return (
+      <SelectRow
+        label="Direction axis"
+        value=""
+        disabled
+        options={[
+          {
+            value: "",
+            label: dsId
+              ? `no directions for this map — run \`nebulai direction make ${dsId} …\``
+              : "no map loaded",
+          },
+        ]}
+        onChange={() => {}}
+      />
+    );
+  }
+
+  return (
+    <>
+      <SelectRow
+        label="Direction axis"
+        value={ui.directionId ?? ""}
+        options={[
+          { value: "", label: "off — the map's own layout" },
+          ...ok.map((d) => ({ value: d.id, label: d.label })),
+        ]}
+        onChange={(v) => appStore.getState().setAxisDirection(v ? v : null)}
+      />
+      {active && (
+        <>
+          <SliderRow
+            label="Blend onto the axis"
+            value={ui.t}
+            min={0}
+            max={1}
+            step={0.01}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onChange={(v) => appStore.getState().setAxisT(v)}
+          />
+          <ToggleRow
+            label="Show the null cloud"
+            hint="the same points on a random unit direction"
+            checked={ui.showNull}
+            onChange={(v) => appStore.getState().setAxisNull(v)}
+          />
+          <dl class="settings-dl">
+            <dt>Space</dt>
+            <dd>{active.space}</dd>
+            <dt>Method</dt>
+            <dd>{active.method}</dd>
+            <dt>Width</dt>
+            <dd>{active.d} dimensions</dd>
+            <dt>Protocol</dt>
+            <dd>{active.source.protocol}</dd>
+            <dt>Its own two sets</dt>
+            <dd>{axisClaim(active)}</dd>
+            <dt>Across this map</dt>
+            <dd>{axisMapClaim(active)}</dd>
+            <dt>Null</dt>
+            <dd>
+              {active.null
+                ? `${active.null.n} × ${active.null.method}, seed ${active.null.seed}`
+                : "none — this direction is not renderable"}
+            </dd>
+          </dl>
+        </>
+      )}
+      {drops.length > 0 && (
+        <dl class="settings-dl">
+          {drops.map((x) => [
+            <dt key={`${x.direction.id}-k`}>{x.direction.id}</dt>,
+            <dd key={`${x.direction.id}-v`}>{x.reason}</dd>,
+          ])}
+        </dl>
+      )}
+    </>
   );
 }
 

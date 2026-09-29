@@ -49,6 +49,7 @@ from .redaction import ContentLevel, parse_level
 from .reconcile import reconcile_codex
 from .reducer import Measured, RunView, reduce_run
 from .runner import Runner
+from .sessionlog import CHANNELS, KeywordReport
 from .store import DEFAULT_ROOT, EventStore
 
 # ── printing ─────────────────────────────────────────────────────────────────
@@ -139,6 +140,9 @@ def _print_view(v: RunView) -> None:
 
 
 def _cmd_run(args: argparse.Namespace, store: EventStore) -> int:
+    repeat = int(getattr(args, "repeat", 1) or 1)
+    if repeat > 1:
+        return _cmd_run_ensemble(args, store, repeat)
     agents = [args.agent] + list(args.compare_with or [])
     results = []
     for agent in agents:
@@ -166,6 +170,215 @@ def _cmd_run(args: argparse.Namespace, store: EventStore) -> int:
     if len(results) > 1:
         _print_comparison([r.view for r in results])
     return 0 if all(r.exit_code in (0, None) for r in results) else 1
+
+
+# ── P3: the repeat ───────────────────────────────────────────────────────────
+#
+# `--repeat N` is the only path in `seer` that can spend N times as much money
+# as the human typed a command for, so it is the only one with a budget in
+# front of it. The shape is `budget.SeerBudget`'s and is deliberately visible
+# here rather than buried: preflight the whole repeat, approve it, launch run
+# 1, charge what it really reported, and then preflight AGAIN for runs 2…N now
+# that there is a measured number to estimate from. The second preflight is
+# what turns `MISSING` into `ESTIMATED`, and it is also what refuses a repeat
+# whose first run turned out to be expensive.
+
+
+def _fmt_cost(m) -> str:
+    return "—" if m.absent else f"${float(m.value):.4f}"
+
+
+def _print_ensemble(doc: dict) -> None:
+    w = sys.stdout.write
+    w(f"\nensemble {doc['ensemble_id']}  ({doc['n_runs']}"
+      f" of {doc['n_runs_requested']} runs)\n")
+    w(f"  protocol   {doc['protocol'].get('id')} "
+      f"[{doc['protocol'].get('hash_algorithm')} over "
+      f"{'+'.join(doc['protocol'].get('hash_fields') or [])}]\n")
+    if doc["n_runs"] < doc["point_estimate_min_runs"]:
+        w(f"  n = {doc['n_runs']} < {doc['point_estimate_min_runs']}: read every "
+          f"number below as an interval, never a point\n")
+    for name, r in doc["rates"].items():
+        if r.get("p") is None:
+            w(f"  {name:<26} —   ({r.get('missing', 'missing')})\n")
+        else:
+            lo, hi = r["ci95"]
+            w(f"  {name:<26} {r['p']:.2f}  [{lo:.2f}, {hi:.2f}]  "
+              f"k={r['k']}/n={r['n']}\n")
+    fan = doc["fan"]
+    if fan:
+        w(f"  fan        {len(fan)} steps of {doc['fan_metric']}, envelope "
+          f"{doc['fan_envelope']}\n")
+    rel = doc["reliability"]
+    if rel.get("delta_hat") is None:
+        w(f"  delta_hat  —   ({rel.get('missing', 'missing')})\n")
+    else:
+        w(f"  delta_hat  {rel['delta_hat']:+.4f}  "
+          f"(between {rel['between']:.4f} − ½[{rel['within_a']:.4f} + "
+          f"{rel['within_b']:.4f}])\n")
+    for quantity, why in doc.get("missing", {}).items():
+        w(f"  missing: {quantity} — {why}\n")
+    w("\n")
+
+
+def _cmd_run_ensemble(
+    args: argparse.Namespace, store: EventStore, repeat: int
+) -> int:
+    from .budget import SeerBudget, SeerBudgetError, protocol_fingerprint
+    from .ensemble import (
+        EnsembleManifest,
+        Member,
+        build_ensemble,
+        new_ensemble_id,
+        write_manifest,
+    )
+
+    agents = [args.agent] + list(args.compare_with or [])
+    cwd = str(args.cwd) if args.cwd else str(Path.cwd())
+    fps = {
+        a: protocol_fingerprint(a, args.prompt, model=args.model, cwd=cwd)
+        for a in agents
+    }
+    total = repeat * len(agents)
+
+    budget = SeerBudget(
+        store,
+        ceiling_usd=args.max_cost_usd,
+        label=f"seer run --repeat {repeat}",
+    )
+    try:
+        budget.preflight(
+            fps[args.agent]["id"],
+            total,
+            acknowledge_unpriced=args.acknowledge_unpriced,
+        )
+    except SeerBudgetError as exc:
+        sys.stderr.write(f"[seer] {exc}\n")
+        return 2
+    budget.approve()
+
+    manifest = EnsembleManifest(
+        ensemble_id=new_ensemble_id(),
+        protocol=fps[args.agent],
+        n_runs_requested=total,
+        seed_base=args.seed_base,
+        # recorded, never handed to an agent — none of the three accept one
+        seed_applied=False,
+    )
+    # written before the first launch, so a repeat killed halfway still leaves
+    # an ensemble a reader can find the surviving runs through
+    write_manifest(store, manifest)
+    sys.stderr.write(f"[seer] ensemble {manifest.ensemble_id}\n")
+
+    results = []
+    launched = {a: 0 for a in agents}
+    stopped: str | None = None
+    for i in range(repeat):
+        for agent in agents:
+            pid = fps[agent]["id"]
+            if launched[agent] == 1:
+                # run 2 of this protocol: run 1 has happened, so there may now
+                # be a measured number to estimate the rest from
+                try:
+                    budget.preflight(
+                        pid,
+                        repeat - 1,
+                        acknowledge_unpriced=args.acknowledge_unpriced,
+                    )
+                    budget.approve()
+                except SeerBudgetError as exc:
+                    stopped = str(exc)
+                    break
+            sys.stderr.write(
+                f"[seer] launching {agent} ({i + 1}/{repeat}) …\n"
+            )
+            r = Runner(
+                agent,
+                args.prompt,
+                store=store,
+                cwd=args.cwd,
+                model=args.model,
+                keep_reasoning=args.keep_reasoning,
+                label=args.label,
+                on_event=(_tick if args.progress else None),
+            ).run(timeout_s=args.timeout)
+            results.append(r)
+            launched[agent] += 1
+            if args.progress:
+                sys.stderr.write("\n")
+            manifest.members.append(
+                Member(
+                    run_id=r.run_id,
+                    index=len(manifest.members),
+                    condition=agent,
+                    protocol_id=pid,
+                    seed=(
+                        None if args.seed_base is None
+                        else int(args.seed_base) + i
+                    ),
+                )
+            )
+            manifest.budget = budget.to_dict()
+            write_manifest(store, manifest)
+            sys.stderr.write(
+                f"[seer]   {r.run_id} {r.view.state.value} "
+                f"cost={_fmt_cost(r.view.cost_usd)}\n"
+            )
+            cost = r.view.cost_usd
+            try:
+                budget.charge_run(
+                    pid,
+                    r.run_id,
+                    None if cost.absent else float(cost.value),
+                    source_fidelity=cost.fidelity.value,
+                )
+            except SeerBudgetError as exc:
+                stopped = str(exc)
+                break
+        if stopped:
+            break
+
+    manifest.budget = budget.to_dict()
+    write_manifest(store, manifest)
+    if stopped:
+        sys.stderr.write(f"[seer] {stopped}\n")
+    sys.stderr.write(f"[seer] {budget.summary()}\n")
+
+    doc = build_ensemble(store, manifest).to_dict()
+    if args.json:
+        print(json.dumps(doc, indent=2))
+    else:
+        _print_ensemble(doc)
+    if stopped:
+        return 2
+    return 0 if all(r.exit_code in (0, None) for r in results) else 1
+
+
+def _cmd_ensemble(args: argparse.Namespace, store: EventStore) -> int:
+    from .ensemble import build_ensemble, list_ensembles, read_manifest
+
+    if not args.ensemble_id:
+        rows = list_ensembles(store, args.limit)
+        if not rows:
+            sys.stdout.write("no ensembles\n")
+            return 0
+        for row in rows:
+            sys.stdout.write(
+                f"{row['ensemble_id']}  {row['n_members']}"
+                f"/{row['n_runs_requested']} runs  {row['protocol_id']}  "
+                f"{row['created']}\n"
+            )
+        return 0
+    manifest = read_manifest(store, args.ensemble_id)
+    if manifest is None:
+        sys.stderr.write(f"[seer] unknown ensemble {args.ensemble_id}\n")
+        return 2
+    doc = build_ensemble(store, manifest).to_dict()
+    if args.json:
+        print(json.dumps(doc, indent=2))
+    else:
+        _print_ensemble(doc)
+    return 0
 
 
 def _cmd_attach(args: argparse.Namespace, store: EventStore) -> int:
@@ -300,6 +513,52 @@ def _cmd_show(args: argparse.Namespace, store: EventStore) -> int:
         print(json.dumps(v.to_dict(), indent=2, default=str))
     else:
         _print_view(v)
+    return 0
+
+
+# ── place (Attractors P2 / D5) ───────────────────────────────────────────────
+
+_PLACE_DEFAULT_URL = "http://127.0.0.1:8123"
+
+
+def _cmd_place(args: argparse.Namespace, store: EventStore) -> int:
+    from .place import PlaceError, place_run, write_placement
+
+    roles = tuple(r.strip() for r in args.roles.split(",") if r.strip())
+    try:
+        p = place_run(
+            store,
+            args.run_id,
+            args.space_id,
+            live_url=args.live_url or _PLACE_DEFAULT_URL,
+            in_process=args.in_process,
+            out_root=args.out,
+            local_dir=args.local_dir,
+            roles=roles,
+        )
+    except PlaceError as e:
+        sys.stderr.write(f"{e}\n")
+        return 2
+    path = write_placement(store, p)
+    if args.json:
+        print(json.dumps(p.to_dict(), indent=2))
+        return 0
+    w = sys.stdout.write
+    w(f"run     {p.run_id}\n")
+    w(f"space   {p.space_id}  (layer {p.layer}, {p.model} @ {p.revision})\n")
+    w(f"source  {p.source} via {p.transport}  fidelity={p.fidelity}\n")
+    if p.pc1_evr is not None:
+        w(f"control pc1_evr={p.pc1_evr:.4f} null_p95={p.pc1_evr_null_p95:.4f} "
+          f"verdict={p.verdict}\n")
+        if p.verdict != "above_null":
+            w("        PC1 did not clear its null — these coordinates are a real\n"
+              "        projection but NOT the default trajectory frame.\n")
+    w(f"placed  {len(p.points)} turns\n")
+    d = p.to_dict()
+    if d["n_skipped"]:
+        w(f"skipped {d['n_skipped']} "
+          f"({d['n_dropped_by_policy']} dropped_by_policy, {d['n_missing']} missing)\n")
+    w(f"wrote   {path}\n")
     return 0
 
 
@@ -571,6 +830,286 @@ def _cmd_import_spool(args: argparse.Namespace, store: EventStore) -> int:
     return 0
 
 
+def _cmd_import(args: argparse.Namespace, store: EventStore) -> int:
+    """Import a public corpus as reconciled runs (Attractors D7).
+
+    The corpora are other people's data. Two rules are enforced here rather
+    than left to the caller: the run is written with `capture_mode:
+    reconciled`, and a `corpus.json` sits next to the events carrying the
+    licence, the URL, the input file's sha256 and the count of records the
+    mapping did not recognise. A run whose provenance is not written is not
+    importable — there is no flag to skip it.
+    """
+    from .adapters import corpus_adapter
+    from .adapters.corpus_base import CorpusError
+    from .adapters.corpus_village import VillageUnavailable
+
+    kw: dict[str, object] = {}
+    if args.corpus == "amongus":
+        kw = {"summary_path": args.summary, "max_games": args.limit}
+    elif args.corpus == "ctfish":
+        kw = {
+            "labels_path": args.labels,
+            "max_runs": args.limit,
+            "model": args.filter_model,
+            "variant": args.variant,
+        }
+    elif args.corpus == "village":
+        kw = {"kind": args.kind, "max_rows": args.limit}
+
+    try:
+        adapter = corpus_adapter(args.corpus, run_id=args.run_id or "", session_id="")
+        runs = adapter.read(args.path, **{k: v for k, v in kw.items() if v is not None})
+    except VillageUnavailable as e:
+        sys.stderr.write(f"{e}\n")
+        return 2
+    except (CorpusError, FileNotFoundError) as e:
+        sys.stderr.write(f"{e}\n")
+        return 2
+
+    out = []
+    for r in runs:
+        if not args.dry_run:
+            store.append_many(r.events)
+            d = store.runs_dir / r.run_id
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "corpus.json").write_text(
+                json.dumps({**r.meta, "warnings": r.warnings}, indent=2) + "\n"
+            )
+        out.append(
+            {
+                "run_id": r.run_id,
+                "n_events": len(r.events),
+                "n_unmapped": r.meta.get("n_unmapped"),
+                "n_warnings": len(r.warnings),
+                "corpus": r.corpus.id,
+                "licence": r.corpus.licence,
+                "ships_in_repo": r.corpus.ships_in_repo,
+            }
+        )
+    print(json.dumps({"dry_run": args.dry_run, "runs": out}, indent=2))
+    for r in runs:
+        for w in r.warnings:
+            sys.stderr.write(f"{r.run_id}: {w}\n")
+    return 0
+
+def _kv(spec: str, what: str) -> tuple[str, "re.Pattern[str]"]:
+    """`name=regex` → a named pattern. A bare regex is named after itself."""
+    import re as _re
+    name, sep, body = spec.partition("=")
+    if not sep:
+        name, body = spec, spec
+    try:
+        return name, _re.compile(body, _re.IGNORECASE)
+    except _re.error as e:
+        raise SystemExit(f"bad {what} regex {body!r}: {e}")
+
+
+def _bar(n: int, total: int, width: int = 18) -> str:
+    if total <= 0:
+        return " " * width
+    filled = max(1, round(width * n / total)) if n else 0
+    return "█" * filled + "·" * (width - filled)
+
+
+def _print_keyword(rep: "KeywordReport") -> None:
+    d = rep.to_dict()
+    sc, tot = d["scanned"], d["totals"]
+    proj = d["project"]
+    print(f"\n{d['term']}   pattern {d['pattern']}"
+          f"{'' if d['case_sensitive'] else '   (case-insensitive)'}")
+    if proj:
+        print(f"{proj['slug']}   — matched by {proj['matched_how']}")
+    print(f"scanned {sc['sessions']} sessions · {sc['bytes'] / 1e6:.1f} MB · "
+          f"{sc['lines']:,} lines · {sc['lines_examined']:,} examined · "
+          f"{sc['elapsed_s']}s")
+
+    if not tot["counted"]:
+        print("\nno counted occurrences.")
+        if tot["suppressed"]:
+            print(f"  {tot['suppressed']} hit(s) landed only in suppressed "
+                  f"channels — see below, and --channel to count them.")
+        if d["compounds_rejected_by_word_boundary"]:
+            forms = " · ".join(f"{k} {v}" for k, v in
+                               list(d["compounds_rejected_by_word_boundary"].items())[:8])
+            print(f"  a substring search would have matched: {forms}")
+        if not tot["suppressed"] and not d["compounds_rejected_by_word_boundary"]:
+            print("  the word does not appear in these transcripts at all.")
+        return
+
+    # The headline. This ordering is the finding: who put the word there.
+    print(f"\nWHO PUT IT THERE                                   {tot['counted']} counted")
+    order = ["human", "standing", "harness", "model", "environment"]
+    gloss = {
+        "human": "you typed it",
+        "standing": "your standing instructions (CLAUDE.md, skills)",
+        "harness": "harness boilerplate — says nothing about the task",
+        "model": "the agent's own words",
+        "environment": "what it read off this machine",
+    }
+    for o in order:
+        n = d["by_origin"].get(o, 0)
+        if not n:
+            continue
+        pct = 100 * n / tot["counted"]
+        print(f"  {o:<12} {_bar(n, tot['counted'])} {n:>6}  {pct:4.0f}%  {gloss[o]}")
+
+    print("\nBY CHANNEL")
+    for cid, n in d["by_channel"].items():
+        ch = CHANNELS[cid]
+        print(f"  {n:>6}  {ch.label:<32} {ch.origin.value}")
+
+    if len(d["by_sense"]) > 1 or "unclassified" not in d["by_sense"]:
+        print("\nBY SENSE   (your regexes — heuristic, not stated by the transcript)")
+        for name, n in sorted(d["by_sense"].items(), key=lambda kv: -kv[1]):
+            print(f"  {n:>6}  {name}")
+
+    forms = " · ".join(f"{k} {v}" for k, v in d["surface_forms"].items())
+    print(f"\nSURFACE FORMS      {forms}")
+    if d["compounds_rejected_by_word_boundary"]:
+        rej = " · ".join(f"{k} {v}" for k, v in
+                         list(d["compounds_rejected_by_word_boundary"].items())[:10])
+        print(f"REJECTED COMPOUNDS {rej}")
+        print("                   (a substring grep would have counted these as hits)")
+        uw = d["compounds_unwordlike"]
+        if uw["hits"]:
+            print(f"                   + {uw['hits']} more in {uw['forms']} strings "
+                  "too long to be words (base64, signatures)")
+    if d["inflections_rejected"]:
+        infl = " · ".join(f"{k} {v}" for k, v in d["inflections_rejected"].items())
+        alt = "|".join([d["term"], *d["inflections_rejected"]])
+        print(f"\nNOTE  these are inflections of your term, not other words: {infl}")
+        print(f"      to count them too:  --regex '\\b({alt})\\b'")
+        print("      spellings that drop a letter of the term (face -> facing) "
+              "are not in")
+        print("      that tally and were never read — name them in --regex to "
+              "count them")
+
+    if d["suppressed_channels"] or sc["duplicate_fields_folded"]:
+        print("\nNOT COUNTED")
+        if sc["duplicate_fields_folded"]:
+            print(f"  {sc['duplicate_fields_folded']:>6}  the same text recorded twice on "
+                  f"one line (folded)")
+        for row in d["suppressed_channels"]:
+            print(f"  {row['hits']:>6}  {row['label']:<32} {row['why']}")
+    if d["excluded_by_rule"]:
+        print("\nEXCLUDED BY YOUR RULES")
+        for name, n in sorted(d["excluded_by_rule"].items(), key=lambda kv: -kv[1]):
+            print(f"  {n:>6}  {name}")
+
+    hits = [s for s in d["sessions"] if s["occurrences"]]
+    print(f"\nSESSIONS WITH HITS   {len(hits)} of {sc['sessions']}")
+    for s in hits[:12]:
+        origins = " ".join(f"{k[:4]}:{v}" for k, v in
+                           sorted(s["by_origin"].items(), key=lambda kv: -kv[1]))
+        print(f"  {s['occurrences']:>6}  {s['session_id'][:8]}  "
+              f"{(s['title'] or '(untitled)')[:44]:<44} {origins}")
+    if len(hits) > 12:
+        print(f"         … and {len(hits) - 12} more")
+
+    print("\nSAMPLES")
+    for s in d["samples"]:
+        print(f"  [{s['origin']}/{s['channel']}] {s['session_id'][:8]} L{s['line']}"
+              f"{'' if s['sense'] == 'unclassified' else '  sense=' + s['sense']}")
+        print(f"      …{s['snippet']}…")
+
+
+def _cmd_keyword(args: argparse.Namespace, store: EventStore) -> int:
+    """`seer keyword` — where a word entered the context, attributed by origin.
+
+    The `store` argument is unused on purpose: this command reads Claude Code's
+    own transcripts on disk and writes nothing to the event store. Nothing here
+    is imported as a run, because a text occurrence is not an event and
+    laundering one into the canonical contract would put a fidelity on it that
+    it has not earned.
+    """
+    from . import sessionlog as sl
+
+    root = Path(args.projects_root).expanduser() if args.projects_root else None
+
+    if args.list_projects:
+        base = root or sl.DEFAULT_PROJECTS_ROOT
+        if not base.is_dir():
+            sys.stderr.write(f"no projects directory at {base}\n")
+            return 2
+        rows = sl.list_projects(base)
+        print(f"{len(rows)} projects with transcripts under {base}\n")
+        for r in rows:
+            print(f"  {r['bytes'] / 1e6:>9.1f} MB  {r['sessions']:>4} sessions  "
+                  f"{r['slug']}")
+        return 0
+
+    if args.list_channels:
+        print("channel                          origin       on  why")
+        for cid, ch in sl.CHANNELS.items():
+            print(f"  {cid:<30} {ch.origin.value:<12} "
+                  f"{'yes' if ch.default else ' no'}  {ch.why}")
+        return 0
+
+    if not args.term:
+        sys.stderr.write("a search term is required (or --list-projects / --list-channels)\n")
+        return 2
+
+    try:
+        project = sl.resolve_project(args.project, root) if args.project else None
+    except sl.SessionLogError as e:
+        sys.stderr.write(f"{e}\n")
+        return 2
+
+    if project is None:
+        sys.stderr.write("--project is required (try --list-projects)\n")
+        return 2
+
+    refs = sl.discover_sessions(project.path)
+    if args.session:
+        wanted = set(args.session)
+        refs = [r for r in refs
+                if r.session_id in wanted
+                or any(r.session_id.startswith(w) for w in wanted)
+                or (r.title and any(w.lower() in r.title.lower() for w in wanted))]
+        if not refs:
+            sys.stderr.write(
+                f"no session in {project.slug} matches {', '.join(args.session)}\n")
+            return 2
+    if args.max_sessions:
+        refs = refs[: args.max_sessions]
+    if not refs:
+        sys.stderr.write(f"no transcripts in {project.path}\n")
+        return 2
+
+    try:
+        channels = sl.enabled_channels(include=args.channel or (),
+                                       only=args.only_channel or ())
+    except sl.SessionLogError as e:
+        sys.stderr.write(f"{e}\n")
+        return 2
+
+    senses = [sl.Sense(*_kv(s, "sense")) for s in (args.sense or [])]
+    excludes = [_kv(x, "exclude") for x in (args.exclude or [])]
+
+    rep = sl.scan(
+        args.term, refs, project=project, regex=args.regex,
+        case_sensitive=args.case_sensitive, channels=channels,
+        senses=senses, excludes=excludes, window=args.window,
+        samples_per_channel=args.samples,
+    )
+
+    if args.json:
+        payload = json.dumps(rep.to_dict(), indent=2)
+        if args.json == "-":
+            print(payload)
+        else:
+            out = Path(args.json).expanduser()
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(payload + "\n")
+            _print_keyword(rep)
+            print(f"\nreport written to {out}")
+        return 0
+
+    _print_keyword(rep)
+    return 0
+
+
 # ── wiring ───────────────────────────────────────────────────────────────────
 #
 # `_add_subcommands` is the one place the sub-subcommand table is declared.
@@ -589,6 +1128,10 @@ def _cmd_import_spool(args: argparse.Namespace, store: EventStore) -> int:
 
 
 def _add_subcommands(p: argparse.ArgumentParser) -> None:
+    # The project-wide spend ceiling, shared with the namer and probe rather
+    # than a second number that could drift from it (Attractors P3).
+    from ..corpus import DEFAULT_MAX_COST_USD as _DEFAULT_MAX_COST_USD
+
     p.add_argument(
         "--root", default=None,
         help=f"event log root (default: {DEFAULT_ROOT})",
@@ -613,6 +1156,40 @@ def _add_subcommands(p: argparse.ArgumentParser) -> None:
              "asked for, and the resulting fields say dropped_by_policy when not",
     )
     r.add_argument("--progress", action="store_true", help="a dot per event on stderr")
+    # ── Attractors P3: variance as the headline ──────────────────────────
+    r.add_argument(
+        "--repeat", type=int, default=1, metavar="N",
+        help="run the same protocol N times and group them under one "
+             "ensemble id. N > 1 prices itself through the budget before "
+             "spending: the FIRST run of a protocol has no estimate at all "
+             "(missing, not $0) and needs --acknowledge-unpriced; runs 2..N "
+             "are estimated from what run 1 actually reported",
+    )
+    r.add_argument(
+        "--seed-base", type=int, default=None, metavar="K",
+        help="recorded per run as K, K+1, … and used to seed the split-half "
+             "draws. It is NOT handed to the agent: none of codex, claude or "
+             "hermes accepts a seed, and the ensemble says so rather than "
+             "implying the fan is seeded",
+    )
+    r.add_argument(
+        "--max-cost-usd", type=float, default=_DEFAULT_MAX_COST_USD,
+        metavar="USD",
+        help=f"ceiling for the whole repeat (default ${_DEFAULT_MAX_COST_USD:.2f}, "
+             f"the project-wide one from corpus.py). Over it the repeat is "
+             f"REFUSED; nothing is downgraded to fit",
+    )
+    r.add_argument(
+        "--acknowledge-unpriced", action="store_true",
+        help="proceed with a repeat whose cost is unknown. Required for the "
+             "first repeat of any protocol, because Seer cannot see the "
+             "agent's own billing; the acknowledgement is recorded in the "
+             "ensemble so a reader knows the spend was never estimated",
+    )
+    r.add_argument(
+        "--json", action="store_true",
+        help="[--repeat] print the ensemble document instead of the summary",
+    )
     r.set_defaults(seer_fn=_cmd_run)
 
     at = s.add_parser(
@@ -690,6 +1267,76 @@ def _add_subcommands(p: argparse.ArgumentParser) -> None:
     sh.add_argument("run_id")
     sh.add_argument("--json", action="store_true")
     sh.set_defaults(seer_fn=_cmd_show)
+
+    # ── ensemble (Attractors P3): the fan a `--repeat` produced ──────────
+    en = s.add_parser(
+        "ensemble",
+        help="the fan statistics over one `run --repeat` (no id: list them)",
+        description=(
+            "The statistics are recomputed from the runs' own logs on every "
+            "read, never cached, so a run deleted since the repeat ran drops "
+            "out of the fan and `n_runs` reports the true n.\n\n"
+            "A quantity the run count cannot support comes back as missing "
+            "with a reason — three runs have no p10, two runs per condition "
+            "have no split half — rather than as a point estimate."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    en.add_argument("ensemble_id", nargs="?", default=None)
+    en.add_argument("--limit", type=int, default=30, help="[list] how many")
+    en.add_argument("--json", action="store_true")
+    en.set_defaults(seer_fn=_cmd_ensemble)
+
+    # ── place (Attractors P2 / D5: built in Nebul.AI, drawn in Seer) ─────
+    pl = s.add_parser(
+        "place",
+        help="project a run's turns into a Nebul.AI persona space",
+        description=(
+            "Writes placement.json beside the run: one (pc1, pc2) coordinate "
+            "per placeable turn, in a coordinate system that was frozen when "
+            "the space was built. Nothing is fitted here.\n\n"
+            "A turn whose text was not captured gets no coordinate and is "
+            "listed under `skipped` with the reason — `dropped_by_policy` "
+            "when the text existed and was refused at ingress, `missing` when "
+            "there was nothing to capture. Neither becomes a point at the "
+            "origin."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    pl.add_argument("run_id")
+    pl.add_argument("--space", required=True, dest="space_id", help="persona space id")
+    pl.add_argument(
+        "--live-url",
+        default=None,
+        help=f"live_server base URL (default: {_PLACE_DEFAULT_URL})",
+    )
+    pl.add_argument(
+        "--in-process",
+        action="store_true",
+        help="load the model into THIS process instead of calling a live "
+             "server. Not the default: placement is meant to cross the "
+             "Nebul.AI/Seer boundary as HTTP and a file, and a Seer process "
+             "holding resident model weights competes for RAM with the agent "
+             "it is watching. Use it on a laptop with no server running",
+    )
+    pl.add_argument(
+        "--out",
+        default="out",
+        help="[--in-process] Nebul.AI output root holding persona/<space>/space.json",
+    )
+    pl.add_argument(
+        "--local-dir",
+        default=None,
+        help="[--in-process] weights directory for a space built from local weights",
+    )
+    pl.add_argument(
+        "--roles",
+        default="assistant",
+        help="comma-separated turn roles to place: assistant, user, or both "
+             "(default: assistant)",
+    )
+    pl.add_argument("--json", action="store_true")
+    pl.set_defaults(seer_fn=_cmd_place)
 
     cp = s.add_parser("compare", help="compare runs, and refuse where it is not meaningful")
     cp.add_argument("run_ids", nargs="+")
@@ -777,9 +1424,75 @@ def _add_subcommands(p: argparse.ArgumentParser) -> None:
     wa.add_argument("--progress", action="store_true", default=True)
     wa.set_defaults(seer_fn=_cmd_watch)
 
+
+    ip = s.add_parser(
+        "import",
+        help="import a public corpus (Among Us / ctfish / AI Village / a transcript)",
+    )
+    ip.add_argument("corpus", choices=["amongus", "ctfish", "village", "transcript"])
+    ip.add_argument("path", help="the corpus file. Nothing is downloaded here")
+    ip.add_argument("--summary", default=None,
+                    help="[amongus] summary.json, which carries the Impostor labels")
+    ip.add_argument("--labels", default=None,
+                    help="[ctfish] scoring/labels.json — Palisade's own published "
+                         "classification, attached as theirs and never re-judged here")
+    ip.add_argument("--variant", default=None, help="[ctfish] prompt variant filter")
+    ip.add_argument("--filter-model", default=None, help="[ctfish] model id filter")
+    ip.add_argument("--kind", default="computer_use_turns",
+                    help="[village] which config file this is")
+    ip.add_argument("--limit", type=int, default=None,
+                    help="stop after this many games / runs / rows")
+    ip.add_argument("--run-id", default=None, help="override the generated run id")
+    ip.add_argument("--dry-run", action="store_true",
+                    help="map and report, write nothing")
+    ip.set_defaults(seer_fn=_cmd_import)
+
     im = s.add_parser("import-spool", help="import the whole spool once, after the fact")
     im.add_argument("--idle-timeout", type=float, default=60.0)
     im.set_defaults(seer_fn=_cmd_import_spool)
+
+
+    kw = s.add_parser(
+        "keyword",
+        help="where a word entered the context: your prompt, CLAUDE.md, the "
+             "harness, the agent itself, or a file it read",
+    )
+    kw.add_argument("term", nargs="?", help="the word to trace")
+    kw.add_argument("--project", default=None,
+                    help="project name, working directory or transcript-dir slug")
+    kw.add_argument("--projects-root", default=None,
+                    help="where Claude Code keeps its project dirs "
+                         "(default ~/.claude/projects)")
+    kw.add_argument("--session", action="append", default=None,
+                    help="restrict to a session id, id prefix, or title "
+                         "substring. Repeatable")
+    kw.add_argument("--max-sessions", type=int, default=None,
+                    help="scan only the N largest transcripts")
+    kw.add_argument("--regex", action="store_true",
+                    help="treat the term as a regex instead of a literal word")
+    kw.add_argument("--case-sensitive", action="store_true")
+    kw.add_argument("--sense", action="append", default=None, metavar="NAME=REGEX",
+                    help="classify a hit by what its surroundings say, e.g. "
+                         "human='(head|chin|selfie)'. Unmatched hits stay "
+                         "visible as `unclassified`. Repeatable")
+    kw.add_argument("--exclude", action="append", default=None, metavar="NAME=REGEX",
+                    help="drop hits whose snippet matches. The count removed is "
+                         "always reported. Repeatable")
+    kw.add_argument("--channel", action="append", default=None,
+                    help="also count a channel that is off by default. Repeatable")
+    kw.add_argument("--only-channel", action="append", default=None,
+                    help="count only these channels. Repeatable")
+    kw.add_argument("--window", type=int, default=120,
+                    help="characters of context kept either side of a match")
+    kw.add_argument("--samples", type=int, default=4,
+                    help="samples printed per channel and sense")
+    kw.add_argument("--json", default=None, metavar="PATH",
+                    help="write the full report as JSON; `-` for stdout")
+    kw.add_argument("--list-projects", action="store_true",
+                    help="what transcript directories exist, and how big")
+    kw.add_argument("--list-channels", action="store_true",
+                    help="every channel, its origin, and whether it counts")
+    kw.set_defaults(seer_fn=_cmd_keyword)
 
     p.set_defaults(fn=run)
 

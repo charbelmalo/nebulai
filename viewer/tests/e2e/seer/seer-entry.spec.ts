@@ -91,12 +91,13 @@ test("seer.html boots the shared shell with no atlas artifacts", async ({ page }
   expect(errors).toEqual([]);
 });
 
-test("seer.html navigates its own three pages and no others", async ({ page }) => {
+test("seer.html navigates its own four pages and no others", async ({ page }) => {
   await bootSeer(page);
 
   expect(await page.locator(".topnav-pill").allInnerTexts()).toEqual([
     "Live",
     "Transcripts",
+    "Keywords",
     "Topics",
   ]);
 
@@ -105,6 +106,9 @@ test("seer.html navigates its own three pages and no others", async ({ page }) =
   await page.locator(".topnav-pill", { hasText: "Transcripts" }).click();
   expect(await page.evaluate(() => window.__store.getState().page)).toBe("sessions");
   await expect(page.locator(".sessions-page")).toBeVisible();
+
+  await page.locator(".topnav-pill", { hasText: "Keywords" }).click();
+  expect(await page.evaluate(() => window.__store.getState().page)).toBe("keyword");
 
   await page.locator(".topnav-pill", { hasText: "Topics" }).click();
   expect(await page.evaluate(() => window.__store.getState().page)).toBe("snapshot");

@@ -104,8 +104,13 @@ export const APP_CHROME: Record<AppId, AppChrome> = {
     tagline: "map what a model knows",
     nav: [
       { label: "Semantic map", page: "map" },
+      { label: "Behavior", page: "behavior" },
       { label: "Internals", page: "interp" },
-      { label: "Guide", page: "guide" },
+      // the page id stays "guide" — APP_PAGES is the membership authority and
+      // every deep link, drift guard and e2e route already spells it that way.
+      // Only the word on the pill changes, because what lives behind it is now
+      // a set of episodes rather than a single walkthrough.
+      { label: "Episodes", page: "guide" },
     ],
     sibling: { label: "Seer", href: SEER_APP_URL, title: "Seer — map what an agent did" },
     hub: HUB_LINK,
@@ -119,6 +124,7 @@ export const APP_CHROME: Record<AppId, AppChrome> = {
     nav: [
       { label: "Live", page: "seer" },
       { label: "Transcripts", page: "sessions" },
+      { label: "Keywords", page: "keyword" },
       { label: "Topics", page: "snapshot" },
     ],
     sibling: {

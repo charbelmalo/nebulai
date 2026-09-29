@@ -24,6 +24,7 @@ import argparse
 import json
 import math
 import queue
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -115,6 +116,13 @@ class SeerState:
                 f"{r['n_events']} events — capture process is gone, "
                 "recorded as interrupted"
             )
+        #: Keyword scans over Claude Code's own transcripts, keyed by job id.
+        #: A scan of a gigabyte takes minutes, so it cannot be answered inside
+        #: one request: the job carries its own progress and the page polls it.
+        #: Nothing here is written to the event store — a text occurrence in a
+        #: transcript is not an event and must not be given a fidelity.
+        self.keyword_jobs: dict[str, dict[str, Any]] = {}
+        self._kw_lock = threading.Lock()
         self.collector: SpoolCollector | None = None
         if watch:
             self.collector = SpoolCollector(
@@ -324,6 +332,41 @@ class SeerState:
         events = list(self.store.read(run_id))
         return analyze(reduce_run(run_id, events), events)
 
+    def placement(self, run_id: str) -> dict[str, Any] | None:
+        """The run's `placement.json`, or None if it was never placed.
+
+        Read from disk on every request rather than cached: `seer place` writes
+        it from a separate process, and a viewer holding a stale placement while
+        the file on disk has been recomputed against a different space is the
+        one failure mode a cache would buy us.
+        """
+        from .place import read_placement
+
+        p = read_placement(self.store, run_id)
+        return p.to_dict() if p is not None else None
+
+    def ensemble(self, ensemble_id: str) -> dict[str, Any] | None:
+        """The fan over one `run --repeat`, or None if the id is unknown.
+
+        Recomputed from the runs' own logs on every request, like `analysis`
+        and unlike anything cached: the manifest records *which* runs were one
+        experiment, and that is the only part of a fan that cannot be derived.
+        A run deleted since the repeat ran therefore drops out of the
+        statistics and is named in the document's `missing`, rather than a
+        stale document continuing to report an n that no longer exists.
+        """
+        from .ensemble import build_ensemble, read_manifest
+
+        manifest = read_manifest(self.store, ensemble_id)
+        if manifest is None:
+            return None
+        return build_ensemble(self.store, manifest).to_dict()
+
+    def ensembles(self, limit: int = 50) -> list[dict[str, Any]]:
+        from .ensemble import list_ensembles
+
+        return list_ensembles(self.store, limit)
+
     def annotate(self, req: dict[str, Any]) -> dict[str, Any]:
         """Append a human note to the run's own log.
 
@@ -369,6 +412,119 @@ class SeerState:
         self.store.append(e)
         self._on_event(e)
         return {"ok": True, "event_id": e.event_id, "ts": e.ts}
+
+    # ── keyword scans over Claude Code transcripts ───────────────────────
+
+    def keyword_start(self, req: dict[str, Any]) -> dict[str, Any]:
+        """Set the scan up here, run it on a thread, hand back a job id.
+
+        Everything that can fail cheaply — an unknown project, an unknown
+        channel, a bad regular expression, a term nobody typed — fails inside
+        this call, so the page gets a 400 with a reason instead of a job that
+        dies half a minute later.
+        """
+        from . import sessionlog as sl
+
+        term = str(req.get("term") or "").strip()
+        if not term:
+            raise ValueError("a search term is required")
+
+        root = Path(str(req["projects_root"])).expanduser() \
+            if req.get("projects_root") else None
+        project = sl.resolve_project(str(req.get("project") or ""), root)
+        refs = sl.discover_sessions(project.path)
+        if not refs:
+            raise ValueError(f"no transcripts in {project.path}")
+
+        wanted = [str(w) for w in (req.get("sessions") or []) if str(w).strip()]
+        if wanted:
+            refs = [r for r in refs
+                    if r.session_id in wanted
+                    or any(r.session_id.startswith(w) for w in wanted)
+                    or (r.title and any(w.lower() in r.title.lower()
+                                        for w in wanted))]
+            if not refs:
+                raise ValueError(
+                    f"no session in {project.slug} matches "
+                    f"{', '.join(wanted)}")
+        n_max = int(req.get("max_sessions") or 0)
+        if n_max > 0:
+            refs = refs[:n_max]
+
+        channels = sl.enabled_channels(
+            include=[str(c) for c in (req.get("channels") or [])],
+            only=[str(c) for c in (req.get("only_channels") or [])],
+        )
+        # compiled here, inside the request, so a bad sense regex is a 400
+        # with the offending pattern in it and not a job that dies on a thread
+        senses = [sl.Sense(str(name), re.compile(str(pat), re.IGNORECASE))
+                  for name, pat in (req.get("senses") or {}).items()]
+        excludes = [(str(name), re.compile(str(pat), re.IGNORECASE))
+                    for name, pat in (req.get("excludes") or {}).items()]
+        regex = bool(req.get("regex"))
+        case_sensitive = bool(req.get("case_sensitive"))
+        window = max(20, min(600, int(req.get("window") or sl.DEFAULT_WINDOW)))
+        samples = max(1, min(40, int(req.get("samples")
+                                     or sl.DEFAULT_SAMPLES_PER_CHANNEL)))
+        # compiled here so a bad pattern is a 400 on this request
+        sl.build_pattern(term, regex=regex, case_sensitive=case_sensitive)
+
+        job_id = f"kw-{int(time.time() * 1000):x}-{len(self.keyword_jobs)}"
+        job: dict[str, Any] = {
+            "job_id": job_id,
+            "state": "running",
+            "term": term,
+            "project": project.slug,
+            "matched_how": project.matched_how,
+            "started": time.time(),
+            "sessions_total": len(refs),
+            "bytes_total": sum(r.bytes for r in refs),
+            "sessions_done": 0,
+            "bytes_done": 0,
+            "hits_so_far": 0,
+            "reading": refs[0].title or refs[0].session_id[:8],
+            "report": None,
+            "error": None,
+        }
+        with self._kw_lock:
+            self.keyword_jobs[job_id] = job
+
+        def _progress(done: int, ref: sl.SessionRef, st: Any) -> None:
+            with self._kw_lock:
+                job["sessions_done"] = done
+                job["bytes_done"] = st.bytes_read
+                nxt = refs[done] if done < len(refs) else None
+                job["reading"] = (
+                    (nxt.title or nxt.session_id[:8]) if nxt else "finishing"
+                )
+
+        def _go() -> None:
+            try:
+                rep = sl.scan(
+                    term, refs, project=project, regex=regex,
+                    case_sensitive=case_sensitive, channels=channels,
+                    senses=senses, excludes=excludes, window=window,
+                    samples_per_channel=samples, on_progress=_progress,
+                )
+                with self._kw_lock:
+                    job["report"] = rep.to_dict()
+                    job["hits_so_far"] = rep.total
+                    job["state"] = "done"
+            except Exception as e:  # noqa: BLE001 — reported, never swallowed
+                with self._kw_lock:
+                    job["error"] = f"{type(e).__name__}: {e}"
+                    job["state"] = "error"
+            finally:
+                with self._kw_lock:
+                    job["finished"] = time.time()
+
+        threading.Thread(target=_go, name=f"seer-{job_id}", daemon=True).start()
+        return {k: v for k, v in job.items() if k != "report"}
+
+    def keyword_job(self, job_id: str) -> dict[str, Any] | None:
+        with self._kw_lock:
+            job = self.keyword_jobs.get(job_id)
+            return dict(job) if job else None
 
     def comparison(self, run_ids: list[str]) -> dict[str, Any]:
         views = []
@@ -417,6 +573,32 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.end_headers()
         self.wfile.write(raw)
+
+    def _stream_file(self, path: Path, ctype: str) -> None:
+        """Send a file without first loading it into memory.
+
+        The largest transcript on this machine is 125 MB. `_send_bytes` would
+        hold it as one `bytes` and hand a copy to the socket writer; a picker
+        that lets you click any session must not need a quarter of a gigabyte
+        of headroom to open the interesting one. Content-Length is taken from
+        the stat so the browser can show real progress on the read.
+        """
+        size = path.stat().st_size
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(size))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        # A transcript is appended to while a session is live, so what was just
+        # served is a snapshot of a growing file and must never be cached as
+        # the whole of it.
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        with path.open("rb") as fh:
+            while True:
+                chunk = fh.read(1 << 20)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
 
     def do_OPTIONS(self) -> None:
         self.send_response(204)
@@ -481,11 +663,56 @@ class _Handler(BaseHTTPRequestHandler):
                     return
                 self._send(200, doc)
                 return
+            # ── Attractors P2 (D5): the run's placement in a persona space ──
+            # Two different 404s on purpose. "Unknown run" is a typo; "not
+            # placed" is a run that exists and has never been through
+            # `seer place`, and a viewer that cannot tell those apart will
+            # render a real run as a missing one. The document is served
+            # verbatim — including its `verdict`, its skipped list and its
+            # split of `dropped_by_policy` from `missing` — because the
+            # control travels with every drawing of the space (R5).
+            if tail == "placement":
+                if st.store.get_run(run_id) is None:
+                    self._send(404, {"error": f"unknown run {run_id!r}"})
+                    return
+                doc = st.placement(run_id)
+                if doc is None:
+                    self._send(404, {
+                        "error": f"run {run_id!r} has no placement",
+                        "run_exists": True,
+                        "hint": "seer place <run_id> --space <space_id>",
+                    })
+                    return
+                self._send(200, doc)
+                return
             view = st.view(run_id)
             if view is None:
                 self._send(404, {"error": f"unknown run {run_id!r}"})
                 return
             self._send(200, view)
+            return
+
+        # ── Attractors P3: the fan over N runs of one protocol ──────────
+        if path == "/seer/ensembles":
+            self._send(200, {
+                "ensembles": st.ensembles(int((q.get("limit") or ["50"])[0]))
+            })
+            return
+
+        if path.startswith("/seer/ensemble/"):
+            ensemble_id = path[len("/seer/ensemble/"):].partition("/")[0]
+            doc = st.ensemble(ensemble_id)
+            if doc is None:
+                # Same shape as the placement 404: an id that does not resolve
+                # must not render as an ensemble with nothing in it, because
+                # "no runs" is a real and different state a fan can be in.
+                self._send(404, {
+                    "error": f"unknown ensemble {ensemble_id!r}",
+                    "hint": "seer ensemble  (no id) lists them; an ensemble is "
+                            "created by `seer run <agent> <prompt> --repeat N`",
+                })
+                return
+            self._send(200, doc)
             return
 
         if path == "/seer/compare":
@@ -517,6 +744,95 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send(501, {"error": str(e)})
                 return
             self._send_bytes(200, body, ctype, filename)
+            return
+
+        # `/seer/projects` is the name for this now: the transcripts on disk are
+        # not the keyword scan's private business, and the Sessions plotter asks
+        # the same question. The old path stays because it is what a running
+        # viewer build calls.
+        if path in ("/seer/projects", "/seer/keyword/projects"):
+            from . import sessionlog as sl
+            base = Path((q.get("root") or [""])[0]).expanduser() \
+                if (q.get("root") or [""])[0] else sl.DEFAULT_PROJECTS_ROOT
+            try:
+                self._send(200, {
+                    "root": str(base),
+                    "projects": sl.list_projects(base),
+                })
+            except sl.SessionLogError as e:
+                self._send(404, {"error": str(e)})
+            return
+
+        # Every transcript in one project, so a page can offer them by name
+        # instead of asking the operator to find the file in Finder. Metadata
+        # only: `bytes` and `modified` come from the stat, `title` from the
+        # sidecar the client writes beside the log. Nothing is read.
+        if path == "/seer/transcripts":
+            from . import sessionlog as sl
+            name = (q.get("project") or [""])[0]
+            if not name:
+                self._send(400, {"error": "project is required",
+                                 "hint": "GET /seer/projects lists them"})
+                return
+            root = (q.get("root") or [""])[0]
+            try:
+                proj = sl.resolve_project(
+                    name, Path(root).expanduser() if root else None)
+            except sl.SessionLogError as e:
+                self._send(404, {"error": str(e)})
+                return
+            refs = sl.discover_sessions(proj.path)
+            self._send(200, {
+                "project": {"slug": proj.slug, "path": str(proj.path),
+                            "matched_how": proj.matched_how},
+                "transcripts": [r.to_dict() for r in refs],
+            })
+            return
+
+        # One transcript, verbatim. The viewer parses it with the same code that
+        # parses a file dropped from Finder — there is one parser for a session
+        # and it lives in the page, so this endpoint deliberately does no
+        # analysis. It exists because a browser cannot open `~/.claude` itself.
+        if path == "/seer/transcript":
+            from . import sessionlog as sl
+            name = (q.get("project") or [""])[0]
+            session = (q.get("session") or [""])[0]
+            if not name or not session:
+                self._send(400, {"error": "project and session are required"})
+                return
+            root = (q.get("root") or [""])[0]
+            try:
+                proj = sl.resolve_project(
+                    name, Path(root).expanduser() if root else None)
+                ref = sl.find_session(proj.path, session)
+            except sl.SessionLogError as e:
+                self._send(404, {"error": str(e)})
+                return
+            self._stream_file(ref.path, "application/x-ndjson")
+            return
+
+        if path == "/seer/keyword/channels":
+            from . import sessionlog as sl
+            self._send(200, {
+                "channels": [
+                    {"id": cid, "label": ch.label, "origin": ch.origin.value,
+                     "on_by_default": ch.default, "why": ch.why}
+                    for cid, ch in sl.CHANNELS.items()
+                ],
+                "origins": [o.value for o in sl.Origin],
+            })
+            return
+
+        if path.startswith("/seer/keyword/job/"):
+            job = st.keyword_job(path[len("/seer/keyword/job/"):])
+            if job is None:
+                # An id that does not resolve must not render as a finished
+                # scan with no hits: "nothing matched" is a real answer and
+                # this is not it.
+                self._send(404, {"error": "unknown keyword job",
+                                 "hint": "POST /seer/keyword starts one"})
+                return
+            self._send(200, job)
             return
 
         if path == "/seer/live":
@@ -578,6 +894,14 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 self._send(200, self.state.annotate(req))
             except ValueError as e:
+                self._send(400, {"error": str(e)})
+            return
+
+        if path == "/seer/keyword":
+            from . import sessionlog as sl
+            try:
+                self._send(202, self.state.keyword_start(req))
+            except (ValueError, sl.SessionLogError, re.error) as e:
                 self._send(400, {"error": str(e)})
             return
 

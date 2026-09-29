@@ -63,13 +63,41 @@ export class Camera2D {
     this.tween = null;
   }
 
-  /** Zoom by `factor` keeping the world point under (sx, sy) fixed on screen. */
+  /** Zoom by `factor` keeping the world point under (sx, sy) fixed on screen.
+   *  The flat-map case of `zoomAtInFrame`, which it reduces to term for term. */
   zoomAt(sx: number, sy: number, factor: number): void {
-    const [wx, wy] = this.screenToWorld(sx, sy);
+    this.zoomAtInFrame(sx, sy, factor, 0, 0);
+  }
+
+  /** Zoom by `factor` keeping the **ground** point under (sx, sy) fixed on
+   *  screen, for a map orbited to (az, el).
+   *
+   *  `zoomAt`'s screenToWorld round-trip assumes the screen axes are the world
+   *  axes, which stops being true the moment the orbit carries an azimuth: the
+   *  point it holds still is then not the point under the cursor, so every step
+   *  slides the view — and a wheel tick drains ~10 steps over ~120 ms, so it
+   *  compounds. Measured over one tick at the default tilt: 15 px of drift at
+   *  az = 0, up to 280 px once the azimuth is round the far side, with the map
+   *  visibly creeping away from whatever the user was zooming into.
+   *
+   *  Rotate the cursor offset into the camera's ground frame instead.
+   *  Camera-right is (cos az, sin az, 0) — exactly in the ground plane at every
+   *  azimuth — and the vertical offset picks up a 1/cos el from the
+   *  foreshortening of a tilted view, the same factor `panScreen` and
+   *  `applyOrbitPivot` already apply. `k` is the scale change that actually
+   *  happened rather than the one requested, so a step the wpp clamp swallows
+   *  anchors on the real movement instead of overshooting the center. */
+  zoomAtInFrame(sx: number, sy: number, factor: number, az: number, el: number): void {
+    const prev = this.wpp;
     this.wpp = this.clampWpp(this.wpp * factor);
-    const [nx, ny] = this.screenToWorld(sx, sy);
-    this.cx += wx - nx;
-    this.cy += wy - ny;
+    const k = prev - this.wpp;
+    const ox = sx - this.viewportW / 2;
+    // screen y grows downward, world y grows upward — hence the sign flip on
+    // the cy term rather than here. el is clamped short of 90° by the caller's
+    // orbit frame (at 90° the ground plane is edge-on and there is no answer).
+    const oy = (sy - this.viewportH / 2) / Math.cos(el);
+    this.cx += k * (ox * Math.cos(az) + oy * Math.sin(az));
+    this.cy += k * (ox * Math.sin(az) - oy * Math.cos(az));
     this.tween = null;
   }
 
@@ -128,4 +156,36 @@ export class Camera2D {
   private clampWpp(wpp: number): number {
     return Math.min(Math.max(wpp, this.minWpp), this.maxWpp);
   }
+}
+
+/** The ground-plane camera center that puts a 3-D world point at the viewport
+ *  center, for a map orbited to (az, el).
+ *
+ *  In the flythrough `cx`/`cy` are not "where the camera looks" — they are the
+ *  point on the z = 0 plane the orbit frame is built around, with the camera
+ *  itself off along the (az, el) direction. So a point with z != 0 does *not*
+ *  land at the viewport center when cx/cy equal its xy: the tilt carries it
+ *  up-screen by its own height. Aiming a fly-to straight at a pos3 xy left
+ *  search results a median of 365 px off-center and up to 2,844 px, which on an
+ *  800 px-tall viewport put 15 of 50 sampled arrivals off-screen entirely.
+ *
+ *  Camera-right is (cos az, sin az, 0) and camera-up is
+ *  (−cos el·sin az, cos el·cos az, sin el); setting both of the point's offsets
+ *  along those axes to zero and solving for the center gives the two terms
+ *  below. It is closed-form rather than iterative because the projection is
+ *  orthographic, and it is exact — checked against a from-scratch rebuild of
+ *  the render camera's basis over 140 frames in the unit tests, and to 1e-11 px
+ *  through the live camera matrix. At el = 0 it returns the point's own xy, so
+ *  a flat map is untouched.
+ *
+ *  `el` must be clamped short of 90°, as every orbit frame in the app is. */
+export function centerForTarget(
+  px: number,
+  py: number,
+  pz: number,
+  az: number,
+  el: number,
+): [number, number] {
+  const lift = pz * Math.tan(el);
+  return [px - lift * Math.sin(az), py + lift * Math.cos(az)];
 }

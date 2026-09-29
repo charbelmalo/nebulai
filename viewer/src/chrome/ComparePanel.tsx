@@ -151,10 +151,24 @@ export function ComparePanel() {
         {Object.entries(data.stats.jaccard).map(([k, v]) => (
           <div key={k} class="compare-stat">
             <dt>{k}</dt>
-            <dd>{v}</dd>
+            {/* `null` is unmeasured, not zero: one side of the pair has
+                placeholder titles, so there is no concept set to intersect.
+                Printing 0 here would read as "these two share nothing". */}
+            <dd class={v === null ? "compare-stat-unmeasured" : undefined}>
+              {v === null ? "not measured" : v}
+            </dd>
           </div>
         ))}
       </dl>
+      {(data.stats.unnamed_models?.length ?? 0) > 0 && (
+        <p class="legend-caption compare-unnamed-note">
+          {data.stats.unnamed_models!.length} of {data.meta.models.length} maps
+          carry placeholder cluster titles, so every pair involving one is
+          unmeasured above:{" "}
+          <strong>{data.stats.unnamed_models!.join(", ")}</strong>.{" "}
+          {data.stats.unnamed_reason ?? ""}
+        </p>
+      )}
     </section>
   );
 }

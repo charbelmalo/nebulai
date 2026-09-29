@@ -27,8 +27,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import Mapping
 
 import numpy as np
+
+from .hooks import EMBED_LAYER, ResidHook, apply_resid_hook, check_layer
 
 # HF GPT-2 state-dict layout. c_attn/c_proj/c_fc are Conv1D: weight is
 # (n_in, n_out) and applied as `x @ W + b` (NOT a Linear's (n_out, n_in)).
@@ -126,7 +129,36 @@ class GPT2Numpy:
     def decode1(self, tid: int) -> str:
         return self.tok.decode([tid])
 
-    def forward(self, prompt: str | list[int]) -> Trace:
+    def forward(
+        self,
+        prompt: str | list[int],
+        *,
+        resid_hooks: "Mapping[int, ResidHook] | None" = None,
+        cache: object | None = None,
+    ) -> Trace:
+        """Run the model. `resid_hooks` implements the shared protocol in
+        `hooks.py`: layer L's hook sees the stream AFTER block L, layer -1 sees
+        the embedding output before block 0, and `Trace.resid` records the
+        POST-hook state so an export of an intervened run shows the trajectory
+        the model actually had rather than the one it would have had.
+
+        Passing no hooks is bit-identical to the un-hooked path — there is no
+        `x = x + 0` anywhere below — which is what makes an alpha = 0 sweep
+        point a real control.
+
+        `cache` is part of the protocol for runners that have a KV cache. This
+        one does not: it recomputes the whole prefix every call. Accepting the
+        argument and quietly ignoring it would make a caller think its
+        generation loop was incremental when it is quadratic, so it is refused.
+        """
+        if cache is not None:
+            raise NotImplementedError(
+                "gpt2_numpy has no KV cache: every call recomputes the full "
+                "prefix. Pass cache=None and re-forward the whole sequence."
+            )
+        hooks = dict(resid_hooks or {})
+        for L in hooks:
+            check_layer(L, self.n_layer)
         ids = self.encode(prompt) if isinstance(prompt, str) else list(prompt)
         if not ids:
             raise ValueError("empty prompt")
@@ -135,6 +167,8 @@ class GPT2Numpy:
         T, d, H, dh = len(ids), self.d, self.n_head, self.d_head
 
         x = self.wte[ids] + self.wpe[:T]  # (T, d) — real token+pos embedding
+        if EMBED_LAYER in hooks:
+            x = apply_resid_hook(hooks[EMBED_LAYER], x, layer=EMBED_LAYER)
         resid = np.empty((self.n_layer + 1, T, d), dtype=np.float32)
         attn = np.empty((self.n_layer, H, T, T), dtype=np.float32)
         mlp_post = np.empty((self.n_layer, T, 4 * d), dtype=np.float32)
@@ -165,6 +199,11 @@ class GPT2Numpy:
             mlp_post[L] = h
             mlp_out = h @ self._g(p + "mlp.c_proj.weight") + self._g(p + "mlp.c_proj.bias")
             x = x + mlp_out
+            # after block L — the one place the protocol names. `resid[L+1]`
+            # is written at the top of the next iteration (or after the loop),
+            # so it carries the post-hook stream.
+            if L in hooks:
+                x = apply_resid_hook(hooks[L], x, layer=L)
 
         resid[self.n_layer] = x
         xf, inv = _layernorm(x, self._g("ln_f.weight"), self._g("ln_f.bias"))

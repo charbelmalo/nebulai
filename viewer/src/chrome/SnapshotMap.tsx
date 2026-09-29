@@ -7,6 +7,7 @@ import { useSignal } from "@preact/signals";
 import { useEffect, useMemo, useRef } from "preact/hooks";
 import { appStore } from "../app/store";
 import { $snapshot } from "./state";
+import { LocalSessionPicker } from "./LocalSessionPicker";
 import { analyzeSnapshot, layoutRadial, parseConversationText } from "./snapshot";
 
 const SAMPLE_LOG_TEXT = JSON.stringify(
@@ -171,9 +172,13 @@ function SnapshotLeft(props: { dragOver: boolean; setDragOver: (v: boolean) => v
   const fileRef = useRef<HTMLInputElement>(null);
   const errorMsg = useSignal("");
 
-  const doParse = (raw: string, name: string) => {
+  // `id` comes from the picker only; see `parseConversationText`. The remove
+  // before the add is this page's own de-dup: `addSnapshotLog` appends, so a
+  // re-picked session would otherwise sit in the list twice under one id.
+  const doParse = (raw: string, name: string, id?: string) => {
     try {
-      const log = parseConversationText(raw, name || `log-${snap.logs.length + 1}`);
+      const log = parseConversationText(raw, name || `log-${snap.logs.length + 1}`, id);
+      if (id && snap.logs.some((l) => l.id === id)) appStore.getState().removeSnapshotLog(id);
       appStore.getState().addSnapshotLog(log);
       errorMsg.value = "";
       pasteText.value = "";
@@ -234,7 +239,7 @@ function SnapshotLeft(props: { dragOver: boolean; setDragOver: (v: boolean) => v
         onDragLeave={() => props.setDragOver(false)}
         onDrop={onDrop}
       >
-        <h3>Load log</h3>
+        <h3>Drop a file</h3>
         <input
           ref={fileRef}
           type="file"
@@ -277,6 +282,12 @@ function SnapshotLeft(props: { dragOver: boolean; setDragOver: (v: boolean) => v
         </button>
         {errorMsg.value && <p class="snapshot-error">{errorMsg.value}</p>}
       </section>
+
+      <LocalSessionPicker
+        hint="Your own Claude Code sessions, read from disk by the local collector. A transcript is a long conversation — the scrubber below covers all of it."
+        loadedIds={snap.logs.map((l) => l.id)}
+        onPick={(text, label, id) => doParse(text, label, id)}
+      />
 
       {snap.logs.length > 0 && (
         <section class="snapshot-side-block">

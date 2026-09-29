@@ -5,14 +5,29 @@
  *  history is never spammed by exploration.
  *
  *  Format: `#page=interp&model=gpt2&feature=live-nebula&trace=<slug>` /
- *  `#page=map&model=gpt2&view=chord&dims=3`. Only keys meaningful for the
+ *  `#page=map&model=gpt2&view=chord&dims=3` /
+ *  `#page=behavior&bview=ranked&cue=daddy&q=kin`. Only keys meaningful for the
  *  active page are written, so links stay short and honest. The legacy
- *  `?view=` search param (e2e + `nebulai compare` handoff) is untouched. */
+ *  `?view=` search param (e2e + `nebulai compare` handoff) is untouched.
+ *
+ *  The Behavior keys are prefixed `b` where they would otherwise collide with
+ *  a map key of the same name but different meaning (`bview` is a cue
+ *  presentation, `view` is a driver). `cue` is NOT validated against a cue
+ *  list: the study artifact is fetched by the page, not by this module, so a
+ *  hash naming a cue absent from the published study opens the page with no
+ *  cue selected rather than being silently rewritten to something else. */
 
-import { APP_PAGES, appStore, type Page, type ViewMode } from "../app/store";
+import {
+  APP_PAGES,
+  appStore,
+  type BehaviorView,
+  type Page,
+  type ViewMode,
+} from "../app/store";
 import { requestViewMode } from "../app/actions";
 
 const VIEWS: readonly ViewMode[] = ["atlas", "chord", "hierarchy", "compare"];
+const BVIEWS: readonly BehaviorView[] = ["landscape", "ranked", "table"];
 
 /** The two Internals-only hash keys (`feature`, `trace`) can only be validated
  *  by things that live on Nebulai's side of the split: `feature` against the
@@ -31,6 +46,13 @@ export interface InterpUrlHooks {
   /** may this trace slug go in a shareable URL? Live traces exist only in the
    *  tab that captured them, so a link to one would land on an honest error. */
   shareableTrace(slug: string): boolean;
+  /** is this an episode id this bundle can actually play? Same argument as
+   *  `knownFeature`: the episode registry reaches the interp registry, and
+   *  Seer must not grow a three.js import for a key its pages cannot express. */
+  knownEpisode?(id: string): boolean;
+  /** play episode `id` at `step`. Asynchronous inside — a step may name a model
+   *  that still has to be fetched — so it is injected rather than imported. */
+  runEpisode?(id: string, step: number): void;
 }
 
 const NO_INTERP: InterpUrlHooks = { knownFeature: () => false, shareableTrace: () => false };
@@ -48,8 +70,26 @@ export interface UrlState {
   trace?: string;
   view?: ViewMode;
   dims?: 2 | 3;
-  /** map-page keyword search query */
+  /** map-page keyword search query; also the Behavior page's cue search */
   q?: string;
+  /** map-page channel lens: a channel id from the model's `channels.json` */
+  channel?: string;
+  /** the lens's filter window, `lo,hi` in the channel's own raw units */
+  crange?: [number, number];
+  /** map-page direction axis: a direction id from the model's `directions.json` */
+  axis?: string;
+  /** how far the map has travelled onto that axis, 0–1 */
+  axist?: number;
+  /** `0` when the null cloud was switched OFF. Written only in that case, so
+   *  the ghost is in every link that does not explicitly say otherwise. */
+  axisnull?: boolean;
+  /** episode being played, and how far into it */
+  episode?: string;
+  step?: number;
+  /** Behavior: which cue is open */
+  cue?: string;
+  /** Behavior: landscape | ranked | table */
+  bview?: BehaviorView;
 }
 
 /** Parse the current hash. Unknown keys/values are dropped, never guessed. */
@@ -74,6 +114,52 @@ export function readUrlState(): UrlState {
   if (dims === "2" || dims === "3") out.dims = Number(dims) as 2 | 3;
   const q = p.get("q");
   if (q && q.trim()) out.q = q;
+  // A channel id cannot be validated here: which channels exist is a property
+  // of an artifact that has not been fetched yet. So it is carried through
+  // as-is and the driver drops it when the dataset has no such channel — the
+  // same place that decides whether the lens can be lit at all, which keeps
+  // "unknown channel" from having two different answers.
+  const channel = p.get("channel");
+  if (channel && channel.trim()) out.channel = channel.trim();
+  const crange = p.get("crange");
+  if (crange) {
+    const parts = crange.split(",").map(Number);
+    const lo = parts[0];
+    const hi = parts[1];
+    // a half-parsed window would filter on a bound the user never chose
+    if (
+      lo !== undefined &&
+      hi !== undefined &&
+      Number.isFinite(lo) &&
+      Number.isFinite(hi) &&
+      lo <= hi
+    ) {
+      out.crange = [lo, hi];
+    }
+  }
+  // Same argument as `channel` above: which directions exist is a property of
+  // an artifact nobody has fetched yet, so the id travels as-is and the driver
+  // drops it if this map cannot draw it. That keeps "unknown direction" with
+  // exactly one answer, in the place that already owns R5 and D2.
+  const axis = p.get("axis");
+  if (axis && axis.trim()) {
+    out.axis = axis.trim();
+    const t = Number(p.get("axist") ?? "1");
+    // a permalink naming an axis but no position means "all the way onto it" —
+    // the picture the link was written to show
+    out.axist = Number.isFinite(t) ? Math.min(1, Math.max(0, t)) : 1;
+    if (p.get("axisnull") === "0") out.axisnull = false;
+  }
+  const episode = p.get("episode");
+  if (episode && (interpHooks.knownEpisode?.(episode) ?? false)) {
+    out.episode = episode;
+    const step = Number(p.get("step") ?? "0");
+    out.step = Number.isInteger(step) && step >= 0 ? step : 0;
+  }
+  const cue = p.get("cue");
+  if (cue && cue.trim()) out.cue = cue;
+  const bview = p.get("bview");
+  if (bview && (BVIEWS as readonly string[]).includes(bview)) out.bview = bview as BehaviorView;
   return out;
 }
 
@@ -85,10 +171,26 @@ export function applyUrlState(u: UrlState): void {
   if (u.feature) st.setInterpFeature(u.feature);
   if (u.trace) st.setInterpTrace(u.trace);
   if (u.dims) st.setDims(u.dims);
-  // after the boot dataset load, so the labels to search are resident
-  if (u.q) st.setMapQuery(u.q);
+  // after the boot dataset load, so the labels to search are resident.
+  // One hash key, two pages: `q` is the map's label search and the Behavior
+  // page's cue search, and a permalink only ever names one page.
+  if (u.q) {
+    if (u.page === "behavior") st.setBehaviorQuery(u.q);
+    else st.setMapQuery(u.q);
+  }
+  if (u.channel) st.setChannel(u.channel, u.crange ?? null);
+  if (u.axis) {
+    st.setAxisDirection(u.axis);
+    st.setAxisT(u.axist ?? 1);
+    if (u.axisnull === false) st.setAxisNull(false);
+  }
+  if (u.bview) st.setBehaviorView(u.bview);
+  if (u.cue) st.setBehaviorCue(u.cue);
   if (u.page) st.setPage(u.page);
   if (u.view && u.view !== "atlas") requestViewMode(u.view);
+  // last, because an episode step rewrites page, model, channel and selection:
+  // it must not be overwritten by the very keys it exists to supersede
+  if (u.episode) interpHooks.runEpisode?.(u.episode, u.step ?? 0);
 }
 
 function buildHash(): string {
@@ -100,12 +202,37 @@ function buildHash(): string {
     if (st.viewMode !== "atlas") p.set("view", st.viewMode);
     if (st.dims === 3) p.set("dims", "3");
     if (st.mapQuery.text.trim()) p.set("q", st.mapQuery.text);
+    if (st.channel.id) {
+      p.set("channel", st.channel.id);
+      // the window travels in RAW units, so the link states what it filtered on
+      // even to someone reading the URL rather than opening it
+      if (st.channel.window) p.set("crange", st.channel.window.join(","));
+    }
+    if (st.axis.directionId) {
+      p.set("axis", st.axis.directionId);
+      // the blend position travels too: "which direction" and "how far along
+      // it" are different pictures and a link has to be able to name either
+      p.set("axist", st.axis.t.toFixed(2));
+      // only the OFF state is written. A link that says nothing about the null
+      // opens with the null on, which is the only default R5 allows.
+      if (!st.axis.showNull) p.set("axisnull", "0");
+    }
+  } else if (st.page === "behavior") {
+    if (st.behavior.view !== "landscape") p.set("bview", st.behavior.view);
+    if (st.behavior.cue) p.set("cue", st.behavior.cue);
+    if (st.behavior.query.trim()) p.set("q", st.behavior.query);
   } else if (st.page === "interp") {
     p.set("feature", st.interp.featureId);
     // live traces exist only in this tab's memory — a permalink to one would
     // land on an honest error, so they're never written into the hash
     if (st.interp.traceSlug && interpHooks.shareableTrace(st.interp.traceSlug))
       p.set("trace", st.interp.traceSlug);
+  }
+  // an episode is a position in a narrative, not a property of one page: it has
+  // to survive the step that carries it from Internals to the Map
+  if (st.tour) {
+    p.set("episode", st.tour.id);
+    p.set("step", String(st.tour.step));
   }
   return `#${p.toString()}`;
 }

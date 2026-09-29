@@ -645,8 +645,17 @@ function lineErrors(o: RawLine): {
 }
 
 /** Parse a Claude Code transcript into an honest session trajectory.
- *  `name` is the display label (usually the file/session name). */
-export function parseSessionTranscript(raw: string, name: string): SessionAnalysis {
+ *  `name` is the display label (usually the file/session name).
+ *
+ *  `id` is optional and exists for transcripts that already have an identity:
+ *  a session picked from disk is the same session every time it is picked, so
+ *  passing its id makes a second pick REPLACE the first (same id in the store,
+ *  same IndexedDB key) instead of stacking a near-duplicate beside it. That
+ *  matters most for a session that is still running and still being appended
+ *  to, where re-picking is how you refresh it. A dropped or pasted transcript
+ *  passes nothing and gets a minted id, because two drops of one file are not
+ *  distinguishable from two drops of two files that happen to look alike. */
+export function parseSessionTranscript(raw: string, name: string, id?: string): SessionAnalysis {
   const lines = raw
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -927,7 +936,7 @@ export function parseSessionTranscript(raw: string, name: string): SessionAnalys
   const totalCacheWriteR = authoritative?.cacheCreationTokens ?? totalCacheWrite;
 
   return {
-    id: `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    id: id ?? `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
     name,
     model,
     cwd,

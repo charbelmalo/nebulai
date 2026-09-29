@@ -1,0 +1,7 @@
+{"id":"row-0","_fixture_note":"SYNTHETIC. Written by hand for this repository in the shape corpus_village.py documents. NOT AI Village data: that dataset is gated (manual approval) and licensed ai-village-research-terms, and no part of it is or may be committed here.","session_id":"cus-1","agent":"agent-a","model":"a-frontier-model","timestamp":"2026-04-02T09:00:00Z","action":"ls /home/agent","text":"listing the home directory to see what is here"}
+{"id":"row-1","session_id":"cus-1","agent":"agent-a","model":"a-frontier-model","timestamp":"2026-04-02T09:00:41Z","action":"grep -r goal notes/","text":"searching the notes for the standing goal"}
+{"id":"row-2","session_id":"cus-1","agent":"agent-b","model":"another-frontier-model","timestamp":"2026-04-02T09:01:10Z","action":"cat notes/plan.md","text":"reading the shared plan"}
+{"id":"row-3","session_id":"cus-1","agent":"agent-b","model":"another-frontier-model","timestamp":"2026-04-02T09:02:02Z","action":"git status","text":"checking what changed"}
+{"id":"row-4","session_id":"cus-1","agent":"agent-c","model":"a-third-frontier-model","timestamp":"2026-04-02T09:03:30Z","action":"pytest -q","text":"running the suite before telling the others"}
+{"id":"row-5","session_id":"cus-1","agent":"agent-c","model":"a-third-frontier-model","timestamp":"2026-04-02T09:04:00Z","text":"tests pass; moving on to the next item"}
+{"id":"row-6","weird_key":"a row whose fields this adapter should not recognise"}

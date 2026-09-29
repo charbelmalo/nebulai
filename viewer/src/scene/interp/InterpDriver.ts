@@ -115,6 +115,19 @@ export interface InterpFeature {
    *  data in every corner — the legend then defaults to its collapsed pill
    *  (the user's toggle still overrides, sticky for the session). */
   legendCollapsed?: boolean;
+  /** True when this view CHANGES the model's forward pass and reports the
+   *  difference, rather than only measuring it.
+   *
+   *  This is the one flag in the registry with a documentation consequence
+   *  attached: §2.4 of the attractors plan amends the claim contract to permit
+   *  exactly one causal sentence, and only for intervention-backed figures.
+   *  `GuidePage` renders that contract on every card that sets this — on the
+   *  card itself, never once in the page footer, because a contract that lives
+   *  in a footer is a contract that gets cropped out of the screenshot the
+   *  number travels in. Setting it is therefore a claim about the view: that a
+   *  hook really ran, that a control ran beside it, and that the figure says
+   *  what changed in the intervention's own terms. */
+  intervenes?: true;
   /** Entity kinds this view can follow via cross-view linking (implements
    *  `setSelection`). Only list kinds the driver REALLY highlights — the rail
    *  badges views that can follow the current pick, and a badge that does

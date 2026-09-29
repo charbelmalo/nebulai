@@ -1,7 +1,9 @@
 # SessionSeer — real-time agent observability as a nebulai subapp
 
-**Status:** built. M0–M5 are shipped; this file remains the design and its
-justification, and [`SESSIONSEER-HANDOVER.md`](SESSIONSEER-HANDOVER.md) records
+**Status:** built. M0–M5 are shipped, and three things beyond the plan since:
+`seer place` (P2/D5), `seer run --repeat` + `seer ensemble` with its cost gate
+(P3), and four corpus adapters behind `seer import` (D7). This file remains the
+design and its justification, and [`SESSIONSEER-HANDOVER.md`](SESSIONSEER-HANDOVER.md) records
 what the build actually does — including the places where it departed from what
 is written here, and why.
 **Scope:** a fourth nebulai front-end. Where `tokens` / `sae` / `neurons` map a
@@ -118,6 +120,8 @@ every stream the report promised: `message.start/delta/complete`,
 `sudo.request/respond`, `session.create/branch/resume/interrupt/steer/undo/usage/history/status`,
 `spawn_tree.list/load/save`, `subagent.tool`, `subagent.interrupt`,
 `delegation.pause/status`, `rollback.diff/list/restore`, `status.update`.
+Confirmed to exist — and later refused as a capture surface, for reasons that
+have nothing to do with its vocabulary. See HANDOVER §6.
 
 ### 1.5 The citation (confirmed)
 
@@ -379,9 +383,9 @@ Unaligned ones show side-by-side with native labels and no delta.
 | Mode | How | Fidelity |
 |---|---|---|
 | **Driven** | SessionSeer launches the agent headless and owns stdout | full, no install |
-| **Attached** | SessionSeer connects to a running app-server / TUI gateway | full, needs a live endpoint |
+| **Attached** | SessionSeer connects to a running `codex app-server` | full, needs a live endpoint |
 | **Observed** | Hooks append to the spool; SessionSeer tails it | strong lifecycle, no token stream |
-| **Reconciled** | state.db / transcripts / git, after the fact | totals and history only |
+| **Reconciled** | state.db / transcripts / git / an imported public corpus, after the fact | totals and history only; fidelity is per field, and order-only corpora mark `ts` missing |
 
 Every value carries `native | deterministic | estimated | heuristic | missing |
 dropped_by_policy`. The last one is new and load-bearing (§2.4).
@@ -396,7 +400,6 @@ claude -p stream-json ─────┤  DRIVEN (subprocess, stdout)
 hermes -z / acp ───────────┘
                            │
 codex app-server ──────────┤  ATTACHED (stdio / unix / ws)
-hermes tui_gateway ────────┘
                            │
 ~/.nebulai/spool/*.jsonl ──┤  OBSERVED (hooks append; collector tails)
                            │
@@ -405,14 +408,17 @@ hermes tui_gateway ────────┘
 ~/.codex/sessions (opt-in) ┤
 git + fs snapshots ────────┘
                            ▼
-              nebulai.backend.seer_server   (stdlib HTTP + SSE, port 8125)
+              nebulai.seer.server   (stdlib HTTP + SSE, port 8125)
                 ingress → policy/redaction → append-only JSONL
                         → reducer → SQLite index → derived metrics
                            ▼
               GET /seer/live (SSE) · /seer/runs · /seer/export
                            ▼
-                  viewer: SessionSeer page (new nav pill)
+                  viewer: the Seer app (viewer/seer.html, its own entry)
 ```
+
+Hermes has no attached path — see HANDOVER §6, *Why there is no attached Hermes
+capture*.
 
 Port **8125**, deliberately beside the build server's 8124, same discovery
 pattern, same health dot.
@@ -481,15 +487,28 @@ Keep, with the evidence panel behind each:
   summed across overlapping subagent spans.
 - **Verification coverage** — changed files vs. observed `verify` actions after
   the last edit. Rule-based, per project type, evidence listed.
-- **Edit churn** — `churn_ratio = cumulative_lines / max(final_lines, 1)`.
+- **Edit churn** — `churn_ratio = cumulative_lines / max(final_lines, 1)`. Codex
+  `apply_patch` is counted from the `*** Begin Patch` envelope by
+  `adapters/patches.py`; a file whose extent cannot be counted is `missing`,
+  never `0`.
 - **Loop detection** — repetition **and** `effect == no_new_information`, as a
-  counted rule with cited events (§2.5, §2.6). No product score.
+  counted rule with cited events (§2.5, §2.6). As built: three rules only —
+  `repeat_read` and `identical_output` (DETERMINISTIC), `zero_result_search`
+  (HEURISTIC) — and the effect label carries its own `effect_fidelity` /
+  `effect_rule` beside `Source.fidelity`. No product score.
 - **Human intervention burden** — approvals, corrections, wait time.
 - **Context pressure** — compaction count, before/after tokens where reported.
 - **Progress evidence** — the checklist, never a percentage.
+- **Fan statistics over a repeat** — per-step median with envelope, rates as
+  intervals, split-half reliability; every step carries its own `n` and a run
+  that stopped early is absent rather than `0`.
+- **Placement** — a run's turns projected into a frozen Nebul.AI persona space;
+  nothing is fitted, and an uncaptured turn gets no coordinate.
 
-Defer: live judge-model failure attribution; the 13-category taxonomy;
-"cost to verified outcome" until evaluators are real.
+Defer: live judge-model failure attribution; the 13-category taxonomy. "Cost to
+verified outcome" was not deferred but refused: `budget.py` prices nothing on
+the first run of a protocol (`missing`, never `$0`) because the money leaves
+through a door this process cannot see.
 
 Outcome states as specified — `agent_claimed_complete` and `verified_pass` must
 never collapse. That is the same rule as "a namer with `n_labeled == 0` says so".
@@ -498,12 +517,22 @@ never collapse. That is the same rule as "a namer with `n_labeled == 0` says so"
 
 ## 7. UI
 
-A new nav pill beside **Sessions** in `viewer/src/chrome/TopBar.tsx`, a `Page`
-variant, a `body.page-seer` class in `mount.tsx`, and a `SeerPage.tsx`. Existing
-Sessions stays as the drop-a-transcript forensic view; SessionSeer is the live
-and comparative one.
+Its own app entry (`viewer/seer.html` → `viewer/src/seer-main.ts`), with four
+pages: Live (`#page=seer`), Transcripts (`#page=sessions`), Keywords
+(`#page=keyword`), Topics (`#page=snapshot`). `SeerPage.tsx` and `SeerLive.tsx`
+render the live view. Transcripts stays the per-transcript forensic view and
+Live the live, comparative one.
 
-Three panes:
+Transcripts and Topics both read a transcript, and both can now take it either
+way: dropped or pasted as before, or picked from the sessions already on this
+machine (`chrome/LocalSessionPicker.tsx` over `/seer/projects`,
+`/seer/transcripts`, `/seer/transcript` — the same `~/.claude/projects` tree the
+Keywords scan reads). The server serves bytes and the browser parses them, so
+each page keeps its one parser; a picked transcript therefore travels from the
+collector to the browser over loopback, which those pages say instead of
+claiming nothing is transmitted.
+
+The panels:
 
 1. **Live** — one card per active session: agent/model, repo/branch/commit,
    state + current action + elapsed, context/tokens/cost where native, files and
@@ -513,6 +542,8 @@ Three panes:
    verification, approvals, subagents, alerts). Reuses `SessionFieldDriver`.
 3. **Compare** — N runs aligned by wall-clock / turn / action sequence / first
    edit / first verification, with the §3.2 comparability gate enforced.
+4. **Ensemble** — the fan over one `run --repeat`, recomputed from the runs'
+   own logs on every read (`EnsemblePanel.tsx`).
 
 Plus the report's **data-quality panel** on every session. Non-negotiable: the
 map viewer already distinguishes "no data" from "zero" everywhere, and a
@@ -566,11 +597,14 @@ allowlist.
 no existing hook disturbed.
 
 **M3 — Attached mode + reconciliation.** Codex app-server (version-pinned,
-schema bundle as golden fixture, fail-closed on unknown versions); Hermes TUI
-gateway; read-only `state.db` reconciler keyed on the `schema_version` **table**;
-git/fs snapshots.
+schema bundle as golden fixture, fail-closed on unknown versions); read-only
+`state.db` reconciler keyed on the `schema_version` **table**; git/fs snapshots.
 *Exit:* reconnect without duplicates; active and persisted sessions never
 double-counted; unknown schema versions disable the importer rather than guess.
+
+> As built, M3 shipped the Codex app-server (attached + reconciled) and the
+> `state.db` reconciler. The Hermes TUI gateway was investigated and refused —
+> HANDOVER §6.
 
 **M4 — Analyses + export.** Time decomposition, verification coverage, churn,
 loop rules, intervention burden, context pressure, progress evidence,

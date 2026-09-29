@@ -17,6 +17,7 @@ from nebulai.backend.validate import (
     seed_stability,
     trustworthiness_score,
 )
+from nebulai.units import Units
 
 
 def _blobs(n_per: int = 40, dim: int = 8, seed: int = 0) -> np.ndarray:
@@ -238,3 +239,125 @@ def test_api_text_embedding_maps_refuse_to_reload():
 def test_unknown_unit_types_refuse_rather_than_guess():
     with pytest.raises(ValueError, match="no reload path"):
         reload_units({"unit": "something_new"})
+
+
+# --- W_U maps replay, and they replay PINNED ------------------------------
+
+
+def test_unembedding_maps_reload_at_the_pinned_revision(monkeypatch):
+    """A W_U map must be replayable, and it must replay the vocabulary the map
+    was actually built on.
+
+    The `kept` rows of a W_U map are chosen by `curated_vocab`, which reads the
+    repo's TOKENIZER. Replaying against "main" would score whatever vocabulary
+    the repo has today — a different point set of the same size, which is
+    exactly the failure `validate_map`'s length guard cannot catch. So the
+    branch has to forward `revision`, and this test fails if anyone drops it.
+    """
+    seen: dict[str, object] = {}
+
+    def fake_load(model_id, **kw):
+        seen["model_id"] = model_id
+        seen.update(kw)
+        return Units(ids=[0, 1], vectors=np.zeros((2, 4), dtype=np.float32), labels=["a", "b"])
+
+    monkeypatch.setattr("nebulai.frontends.tokens.load_token_units", fake_load)
+    reload_units(
+        {
+            "unit": "token_unembedding",
+            "which": "output",
+            "model": "mistralai/Mistral-Nemo-Instruct-2407",
+            "revision": "04d8a90549d23fc6bd7f642064003592df51e9b3",
+            "source": "remote-range",
+            "centered": True,
+            "kept": 5000,
+        }
+    )
+    assert seen["model_id"] == "mistralai/Mistral-Nemo-Instruct-2407"
+    assert seen["revision"] == "04d8a90549d23fc6bd7f642064003592df51e9b3"
+    assert seen["which"] == "output", "a W_U reload that reads W_E would score the wrong matrix"
+    assert seen["max_tokens"] == 5000
+    assert seen["center"] is True
+    # the map was built over HTTP ranges against a 24 GB checkpoint; the reload
+    # must not quietly decide to download it
+    assert seen["remote"] is True
+
+
+def test_unembedding_reload_does_not_force_remote_for_a_locally_built_map(monkeypatch):
+    """`remote=None` leaves the per-repo decision to the front-end, which is the
+    right answer for anything not stamped `remote-range`."""
+    seen: dict[str, object] = {}
+
+    def fake_load(model_id, **kw):
+        seen.update(kw)
+        return Units(ids=[0], vectors=np.zeros((1, 4), dtype=np.float32), labels=["a"])
+
+    monkeypatch.setattr("nebulai.frontends.tokens.load_token_units", fake_load)
+    reload_units({"unit": "token_unembedding", "model": "gpt2", "kept": 10})
+    assert seen["remote"] is None
+    assert seen["which"] == "output", "the default must be the unembedding, not W_E"
+    assert seen["revision"] == "main"
+
+
+# --- neuron maps replay pinned too, for the same reason -------------------
+
+
+def test_neuron_maps_reload_at_the_pinned_revision_and_stay_remote(monkeypatch):
+    """The `down_proj` depth series on Mistral-Nemo is built over HTTP ranges
+    against a pinned commit of a 24 GB checkpoint. Dropping either forwarding
+    turns `nebulai validate` into a 24 GB download, or into a silent score of
+    whatever `main` holds today — and a different commit's `down_proj` has the
+    same row count, so the length guard in `validate_map` cannot notice."""
+    seen: dict[str, object] = {}
+
+    def fake_load(model_repo, **kw):
+        seen["model_repo"] = model_repo
+        seen.update(kw)
+        return Units(
+            ids=[0, 1], vectors=np.zeros((2, 4), dtype=np.float32), labels=["n0", "n1"]
+        )
+
+    monkeypatch.setattr("nebulai.frontends.neurons.load_neuron_units", fake_load)
+    reload_units(
+        {
+            "unit": "mlp_neuron(mistralai/Mistral-Nemo-Instruct-2407, model.layers.4.mlp.down_proj)",
+            "model_repo": "mistralai/Mistral-Nemo-Instruct-2407",
+            "layer": 4,
+            "kept": 4096,
+            "centered": False,
+            "labels_source": "none",
+            "revision": "04d8a90549d23fc6bd7f642064003592df51e9b3",
+            "source": "remote-range",
+            "expert": None,
+        }
+    )
+    assert seen["model_repo"] == "mistralai/Mistral-Nemo-Instruct-2407"
+    assert seen["revision"] == "04d8a90549d23fc6bd7f642064003592df51e9b3"
+    assert seen["remote"] is True
+    assert seen["layer"] == 4
+    assert seen["max_neurons"] == 4096
+    assert seen["expert"] is None
+
+
+def test_neuron_reload_forwards_the_expert_for_an_moe_layer(monkeypatch):
+    """An MoE `down_proj` has one tensor per expert. Replaying without the
+    expert index raises inside the loader about ambiguous keys — a confusing
+    failure about tensors, for a map whose meta recorded the answer."""
+    seen: dict[str, object] = {}
+
+    def fake_load(model_repo, **kw):
+        seen.update(kw)
+        return Units(ids=[0], vectors=np.zeros((1, 4), dtype=np.float32), labels=["n"])
+
+    monkeypatch.setattr("nebulai.frontends.neurons.load_neuron_units", fake_load)
+    reload_units(
+        {
+            "unit": "mlp_neuron(x/y, model.layers.3.mlp.experts.7.down_proj)",
+            "model_repo": "x/y",
+            "layer": 3,
+            "kept": 8,
+            "expert": 7,
+        }
+    )
+    assert seen["expert"] == 7
+    assert seen["remote"] is None, "a locally built map must not be forced remote"

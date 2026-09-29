@@ -18,7 +18,12 @@ from pathlib import Path
 
 import numpy as np
 
-from ..backend.embed import embed_texts, public_embed_host
+from ..backend.embed import (
+    LOCAL_EMBED_HOST,
+    embed_texts,
+    public_embed_host,
+    resolve_local_embed_model,
+)
 from ..units import Units
 
 
@@ -33,12 +38,42 @@ def load_api_token_units(
     embed_model: str = "mxbai-embed-large",
     api: str = "ollama",
     api_key: str | None = None,
+    embed_revision: str | None = None,
     center: bool = True,
     max_tokens: int | None = None,
     out_root: Path = Path("out"),
     batch_size: int = 64,
     checkpoint_every: int = 2000,
 ) -> Units:
+    # `embed_model` is the DISPLAY name and nothing else: it names the output
+    # directory, the cache beside it, and the `embed_model` field a reader sees.
+    # The encoder is addressed separately, by commit, so that re-running this
+    # function at a pinned revision lands on the same directory and the same
+    # cache instead of forking a parallel one named after a sha.
+    #
+    # Pinning by commit is also the whole reason a local map can be validated
+    # later: repo + 40-hex sha + the fp32 CPU path is as replayable as a weight
+    # matrix. A hosted encoder can make no such promise — whatever answered the
+    # socket is gone, and "the same model name" is not the same weights.
+    resolved_revision = ""
+    encoder = embed_model
+    if api == "local":
+        repo, resolved_revision = resolve_local_embed_model(
+            f"{embed_model}@{embed_revision}" if embed_revision else embed_model
+        )
+        encoder = f"{repo}@{resolved_revision}"
+        stamped_host = LOCAL_EMBED_HOST
+    else:
+        if embed_revision:
+            raise ValueError(
+                f"embed_revision={embed_revision!r} was given for api={api!r}. "
+                "Only an in-process encoder can be pinned to a commit; a hosted "
+                "one serves whatever it is currently running, and recording a "
+                "revision it never honoured would make the map look reproducible "
+                "when it is not."
+            )
+        stamped_host = public_embed_host(embed_host)
+
     from tokenizers import Tokenizer
 
     from .tokens import curated_vocab
@@ -77,7 +112,7 @@ def load_api_token_units(
         vecs = embed_texts(
             chunk,
             host=embed_host,
-            model=embed_model,
+            model=encoder,
             batch_size=batch_size,
             api=api,
             api_key=api_key,
@@ -109,8 +144,11 @@ def load_api_token_units(
             "geometry": "third-party text-embedding space — NOT model-internal",
             "embed_model": embed_model,
             # never the raw host: this file ships publicly (see public_embed_host)
-            "embed_host": public_embed_host(embed_host),
+            "embed_host": stamped_host,
             "embed_api": api,
+            # "" for a hosted encoder: there is no commit to pin, and an empty
+            # string is what validate.py reads as "not reproducible".
+            "embed_revision": resolved_revision,
             "centered": center,
             "vocab_size": int(vocab_size),
             "kept": len(ids),

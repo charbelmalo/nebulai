@@ -123,6 +123,15 @@ class SpanRecord:
     started_at: float
     ended_at: float | None = None
     effect: Effect | None = None
+    #: How the effect was decided, when it was decided by us rather than
+    #: reported. `None` means the adapter took the effect straight from what
+    #: the agent said. See `adapters/novelty.py`: an effect our own rule
+    #: produced must not be readable as one the agent asserted, and the
+    #: event's `source.fidelity` cannot say it — that describes the *event*,
+    #: which is native even when the effect label on it is a heuristic.
+    effect_fidelity: Fidelity | None = None
+    #: The named rule that produced `effect`, for the same reason.
+    effect_rule: str | None = None
     failed: bool = False
     detail: str | None = None
     #: kept so the time decomposition can subtract a child's time from its
@@ -170,10 +179,28 @@ class SpanRecord:
             ),
             "synthetic_start": self.synthetic_start,
             "effect": self.effect.value if self.effect else None,
+            "effect_fidelity": (
+                self.effect_fidelity.value if self.effect_fidelity else None
+            ),
+            "effect_rule": self.effect_rule,
             "failed": self.failed,
             "detail": self.detail,
             "parent_span_id": self.parent_span_id,
         }
+
+
+def _fidelity(value: Any) -> Fidelity | None:
+    """A payload string back into a `Fidelity`, or `None` if it is not one.
+
+    Tolerant on purpose: an adapter that ships an unrecognised label must not
+    crash a reduction, and an unreadable fidelity is *absent*, never assumed.
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        return Fidelity(value)
+    except ValueError:
+        return None
 
 
 @dataclass(slots=True)
@@ -466,6 +493,12 @@ class Reducer:
                 )
             span.ended_at = e.ts
             span.effect = e.effect
+            span.effect_fidelity = _fidelity(e.payload.get("effect_fidelity"))
+            span.effect_rule = (
+                e.payload.get("effect_rule")
+                if isinstance(e.payload.get("effect_rule"), str)
+                else None
+            )
             span.failed = e.event_type is EventType.TOOL_FAILED
             if span.action is None:
                 span.action = e.action

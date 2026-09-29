@@ -28,10 +28,14 @@ import {
   EFFECT_CAP,
   FIDELITY_TEXTURE,
   NEUTRAL_INK,
+  PLACEMENT_GLYPH,
+  PLACEMENT_SOURCES,
   RANK_FLOOR,
   STATE_COLOR,
+  comparablePlacements,
   isProvisional,
   markInk,
+  placementGlyph,
   rankNormalise,
 } from "../../src/seer/encoding";
 
@@ -160,5 +164,50 @@ describe("rankNormalise", () => {
     expect(out[0]).toBe(RANK_FLOOR);
     expect(out[2]).toBe(1);
     expect(rankNormalise([NaN, NaN])).toEqual([RANK_FLOOR, RANK_FLOOR]);
+  });
+});
+
+// ── R7: foreign data wears foreign clothes ───────────────────────────────────
+
+describe("placement glyphs (rule R7)", () => {
+  it("gives every placement source a glyph", () => {
+    for (const s of PLACEMENT_SOURCES) {
+      expect(PLACEMENT_GLYPH, s).toHaveProperty(s);
+      const g = PLACEMENT_GLYPH[s];
+      expect(g.label, s).toBeTruthy();
+      expect(["solid", "dashed"], s).toContain(g.stroke);
+    }
+  });
+
+  it("draws a model-internal placement solid and every other one dashed", () => {
+    expect(PLACEMENT_GLYPH.pinned_model.stroke).toBe("solid");
+    expect(PLACEMENT_GLYPH.pinned_model.dash).toHaveLength(0);
+    for (const s of PLACEMENT_SOURCES) {
+      if (s === "pinned_model") continue;
+      expect(PLACEMENT_GLYPH[s].stroke, s).toBe("dashed");
+      expect(PLACEMENT_GLYPH[s].dash.length, s).toBeGreaterThan(0);
+    }
+  });
+
+  it("says NOT model-internal on the text-embedder glyph, in those words", () => {
+    expect(PLACEMENT_GLYPH.text_embedder.label).toMatch(/NOT model-internal/);
+  });
+
+  it("degrades an unknown source to the WEAKEST glyph, never the strongest", () => {
+    // a source this build has never heard of is by definition one we cannot
+    // vouch for; drawing it solid is the failure R7 exists to prevent
+    expect(placementGlyph("some_future_embedder")).toBe(PLACEMENT_GLYPH.none);
+    expect(placementGlyph(null)).toBe(PLACEMENT_GLYPH.none);
+    expect(placementGlyph(undefined)).toBe(PLACEMENT_GLYPH.none);
+    expect(placementGlyph("")).toBe(PLACEMENT_GLYPH.none);
+    expect(placementGlyph("pinned_model")).toBe(PLACEMENT_GLYPH.pinned_model);
+  });
+
+  it("refuses to compare two placements from different instruments", () => {
+    expect(comparablePlacements("pinned_model", "pinned_model")).toBe(true);
+    expect(comparablePlacements("pinned_model", "text_embedder")).toBe(false);
+    // and an unplaced turn is comparable with nothing, including another one
+    expect(comparablePlacements("none", "none")).toBe(false);
+    expect(comparablePlacements(null, null)).toBe(false);
   });
 });

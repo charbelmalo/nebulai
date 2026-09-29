@@ -33,6 +33,7 @@ import json
 import re
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -143,14 +144,50 @@ def compute_fourier(m: GPT2Numpy) -> dict:
     }
 
 
-def _pca_rows(rows: np.ndarray, dims: int) -> tuple[np.ndarray, np.ndarray, float]:
+class PCAFit(NamedTuple):
+    """An exact PCA fit, including the transform itself.
+
+    `coords`/`evr`/`total_var` are what the Internals constellations have always
+    consumed; `mean` and `axes` are the *transform* — the two arrays that make
+    the projection reproducible out-of-sample. Kept as a NamedTuple so the
+    historical 3-tuple unpacking still reads the same three values in the same
+    order, and adding the transform costs no caller a rename.
+    """
+
+    coords: np.ndarray  # (n, dims) PC scores
+    evr: np.ndarray  # (dims,) explained-variance ratio per PC
+    total_var: float  # trace of the covariance (sum of all eigenvalues)
+    mean: np.ndarray  # (d,) row mean subtracted before projection
+    axes: np.ndarray  # (d, dims) orthonormal principal axes
+
+
+def pca_transform(rows: np.ndarray, mean: np.ndarray, axes: np.ndarray) -> np.ndarray:
+    """Place rows into an ALREADY-FITTED PCA space: `(x - mean) @ axes`.
+
+    This is the whole point of `PCAFit` carrying `mean`/`axes`: a point added
+    after the fit lands in the same coordinate system instead of moving every
+    published coordinate by forcing a refit. `reduce_vectors` cannot offer this
+    (UMAP's fit is discarded and a re-fit rearranges everything non-linearly),
+    which is exactly why a fixed, permalinkable landscape has to be linear.
+    """
+    R = np.asarray(rows, dtype=np.float64)
+    if R.ndim == 1:
+        R = R[None, :]
+    return (R - np.asarray(mean, dtype=np.float64)) @ np.asarray(axes, dtype=np.float64)
+
+
+def _pca_rows(rows: np.ndarray, dims: int) -> PCAFit:
     """Exact PCA of a row matrix via the (d×d) covariance eigendecomposition —
-    float64, deterministic axis signs (largest-|loading| positive). Returns
-    (coords (n,dims) PC scores, explained-variance ratio per PC, total variance).
-    Shared by compute_embed / compute_neurons / compute_sae so the three
-    constellations are the SAME math on different row sets."""
+    float64, deterministic axis signs (largest-|loading| positive). Returns a
+    `PCAFit`: (coords (n,dims) PC scores, explained-variance ratio per PC,
+    total variance, row mean, principal axes). Shared by compute_embed /
+    compute_neurons / compute_sae so the three constellations are the SAME math
+    on different row sets — and by the Behavior cue landscape, which persists
+    `mean`/`axes` so later cues can be placed with `pca_transform` rather than
+    by refitting (a refit would move every already-published cue)."""
     R = rows.astype(np.float64)
-    Rc = R - R.mean(axis=0)
+    mean = R.mean(axis=0)
+    Rc = R - mean
     cov = Rc.T @ Rc
     evals, evecs = np.linalg.eigh(cov)
     order = np.argsort(evals)[::-1]
@@ -163,7 +200,7 @@ def _pca_rows(rows: np.ndarray, dims: int) -> tuple[np.ndarray, np.ndarray, floa
             axes[:, j] = -axes[:, j]
     coords = Rc @ axes
     evr = evals[:dims] / evals.sum()
-    return coords, evr, float(evals.sum())
+    return PCAFit(coords, evr, float(evals.sum()), mean, axes)
 
 
 def _unembed_readout(
@@ -207,9 +244,20 @@ def compute_embed(m: GPT2Numpy, dims: int = 3) -> dict:
 
     PCA is done via the 768×768 covariance eigendecomposition (cheap and exact),
     not a giant thin-U SVD, so it runs in seconds and stays float64.
+
+    Two RAW-space scalars ship beside the coordinates, and "raw" is the whole
+    point of them: `norm` = ‖W_E[t]‖₂ and `centroid_dist` = ‖W_E[t] − mean_row‖₂,
+    both computed on the stored matrix BEFORE any centring. A glitch token's
+    signature (SolidGoldMagikarp and its ~40 siblings) is that its row barely
+    moved from initialisation — a fact about the raw rows. The PCA coordinates
+    above are centred; these two are not, and `space: "W_E.raw"` on the exported
+    channel is what keeps the two from ever being plotted against each other.
     """
-    coords, evr, total_var = _pca_rows(m.wte, dims)  # (V, dims) exact PC scores
-    norms = np.linalg.norm(m.wte.astype(np.float64), axis=1)  # exact per-token magnitude
+    fit = _pca_rows(m.wte, dims)  # (V, dims) exact PC scores + the transform
+    coords, evr, total_var = fit.coords, fit.evr, fit.total_var
+    W64 = m.wte.astype(np.float64)
+    norms = np.linalg.norm(W64, axis=1)  # exact per-token magnitude (RAW rows)
+    centroid_dist = np.linalg.norm(W64 - W64.mean(axis=0), axis=1)  # RAW, uncentred
     strs = [m.decode1(i) for i in range(m.V)]
     lead = [1 if s[:1] == " " else 0 for s in strs]
     xy = coords[:, :2].reshape(-1)  # flat [pc1_0, pc2_0, pc1_1, pc2_1, …]
@@ -218,11 +266,29 @@ def compute_embed(m: GPT2Numpy, dims: int = 3) -> dict:
         "meta": {
             "model": m.model_id,
             "created": _now(),
-            "quantity": "PCA projection of the token embedding matrix W_E",
+            "quantity": "PCA projection of the token embedding matrix W_E, with "
+            "the two RAW-space glitch scalars (row norm, distance to the "
+            "embedding centroid)",
             "formula": "Wc = W_E - mean_row(W_E); eig(WcᵀWc) → top-k axes V; "
-            "coords = Wc·V (exact PC scores). size = ‖W_E[i]‖₂.",
+            "coords = Wc·V (exact PC scores). size = ‖W_E[i]‖₂. "
+            "centroid_dist[i] = ‖W_E[i] − mean_row(W_E)‖₂.",
             "note": "color = leading-space (orthographic), decoded per token; "
-            "coords rounded to 3 dp for transport",
+            "coords rounded to 3 dp for transport. `norm` and `centroid_dist` "
+            "are computed on the RAW stored W_E (space W_E.raw), never on the "
+            "centred matrix the map's own geometry uses — an under-trained row "
+            "is recognised by where it sits in the raw space.",
+            "quantities": {
+                "norm": {
+                    "space": "W_E.raw",
+                    "formula": "sqrt(sum(W_E[i]**2))",
+                    "units": "l2",
+                },
+                "centroid_dist": {
+                    "space": "W_E.raw",
+                    "formula": "sqrt(sum((W_E[i] - mean_row(W_E))**2))",
+                    "units": "l2",
+                },
+            },
             "d": m.d,
             "n_tokens": int(m.V),
         },
@@ -230,9 +296,17 @@ def compute_embed(m: GPT2Numpy, dims: int = 3) -> dict:
         "dims": dims,
         "explained_variance_ratio": [round(float(x), 5) for x in evr],
         "total_variance": round(total_var, 3),
+        # the transform itself, so a row not in this fit can be placed later
+        # with (x - pca_mean) @ pca_axes instead of a refit that would move
+        # every coordinate already published. pca_axes is flat, AXIS-MAJOR:
+        # pca_axes_shape = [dims, d], so axis j is pca_axes[j*d:(j+1)*d]
+        "pca_mean": [round(float(v), 6) for v in fit.mean],
+        "pca_axes": [round(float(v), 6) for v in fit.axes.T.reshape(-1)],
+        "pca_axes_shape": [int(fit.axes.shape[1]), int(fit.axes.shape[0])],
         "coords": [round(float(v), 3) for v in xy],  # flat 2N (PC1, PC2)
         "z": [round(float(v), 3) for v in z],  # PC3 (hover only)
         "norm": [round(float(v), 3) for v in norms],
+        "centroid_dist": [round(float(v), 3) for v in centroid_dist],
         "lead_space": lead,  # 1 if the token string starts with a space
         "strs": strs,
     }
@@ -267,7 +341,8 @@ def compute_neurons(m: GPT2Numpy, dims: int = 3) -> dict:
     rows32 = np.concatenate(blocks, axis=0)  # (n_layer*d_mlp, d) float32
     n = rows32.shape[0]
 
-    coords, evr, total_var = _pca_rows(rows32, dims)
+    fit = _pca_rows(rows32, dims)
+    coords, evr, total_var = fit.coords, fit.evr, fit.total_var
     norms = np.linalg.norm(rows32.astype(np.float64), axis=1)  # exact ‖w_out‖₂
     top_tok, top_val, bot_tok, bot_val = _unembed_readout(rows32, m)
 
@@ -294,6 +369,13 @@ def compute_neurons(m: GPT2Numpy, dims: int = 3) -> dict:
         "dims": dims,
         "explained_variance_ratio": [round(float(x), 5) for x in evr],
         "total_variance": round(total_var, 3),
+        # the transform itself, so a row not in this fit can be placed later
+        # with (x - pca_mean) @ pca_axes instead of a refit that would move
+        # every coordinate already published. pca_axes is flat, AXIS-MAJOR:
+        # pca_axes_shape = [dims, d], so axis j is pca_axes[j*d:(j+1)*d]
+        "pca_mean": [round(float(v), 6) for v in fit.mean],
+        "pca_axes": [round(float(v), 6) for v in fit.axes.T.reshape(-1)],
+        "pca_axes_shape": [int(fit.axes.shape[1]), int(fit.axes.shape[0])],
         "coords": [round(float(x), 3) for x in xy],  # flat 2n (PC1, PC2)
         "z": [round(float(x), 3) for x in z],  # PC3 (hover only)
         "norm": [round(float(x), 3) for x in norms],
@@ -344,7 +426,8 @@ def compute_sae(m: GPT2Numpy, repo: str = SAE_REPO, hook: str = SAE_HOOK, dims: 
     sparsity = sp["sparsity"].astype(np.float64)  # log10 firing fraction
     assert sparsity.shape == (d_sae,), f"sparsity shape {sparsity.shape} != ({d_sae},)"
 
-    coords, evr, total_var = _pca_rows(W_dec, dims)
+    fit = _pca_rows(W_dec, dims)
+    coords, evr, total_var = fit.coords, fit.evr, fit.total_var
     norms = np.linalg.norm(W_dec.astype(np.float64), axis=1)  # exact ‖W_dec[i]‖₂
     top_tok, top_val, bot_tok, bot_val = _unembed_readout(W_dec.astype(np.float32), m)
 
@@ -376,6 +459,13 @@ def compute_sae(m: GPT2Numpy, repo: str = SAE_REPO, hook: str = SAE_HOOK, dims: 
         "dims": dims,
         "explained_variance_ratio": [round(float(x), 5) for x in evr],
         "total_variance": round(total_var, 3),
+        # the transform itself, so a row not in this fit can be placed later
+        # with (x - pca_mean) @ pca_axes instead of a refit that would move
+        # every coordinate already published. pca_axes is flat, AXIS-MAJOR:
+        # pca_axes_shape = [dims, d], so axis j is pca_axes[j*d:(j+1)*d]
+        "pca_mean": [round(float(v), 6) for v in fit.mean],
+        "pca_axes": [round(float(v), 6) for v in fit.axes.T.reshape(-1)],
+        "pca_axes_shape": [int(fit.axes.shape[1]), int(fit.axes.shape[0])],
         "coords": [round(float(x), 3) for x in xy],  # flat 2n (PC1, PC2)
         "z": [round(float(x), 3) for x in z],  # PC3 (hover only)
         "norm": [round(float(x), 4) for x in norms],
@@ -2845,13 +2935,47 @@ def write_bundles(
         dump(f"trace_{slug}.json", compute_trace(m, prompt))
         traces_index.append({"slug": slug, "prompt": prompt})
 
-    # a tiny manifest so the viewer can discover what's available per model
+    # a tiny manifest so the viewer can discover what's available per model.
+    # Intervention sweeps are written by `nebulai intervene`, not here, and a
+    # manifest rebuilt only from what THIS run produced would silently delist
+    # them — so they are carried over from disk rather than dropped.
+    carried = sorted(
+        f.name
+        for f in out_dir.glob("intervene_*.json")
+        if f.name not in {q.name for q in written}
+    )
     dump(
         "index.json",
         {
             "meta": {"model": model_id, "created": _now()},
-            "bundles": [p.name for p in written],
+            "bundles": [p.name for p in written] + carried,
             "traces": traces_index,
         },
     )
     return written
+
+
+def register_bundle(out_dir: Path, name: str) -> bool:
+    """Add one bundle file name to an existing `interp/index.json`.
+
+    Returns whether the manifest changed. A missing or unreadable manifest is
+    not an error: the bundle is still on disk and the viewer can still be
+    pointed at it by name. What would be an error is writing a bundle the
+    manifest claims does not exist, because the one affordance that enumerates
+    what a model has is that list.
+    """
+    idx = Path(out_dir) / "index.json"
+    if not idx.is_file():
+        return False
+    try:
+        doc = json.loads(idx.read_text())
+        bundles = doc["bundles"]
+        if not isinstance(bundles, list):
+            return False
+    except (ValueError, KeyError, TypeError):
+        return False
+    if name in bundles:
+        return False
+    bundles.append(name)
+    idx.write_text(json.dumps(doc, ensure_ascii=False, indent=1) + "\n")
+    return True

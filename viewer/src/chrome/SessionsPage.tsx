@@ -7,12 +7,21 @@
  *
  *  This supersedes the keyword Snapshot Map for large sessions: it keeps the
  *  token accounting, tool sequence, task lifecycle, and file touches the
- *  keyword map throws away. Everything runs client-side; raw transcript text is
- *  parsed in memory and never stored or transmitted. */
+ *  keyword map throws away.
+ *
+ *  Transcripts can also be picked straight off this machine — the same
+ *  `~/.claude/projects` tree the Keywords page reads — instead of being found
+ *  in Finder first. Parsing is client-side either way and raw text is never
+ *  stored; a picked transcript does travel from the local collector to the
+ *  browser over loopback, which is not the same claim as "never transmitted",
+ *  so the page no longer makes that one. */
 
 import { signal, useSignal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
 import { appStore } from "../app/store";
+import { AbsorbingPanel } from "./AbsorbingPanel";
+import { EnsemblePanel } from "./EnsemblePanel";
+import { LocalSessionPicker } from "./LocalSessionPicker";
 import {
   buildAgentGraph,
   CATEGORY_ORDER,
@@ -128,6 +137,16 @@ export function SessionsPage() {
             </div>
           )}
           {active.length > 0 && <SessionsStats sessions={active} />}
+          {/* The absorbing-state readout is about the MODEL, not about any
+              loaded transcript, so it renders whether or not a session is on
+              the plot — and renders nothing at all when this deploy ships no
+              study. See chrome/AbsorbingPanel.tsx. */}
+          <AbsorbingPanel />
+          {/* The fan is about a set of runs the seer STORE holds, not about
+              the transcripts loaded into this tab, so it renders on the same
+              terms as the absorbing readout: whenever the store has an
+              ensemble, and nothing at all when it does not. */}
+          <EnsemblePanel />
         </div>
       </div>
     </div>
@@ -230,6 +249,27 @@ function SessionPlot(props: { analyses: SessionAnalysis[] }) {
       .map((ax) => ({ x: "time", y: "context", z: "new-context" })[ax]);
   }, [appearance, ready.value]);
 
+  // Attractors P2 / D5 — placements from `seer place`, keyed by session id.
+  // Pushed separately from the analyses because a placement arrives over HTTP
+  // long after the transcript was parsed, and a run that has none must still
+  // draw: the field keeps its usage geometry and simply has no persona space
+  // to fade into.
+  const placements = $sessions.value.placements;
+  useEffect(() => {
+    if (ready.value) driverRef.current?.setPlacements(placements);
+  }, [placements, ready.value]);
+
+  // Attractors P3 — which runs the fan is drawn over. Separate from the
+  // analyses for the same reason the placements are: membership arrives with
+  // the ensemble document, long after the transcripts were parsed, and a run
+  // of the ensemble that is not loaded must lower the fan's n rather than be
+  // quietly stood in for.
+  const ensembleRunIds = $sessions.value.ensembleRunIds;
+  useEffect(() => {
+    if (ready.value)
+      driverRef.current?.setEnsembleGroup(ensembleRunIds.length ? ensembleRunIds : null);
+  }, [ensembleRunIds, ready.value]);
+
   // global Settings › bloom toggle (webgpu rung only)
   const bloom = $settings.value.bloom;
   useEffect(() => {
@@ -298,9 +338,10 @@ function SessionsSide(props: { dragOver: boolean; setDragOver: (v: boolean) => v
         onDragLeave={() => props.setDragOver(false)}
         onDrop={onDrop}
       >
-        <h3>Load session</h3>
+        <h3>Drop a file</h3>
         <p class="sessions-hint">
-          Claude&nbsp;Code transcript <code>.jsonl</code>. Parsed locally — never uploaded.
+          Claude&nbsp;Code transcript <code>.jsonl</code> from anywhere. Parsed in the
+          browser — a dropped file is never uploaded.
         </p>
         <input
           ref={fileRef}
@@ -340,6 +381,12 @@ function SessionsSide(props: { dragOver: boolean; setDragOver: (v: boolean) => v
         </button>
         {errorMsg.value && <p class="sessions-error">{errorMsg.value}</p>}
       </section>
+
+      <LocalSessionPicker
+        hint="Your own Claude Code sessions, read from disk by the local collector — newest first. Picking one again re-reads it, which is how you refresh a session that is still running."
+        loadedIds={sess.analyses.map((a) => a.id)}
+        onPick={(text, label, id) => doParse(text, label, errorMsg, id)}
+      />
 
       {sess.analyses.length > 0 && (
         <section class="sessions-side-block">
@@ -1117,9 +1164,15 @@ function shortModel(m: string): string {
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-function doParse(raw: string, name: string, errorMsg: { value: string }) {
+/** The one ingest point: drop, paste, sample and picker all arrive here.
+ *
+ *  `id` is passed only by the picker, and passing it is what makes re-picking a
+ *  session refresh it in place — `addSessionAnalysis` de-dups by id, and the
+ *  IndexedDB row is keyed by it too, so the grown transcript overwrites the
+ *  stale one rather than appearing beside it. */
+function doParse(raw: string, name: string, errorMsg: { value: string }, id?: string) {
   try {
-    const a = parseSessionTranscript(raw, cleanName(name));
+    const a = parseSessionTranscript(raw, cleanName(name), id);
     if (a.turns.length === 0) {
       errorMsg.value = "no model responses found — is this a Claude Code .jsonl transcript?";
       return;

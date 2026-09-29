@@ -63,6 +63,32 @@ traps and patterns, hardest-won first.
   GLSL but not WGSL. Write `1 - smoothstep(0.72, 1.0, d)`.
 - Morph = `positionNode: mix(pos2Attr, pos3Attr, uMorph)` with a single
   `uniform(0)` driven by an eased tween — no geometry rebuild.
+- **The atlas blend is three-way, not two.** Phase 1 added a direction axis on
+  top of the 2-D↔3-D morph:
+  `mix(mix(vec3(iPos2,0), iPos3, uMorph), vec3(axisXY,0), uAxis)`. The axis is
+  a LAYOUT STATE, not a `viewMode` — `viewMode` stays `"atlas"` throughout
+  (R1), and the whole thing is driven by two uniforms with no rebuild.
+  Real and null lanes are packed into ONE vec4 attribute `iAxis`
+  `(axisPar, axisOrth, nullPar, nullOrth)` and swizzled `.xy` / `.zw`, because
+  after this the sprite material binds **7** of the 8 vertex buffers (quad,
+  iPos2, iPos3, iColor, iAlpha, iFlags, iAxis) — two more scalar attributes
+  would have silently exceeded the budget. The ghost mesh reuses the same
+  buffers and binds 5.
+- **Anything that computes a position on the CPU must share that expression.**
+  The 2-D kdbush picker is INVALID the moment `uAxis > 0` (points are no longer
+  where `pos2` says), so hover routes to the id-buffer picker whenever
+  `morph > 0.02 || axisT > 0.02`, and tooltips/lasso go through
+  `blendedPosition()` in `viewer/src/scene/axisLayout.ts` — the CPU mirror of
+  the node graph, unit-tested against it. A second, "obviously equivalent"
+  copy of the blend is how the app ends up naming a different token than the
+  one under the cursor.
+- **The real cloud and its null share one ruler.** `axisLayout()` takes the
+  extents over the union of both columns. Normalising each cloud to its own
+  extent makes every random direction look exactly as structured as the real
+  one, which is the single thing the ghost exists to disprove. Points with no
+  measured projection stay at their map position and are counted — sliding
+  them to 0 would place them mid-axis, which is a confident claim about a
+  point nobody measured.
 - Share one 256×1 ramp `DataTexture` between points/beams/badges so colors
   can't drift from the CSS gradient (`tokens.ts` is unit-test-synced with
   `tokens.css`).
@@ -118,3 +144,50 @@ traps and patterns, hardest-won first.
 - Perf measurement in an occluded preview panel: rAF is frozen — measure p95
   with forced frames, and expect `window.__perf.p95FrameMs` from the rAF loop
   to read as garbage there.
+
+## `ChartStage`, and figures that make a claim (phase 4)
+
+`viewer/src/scene/interp/chart-stage.ts` is the shared perspective-orbit stage
+for lattice figures: extruded **opaque, depth-tested** columns on a grid,
+`NeutralToneMapping` (mandatory — the default tone mapper whites out the gold
+end of every ramp), real-raycast picking, HTML overlay labels. Three drivers use
+it: `AttentionRolloutDriver`, `ResidualRibbonDriver` and, since phase 4,
+`SteerDriver`. A discrete measurement gets discrete extrusion — never an
+interpolated surface stretched over the samples, which draws values nobody
+measured.
+
+Four rules that a driver on this stage should inherit:
+
+- **Put the arithmetic in a GPU-free module.** A WebGPU driver cannot run in
+  vitest, so everything the figure *claims* — the normalization, the floor, the
+  colour of the control, the summary the stat strip prints — lives beside it in
+  a plain module (`rollout.ts` for the waterfall; `steer.ts` for #26) and is
+  unit-tested there. A claim nothing can check is a claim nothing is holding up,
+  and the sharpest of them rot quietly when only a screenshot enforces them.
+- **A measured zero and an absent cell must not look the same.** Give a genuine
+  zero a visible floor plate (`FLOOR_FRAC`), and give a control its OWN colour
+  outside the ramp — colouring it `ramp(0)` makes the baseline read as a small
+  effect at the cool end of the scale, which is the exact confusion an
+  intervention figure exists to prevent.
+- **Height and colour read ONE normalization, against the bundle's own maximum,
+  and that maximum is printed on the axis.** Two sweeps must never be comparable
+  by eye merely because their tallest columns reach the same height.
+- **The claim sentence goes ON the canvas overlay, not in a footer.** §2.4
+  permits one causal sentence for intervention-backed figures; a footer is the
+  part of the page that gets cropped out of the screenshot the number travels
+  in. `SteerDriver.renderClaim()` also swaps the card for a refusal card when
+  the bundle's α = 0 row is not bit-identical to its baseline: a figure whose
+  control failed states that instead of quoting an effect size.
+
+Two wiring traps this cost a rewrite each:
+
+- **The selection channel must not live in the driver.** `chrome/tours.ts` and
+  `chrome/*.tsx` import it, so a channel exported from `SteerDriver.ts` drags
+  `three/webgpu` into the boot bundle. Export it from the GPU-free module and
+  have the driver import it — the driver registers an apply-callback on init and
+  unregisters on dispose, so a handler cannot leak into the next feature.
+- **An episode step's selection races the driver's own default.** `applyTourStep`
+  runs synchronously; the driver publishes its opening cell later, when its
+  async `setModel` resolves, and would silently discard the step's intent. The
+  channel therefore *remembers* a selection made with no driver mounted, and the
+  driver **takes** it (once, clamped to its grid) when its bundle lands.
