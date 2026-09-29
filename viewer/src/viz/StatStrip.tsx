@@ -44,7 +44,14 @@ export function Stat(props: StatTile) {
 export function StatStrip(props: { tiles: StatTile[]; label?: string }) {
   if (props.tiles.length === 0) return null;
   return (
-    <div class="stat-strip" role="group" aria-label={props.label ?? "Summary statistics"}>
+    // focusable: on a narrow stage the strip scrolls sideways instead of
+    // wrapping, and a scroll region has to be reachable without a pointer
+    <div
+      class="stat-strip"
+      role="group"
+      tabIndex={0}
+      aria-label={props.label ?? "Summary statistics"}
+    >
       {props.tiles.map((t) => (
         <Stat key={t.label} label={t.label} value={t.value} title={t.title} />
       ))}

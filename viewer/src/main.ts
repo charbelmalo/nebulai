@@ -91,6 +91,7 @@ import { AtlasDriver } from "./scene/drivers/AtlasDriver";
 import { ChordDriver } from "./scene/drivers/ChordDriver";
 import { CompareDriver } from "./scene/drivers/CompareDriver";
 import { HierarchyDriver } from "./scene/drivers/HierarchyDriver";
+import { requestFeature } from "./chrome/research/ResearchIntro";
 
 declare global {
   interface Window {
@@ -190,6 +191,7 @@ function resolveNebulaiContext(u: UrlState): void {
     episode: !!u.episode,
     model: !!u.model,
     finding: !!u.pin,
+    feature: !!u.feature,
   };
   const r = resolveExperience({ entry, explicit: u.experience, intent });
   // a nested document always has an entry; this only guards a misnamed file
@@ -577,6 +579,9 @@ async function bootAtlas(shell: BootedShell, t0: number): Promise<() => void> {
         if (!(await show(spec.dataset, { keepTour: true }))) return;
       }
 
+      // an episode narrates the dataset it opened; a model picked earlier on
+      // Internals must not replace it (reset BEFORE setTour: it clears tours)
+      if (appStore.getState().interpModel !== null) appStore.getState().setInterpModel(null);
       appStore.getState().setTour({ id: episodeId, step });
       // A step that names an Internals feature is shown on Internals even
       // when it does not say so: started from Learn's catalog or from a
@@ -727,6 +732,16 @@ async function bootAtlas(shell: BootedShell, t0: number): Promise<() => void> {
           title: "Unit link can't be opened",
           message: urlState.pin.message,
         });
+    } else if (st.experience === "research" && st.page === "interp") {
+      // Research's Internals reads the model's small export, never its map. A
+      // link naming an analysis without a usable export lands on the chooser
+      // with that analysis remembered, so it is not silently swapped.
+      if (urlState.model && datasets.some((d) => d.id === urlState.model)) {
+        st.setInterpModel(urlState.model);
+      } else {
+        if (urlState.feature) requestFeature(urlState.feature);
+        if (urlState.model) say(`no dataset named ${urlState.model} — choose an export`);
+      }
     } else if (urlState.model) {
       first = show(urlState.model);
     } else if (st.page === "map" && st.experience === "atlas") {

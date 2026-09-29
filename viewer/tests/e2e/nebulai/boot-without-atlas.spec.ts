@@ -183,11 +183,18 @@ test("mobile Guide clears the two-row chrome and documents every live view", asy
     .first()
     .click();
   expect(await page.evaluate(() => window.__store.getState().page)).toBe("interp");
-  await expect(page.locator(".interp-page")).toBeVisible();
+  // Research picks an export before an analysis: the chooser opens with the
+  // requested analysis named, and this server publishes no export at all
+  const chooser = page.locator(".research-chooser");
+  await expect(chooser).toBeVisible();
+  await expect(chooser.locator(".research-chooser-request")).toContainText("You asked for");
+  await expect(chooser.locator(".research-chooser-status")).toContainText(
+    "publishes no internals export",
+  );
 
   const interpClearance = await page.evaluate(() => {
     const nav = document.querySelector(".topnav")!.getBoundingClientRect();
-    const interp = document.querySelector(".interp-page")!.getBoundingClientRect();
+    const interp = document.querySelector(".research-chooser")!.getBoundingClientRect();
     return { navBottom: nav.bottom, pageTop: interp.top };
   });
   expect(interpClearance.pageTop).toBeGreaterThanOrEqual(interpClearance.navBottom);

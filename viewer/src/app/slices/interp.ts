@@ -66,17 +66,26 @@ export interface InterpSlice {
   /** Active guided tour (Internals) — which tour and which step. null = none.
    *  Cleared on model switch: tours quote model-specific bundle numbers. */
   tour: TourRef | null;
+  /** The model whose internals export the Internals page reads, chosen on
+   *  that page. null = follow the loaded map (a guided episode installs the
+   *  map it narrates). Research sets it explicitly from its model chooser, so
+   *  opening an analysis never downloads a map it does not read. */
+  interpModel: string | null;
 
   setInterpFeature(id: string): void;
   setInterpTrace(slug: string): void;
   setInterpSelection(sel: InterpSelection | null): void;
   setTour(tour: TourRef | null): void;
+  /** Switch the Internals model. Unit ids and tour captions are per-model, so
+   *  a real change clears the cross-view pick and any tour. */
+  setInterpModel(id: string | null): void;
 }
 
 export const createInterpSlice: StateCreator<AppState, [], [], InterpSlice> = (set) => ({
   interp: { featureId: "weight-spectrum", traceSlug: "" },
   interpSelection: null,
   tour: null,
+  interpModel: null,
 
   setInterpFeature: (featureId) =>
     set((s) => ({ interp: { ...s.interp, featureId } })),
@@ -85,4 +94,6 @@ export const createInterpSlice: StateCreator<AppState, [], [], InterpSlice> = (s
   setInterpSelection: (interpSelection) =>
     set((s) => (s.settings.crossLink || interpSelection === null ? { interpSelection } : s)),
   setTour: (tour) => set({ tour }),
+  setInterpModel: (interpModel) =>
+    set((s) => (s.interpModel === interpModel ? s : { interpModel, interpSelection: null, tour: null })),
 });

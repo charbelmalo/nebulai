@@ -16,3 +16,4 @@ const s = appStore.getState();
 export const $interp = signal<InterpUI>(s.interp);
 export const $interpSelection = signal<InterpSelection | null>(s.interpSelection);
 export const $tour = signal<TourRef | null>(s.tour);
+export const $interpModel = signal<string | null>(s.interpModel);

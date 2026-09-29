@@ -937,6 +937,14 @@ export function cachedBundle(url: string): unknown {
   return cache.get(url);
 }
 
+/** Seed the cache with a bundle whose bytes the caller already fetched and
+ *  verified (Research checks the pinned Fourier bundle against its manifest
+ *  digest first). The driver then renders exactly those bytes, with no second
+ *  request that could return something different. */
+export function primeBundle(url: string, json: unknown): void {
+  cache.set(url, json);
+}
+
 /** Drop every cached bundle. Tests only: two tests that stub different bodies
  *  behind the same URL would otherwise see whichever ran first. */
 export function __resetInterpCache(): void {

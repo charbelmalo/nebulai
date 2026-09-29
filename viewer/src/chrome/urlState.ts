@@ -238,8 +238,16 @@ let bootPinRaw: [string, string][] = [];
 
 function buildHash(): string {
   const st = appStore.getState();
-  if (bootModel && (st.datasetId || st.pendingDatasetId || st.loadError)) bootModel = null;
-  const model = st.pendingDatasetId ?? st.datasetId ?? bootModel;
+  if (bootModel && (st.datasetId || st.pendingDatasetId || st.loadError || st.interpModel))
+    bootModel = null;
+  // Internals names its own model. Research's Internals never borrows the
+  // map's: with no export chosen, the address carries none (the chooser).
+  const model =
+    st.page === "interp" && st.interpModel
+      ? st.interpModel
+      : st.experience === "research" && st.page === "interp"
+        ? bootModel
+        : (st.pendingDatasetId ?? st.datasetId ?? bootModel);
   const p = new URLSearchParams();
   // the experience is written explicitly so a link pasted anywhere under the
   // app — including the root chooser — reopens in the same context

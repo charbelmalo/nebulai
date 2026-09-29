@@ -52,6 +52,8 @@ export interface RouteIntent {
   lesson?: boolean;
   /** `model=` is present */
   model?: boolean;
+  /** a registered Internals analysis is named (`feature=`) */
+  feature?: boolean;
   /** pinned-unit keys are present */
   finding?: boolean;
 }
@@ -65,11 +67,12 @@ export function supports(e: Experience, i: RouteIntent): boolean {
       // Learn's own content is the lessons catalogue. A bare map, an
       // unguided analysis or the Behavior study are not lessons.
       // A model or pinned unit outside a lesson is a map request (Atlas).
-      if (i.finding || i.model || isAdvancedView(i.view)) return false;
+      if (i.finding || i.model || i.feature || isAdvancedView(i.view)) return false;
       return i.page === undefined || i.page === "guide";
     case "atlas":
       if (guided) return false;
-      if (isAdvancedView(i.view)) return false;
+      // an Internals analysis is Research's, even when the link names no page
+      if (isAdvancedView(i.view) || i.feature) return false;
       return i.page === undefined || i.page === "map";
     case "research":
       // guided episodes are Learn's even when a step shows Internals
@@ -88,6 +91,9 @@ export function defaultPage(e: Experience, i: RouteIntent = {}): Page {
     case "atlas":
       return "map";
     case "research":
+      // an analysis link opens that analysis; a model or view link without
+      // one is a map link, which Research shows under Comparisons
+      if (i.feature) return "interp";
       return i.view || i.model ? "map" : "interp";
   }
 }
@@ -118,7 +124,7 @@ function noticeFor(e: Experience): string {
 }
 
 function hasIntent(i: RouteIntent): boolean {
-  return !!(i.page || i.view || i.episode || i.lesson || i.model || i.finding);
+  return !!(i.page || i.view || i.episode || i.lesson || i.model || i.finding || i.feature);
 }
 
 /** Legacy inference, used when neither the explicit value nor the entry path
@@ -126,6 +132,7 @@ function hasIntent(i: RouteIntent): boolean {
 export function inferExperience(i: RouteIntent): Experience | null {
   if (i.episode || i.lesson) return "learn";
   if (i.page === "interp" || i.page === "behavior" || isAdvancedView(i.view)) return "research";
+  if (i.feature && !i.page) return "research";
   if (i.page === "guide") return "learn";
   if (i.page === "map" || i.model || i.finding) return "atlas";
   return null;

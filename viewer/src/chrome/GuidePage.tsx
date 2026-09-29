@@ -18,6 +18,7 @@ import type { GuideFormula, InterpGroup } from "../scene/interp/InterpDriver";
 import { GROUP_LABEL, INTERP_FEATURES } from "../scene/interp/registry";
 import { APP_ROOT } from "../data/base";
 import { experienceHref } from "./ExperienceNav";
+import { requestFeature } from "./research/ResearchIntro";
 import { guideResearchFor } from "./guideResearch";
 import { $datasetId, $datasets, $experience } from "./state";
 import { episodeAvailability, TOURS, type EpisodeContext } from "./tours";
@@ -57,6 +58,9 @@ const GROUP_SOURCE: Record<InterpGroup, string> = {
 
 function openInInternals(id: string): void {
   const s = appStore.getState();
+  // Research picks an export before any analysis, so remember which one was
+  // asked for and let the chooser say where it exists
+  if (s.experience === "research" && s.interpModel === null) requestFeature(id);
   s.setInterpFeature(id);
   s.setPage("interp");
 }

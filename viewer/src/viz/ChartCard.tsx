@@ -41,21 +41,25 @@ export function ChartCard(props: {
   tiles?: StatTile[];
   /** Extra class on the root, for page-specific layout. */
   class?: string;
+  /** Heading level of the title, so the card fits the page's outline (a page
+   *  whose h1 names the section puts its chart at h2). Default 3. */
+  level?: 2 | 3;
 }) {
   const tiles = props.tiles ?? [];
+  const Title = props.level === 2 ? "h2" : "h3";
   return (
     <div class={`chart-card${props.class ? ` ${props.class}` : ""}`}>
-      <header class="chart-card-head">
+      <div class="chart-card-head">
         <div class="chart-card-id">
-          <h3 class="chart-card-title">
+          <Title class="chart-card-title">
             {props.n != null && <span class="chart-card-n">#{props.n}</span>}
             {props.title}
             {props.tag && <span class="chart-card-tag">{props.tag}</span>}
-          </h3>
+          </Title>
           {props.subtitle && <p class="chart-card-sub">{props.subtitle}</p>}
         </div>
         {props.controls && <div class="chart-card-controls">{props.controls}</div>}
-      </header>
+      </div>
       {/* The body is `position: relative` and is the ONLY positioning context
           a caller's floating overlays should see: its box is exactly the plot
           area — header above it, stat strip below it. So a legend docked

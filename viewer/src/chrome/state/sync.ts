@@ -51,7 +51,7 @@ import {
   $toggles,
   $viewMode,
 } from "./atlas";
-import { $interp, $interpSelection, $tour } from "./interp";
+import { $interp, $interpModel, $interpSelection, $tour } from "./interp";
 import { $probing, $progress } from "./probing";
 import { $seer } from "./seer";
 import { $sessions } from "./sessions";
@@ -97,6 +97,7 @@ appStore.subscribe((st) => {
   if (st.interpSelection !== $interpSelection.value)
     $interpSelection.value = st.interpSelection;
   if (st.tour !== $tour.value) $tour.value = st.tour;
+  if (st.interpModel !== $interpModel.value) $interpModel.value = st.interpModel;
   if (st.compareData !== $compareData.value) $compareData.value = st.compareData;
   if (st.compare !== $compare.value) $compare.value = st.compare;
   if (st.seer !== $seer.value) $seer.value = st.seer;

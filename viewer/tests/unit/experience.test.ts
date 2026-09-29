@@ -117,4 +117,18 @@ describe("experience routing (PRODUCT-EXPERIENCES.md, URL and migration rules)",
     expect(experienceFromPath("/psychiX/nebulai-maps/index.html", root)).toBeNull();
     expect(experienceFromPath("/elsewhere/learn/", root)).toBeNull();
   });
+
+  it("a registered analysis opens in Research, never Learn or Atlas", () => {
+    expect(inferExperience({ feature: true })).toBe("research");
+    expect(supports("learn", { feature: true })).toBe(false);
+    expect(supports("atlas", { feature: true })).toBe(false);
+    for (const entry of ["learn", "atlas"] as const) {
+      const r = resolveExperience({ entry, intent: { feature: true, model: true } });
+      expect(r.experience).toBe("research");
+    }
+    // a feature (with or without a model) opens Internals, not a map
+    expect(defaultPage("research", { feature: true, model: true })).toBe("interp");
+    // a guided episode still wins, analysis steps included
+    expect(resolveExperience({ entry: "research", intent: { episode: true, feature: true } }).experience).toBe("learn");
+  });
 });
