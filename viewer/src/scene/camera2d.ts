@@ -240,3 +240,47 @@ export function centerForTarget(
   const lift = pz * Math.tan(el);
   return [px - lift * Math.sin(az), py + lift * Math.cos(az)];
 }
+
+/** The ground-frame box that frames a whole 3-D cloud at orbit angles (az, el)
+ *  — pass it to `fitFor`/`fitBounds` in place of the cloud's xy bounds.
+ *
+ *  Fitting the xy bounds alone ignores the same tilt `centerForTarget` solves
+ *  out for one point: every point rides up-screen by z·sin(el), so a cloud
+ *  whose depth sits well off z = 0 (pos3 is its own frame; the default atlas
+ *  lives at z ≈ 4–10) opened half off the top edge with the orbit spinning
+ *  around it. This projects every point onto the camera's screen axes
+ *  (right = (cos az, sin az, 0), up = (−cos el·sin az, cos el·cos az, sin el)),
+ *  takes that screen box, and returns an axis-aligned box of the same
+ *  width/height centered on the ground point that puts the box's middle at the
+ *  viewport center — so the fit's zoom accounts for the depth spread too.
+ *  Exact for the orthographic projection; with az = el = 0 it is the plain xy
+ *  bounds. Returns null for an empty cloud. */
+export function cloudFrameBox(
+  pos3: ArrayLike<number>,
+  count: number,
+  az: number,
+  el: number,
+): [number, number, number, number] | null {
+  const ca = Math.cos(az), sa = Math.sin(az);
+  const ce = Math.cos(el), se = Math.sin(el);
+  let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+  for (let i = 0; i < count; i++) {
+    const x = pos3[i * 3]!, y = pos3[i * 3 + 1]!, z = pos3[i * 3 + 2]!;
+    const a = x * ca + y * sa;
+    const b = (-x * sa + y * ca) * ce + z * se;
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    if (a < a0) a0 = a;
+    if (a > a1) a1 = a;
+    if (b < b0) b0 = b;
+    if (b > b1) b1 = b;
+  }
+  if (!(a1 >= a0)) return null;
+  // ground point whose screen offsets are the box middle — el is clamped
+  // short of 90° app-wide, but floor cos(el) as applyOrbitPivot does
+  const am = (a0 + a1) / 2;
+  const v = (b0 + b1) / 2 / Math.max(ce, 0.06);
+  const cx = am * ca - v * sa;
+  const cy = am * sa + v * ca;
+  const hw = (a1 - a0) / 2, hh = (b1 - b0) / 2;
+  return [cx - hw, cy - hh, cx + hw, cy + hh];
+}

@@ -28,7 +28,7 @@ import type { Dataset } from "../../data/loader";
 import { hullRadius, type ClusterHull } from "../../data/hulls";
 import { BeamBadges, type BadgeSpec } from "../../chrome/BeamBadges";
 import { Tooltip } from "../../chrome/Tooltip";
-import { Camera2D, centerForTarget, easeInOutCubic, NO_INSETS, type ViewInsets } from "../camera2d";
+import { Camera2D, centerForTarget, cloudFrameBox, easeInOutCubic, NO_INSETS, type ViewInsets } from "../camera2d";
 import { axisLayout, blendedPosition, mapBounds } from "../axisLayout";
 import { LabelOverlay } from "../labels/LabelOverlay";
 import { BeamsLayer, type Beam } from "../layers/BeamsLayer";
@@ -237,6 +237,9 @@ export class AtlasDriver implements SceneDriver {
   private bounds3: [number, number, number, number] | null = null;
   /** max xy dimension of the pos3 cloud — scale reference for 3D fly-to */
   private extent3 = 1;
+  /** pos3 depth (z) midpoint — with the xy bounds, the cloud center the
+   *  camera's depth window is kept on (see frame()) */
+  private zMid3 = 0;
   private camDist = 30;
   private idPicker: IdPicker | null = null;
   private lastIdPickAt = 0;
@@ -518,15 +521,20 @@ export class AtlasDriver implements SceneDriver {
     // dimension morph can re-frame the camera onto the 3-D cloud
     const q = ds.columns.pos3;
     let m3x0 = Infinity, m3y0 = Infinity, m3x1 = -Infinity, m3y1 = -Infinity;
+    let m3z0 = Infinity, m3z1 = -Infinity;
     for (let i = 0; i < ds.columns.count; i++) {
-      const x = q[i * 3]!, y = q[i * 3 + 1]!;
+      const x = q[i * 3]!, y = q[i * 3 + 1]!, z = q[i * 3 + 2]!;
       if (x < m3x0) m3x0 = x;
       if (x > m3x1) m3x1 = x;
       if (y < m3y0) m3y0 = y;
       if (y > m3y1) m3y1 = y;
+      if (z < m3z0) m3z0 = z;
+      if (z > m3z1) m3z1 = z;
     }
     this.bounds3 = [m3x0, m3y0, m3x1, m3y1];
     this.extent3 = Math.max(m3x1 - m3x0, m3y1 - m3y0) || 1;
+    this.zMid3 = Number.isFinite(m3z0) ? (m3z0 + m3z1) / 2 : 0;
+    const zSpan3 = Number.isFinite(m3z0) ? m3z1 - m3z0 : 0;
 
     // per-cluster pos3 xy spread, so a 3D fly-to frames the neighborhood at a
     // sane zoom. RMS*2 (not max) so one stray point can't inflate the window;
@@ -554,10 +562,14 @@ export class AtlasDriver implements SceneDriver {
       }
     }
 
-    // the tilt orbit needs the camera pulled back past the 3-D cloud's depth
-    this.camDist = this.mapExtent * 2;
+    // the tilt orbit needs the camera pulled back past the cloud's depth. pos3
+    // is its own frame (offset and scaled apart from pos2), so size on the
+    // larger of both layouts including pos3's depth — twice the biggest side
+    // clears the half-diagonal of any morph blend. frame() keeps the eye this
+    // far from the cloud *center*, so the window can't drift off the cloud.
+    this.camDist = Math.max(this.mapExtent, this.extent3, zSpan3) * 2;
     this.camera.near = 0.1;
-    this.camera.far = this.mapExtent * 8;
+    this.camera.far = this.camDist * 4;
 
     this.fitPending = true;
     this.userDroveCamera = false;
@@ -676,10 +688,35 @@ export class AtlasDriver implements SceneDriver {
       const cosEl = Math.cos(el);
       const sinAz = Math.sin(az);
       const cosAz = Math.cos(az);
+      // Keep the depth window on the cloud. The view ray runs through the
+      // ground point (cx, cy, 0) along -o (o = unit eye offset below), but near
+      // the horizon the orbit pivot's compensating pan slides (cx, cy) tens of
+      // map-widths along that ray — an eye a fixed camDist from the ground point
+      // then ends up *past* the cloud and every point falls behind the near
+      // plane while the HTML labels, which have no depth clip, keep tracking
+      // (the "cloud vanishes mid-orbit" report). Sliding the look-at target
+      // along the ray to the spot nearest the cloud's center leaves the
+      // orthographic image exactly unchanged and puts the cloud mid-window.
+      const ox = sinAz * sinEl, oy = -cosAz * sinEl, oz = cosEl;
+      const m = this.morph;
+      let tx = this.cam.cx, ty = this.cam.cy, tz = 0;
+      if (this.bounds && this.bounds3) {
+        const [a0, b0, a1, b1] = this.bounds;
+        const [c0, d0, c1, d1] = this.bounds3;
+        const px = (a0 + a1) / 2 + ((c0 + c1) / 2 - (a0 + a1) / 2) * m;
+        const py = (b0 + b1) / 2 + ((d0 + d1) / 2 - (b0 + b1) / 2) * m;
+        const pz = this.zMid3 * m;
+        const s = (px - tx) * ox + (py - ty) * oy + pz * oz;
+        if (Number.isFinite(s)) {
+          tx += ox * s;
+          ty += oy * s;
+          tz += oz * s;
+        }
+      }
       this.camera.position.set(
-        this.cam.cx + sinAz * sinEl * this.camDist,
-        this.cam.cy - cosAz * sinEl * this.camDist,
-        cosEl * this.camDist,
+        tx + ox * this.camDist,
+        ty + oy * this.camDist,
+        tz + oz * this.camDist,
       );
       // This map is Z-up, so three's default camera.up (world +Y) lies *inside*
       // the map plane. Letting lookAt derive the roll from it pins world +Y to
@@ -689,7 +726,7 @@ export class AtlasDriver implements SceneDriver {
       // every (az, el), and at az=el=0 it is (0,1,0), so the flat 2-D map keeps
       // the orientation the HTML/SVG overlays project against.
       this.camera.up.set(-cosEl * sinAz, cosEl * cosAz, sinEl);
-      this.camera.lookAt(this.cam.cx, this.cam.cy, 0);
+      this.camera.lookAt(tx, ty, tz);
       this.camera.updateProjectionMatrix();
       // refresh matrixWorldInverse now (render would too, but a frame later)
       // so projectWorld-anchored pills track this frame's camera, not last's
@@ -846,25 +883,47 @@ export class AtlasDriver implements SceneDriver {
     // Strided sample, not a full scan — see PIVOT_DEPTH_SAMPLES. The stride is
     // an odd-ish step over the whole array rather than a prefix, so a map whose
     // points are ordered by cluster still samples across all of them.
+    //
+    // Both halves go through the orbit frame. cam.cx/cy is a spot on the z = 0
+    // plane, not what sits mid-screen: a point at height z rides up-screen by
+    // z·sin(el), so the old (cx, cy, zMed) pivot landed ~570 px above the view
+    // center on the default atlas — off the top edge — and auto-orbit swung the
+    // cloud around that off-screen axis. So: test "in frame" by each point's
+    // screen offsets (right a, up b — the captureOrbitAnchor basis), and put the
+    // pivot on the view ray through the screen center, at the in-frame points'
+    // median distance along that ray.
     const m = this.morph;
     const [hx, hy] = this.cam.halfExtents();
+    const [az, el] = this.orbitAngles();
+    const ca = Math.cos(az), sa = Math.sin(az);
+    const ce = Math.cos(el), se = Math.sin(el);
+    // o = unit offset toward the eye (same as frame())
+    const ox = sa * se, oy = -ca * se, oz = ce;
     const n = Math.min(p.length / 2, q.length / 3);
     const stride = Math.max(1, Math.floor(n / PIVOT_DEPTH_SAMPLES));
     const zs = this.pivotDepthScratch;
     let k = 0;
     for (let i = 0; i < n && k < zs.length; i += stride) {
-      const x = p[i * 2]! + (q[i * 3]! - p[i * 2]!) * m;
-      const y = p[i * 2 + 1]! + (q[i * 3 + 1]! - p[i * 2 + 1]!) * m;
-      if (Math.abs(x - this.cam.cx) <= hx && Math.abs(y - this.cam.cy) <= hy)
-        zs[k++] = q[i * 3 + 2]!;
+      const dx = p[i * 2]! + (q[i * 3]! - p[i * 2]!) * m - this.cam.cx;
+      const dy = p[i * 2 + 1]! + (q[i * 3 + 1]! - p[i * 2 + 1]!) * m - this.cam.cy;
+      const z = q[i * 3 + 2]! * m;
+      const a = dx * ca + dy * sa;
+      const b = (-dx * sa + dy * ca) * ce + z * se;
+      if (Math.abs(a) <= hx && Math.abs(b) <= hy) zs[k++] = dx * ox + dy * oy + z * oz;
     }
     if (k) {
       const inFrame = zs.subarray(0, k);
       inFrame.sort(); // TypedArray sorts numerically
-      const zMed = inFrame[k >> 1]!;
+      const t = inFrame[k >> 1]!;
+      const px = this.cam.cx + ox * t;
+      const py = this.cam.cy + oy * t;
+      const pz = oz * t;
+      // pivotWorld() renders p3.z scaled by the morph — pre-divide so the pivot
+      // lands exactly on the ray at the current morph (a flat map has el = 0,
+      // so pz is the ray's own depth there and dropping it changes nothing)
       return {
-        p2: [this.cam.cx, this.cam.cy],
-        p3: [this.cam.cx, this.cam.cy, zMed],
+        p2: [px, py],
+        p3: [px, py, m > 1e-3 ? pz / m : 0],
       };
     }
     // Nothing in frame — the view has been panned clear of the cloud. Pivoting
@@ -1059,11 +1118,20 @@ export class AtlasDriver implements SceneDriver {
     if (this.cam.viewportW < 2 || this.cam.viewportH < 2) return;
     // frame whichever cloud the current dimension shows
     const flat = appStore.getState().dims !== 3;
-    const b = flat ? this.bounds : this.bounds3;
+    const b = flat ? this.bounds : this.frameBox3();
     if (!b) return;
     this.cam.fitBounds(b[0], b[1], b[2], b[3], 72, flat ? this.occlusionInsets() : NO_INSETS);
     this.clearOrbitPivot();
     this.fitPending = false;
+  }
+
+  /** The box a 3-D fit frames: the pos3 cloud as seen at the angles the
+   *  camera settles at (see cloudFrameBox) — its xy bounds alone ignore the
+   *  tilt, and the default atlas opened half off the top edge. */
+  private frameBox3(): [number, number, number, number] | null {
+    const ds = this.dataset;
+    if (!ds) return this.bounds3;
+    return cloudFrameBox(ds.columns.pos3, ds.columns.count, ...this.settledAngles()) ?? this.bounds3;
   }
 
   // ── 2D↔3D dimension morph ───────────────────────────────────────────────
@@ -1085,7 +1153,7 @@ export class AtlasDriver implements SceneDriver {
     if (orbitLift) return;
 
     this.clearOrbitPivot();
-    const b = dims === 3 ? this.bounds3 : this.bounds;
+    const b = dims === 3 ? this.frameBox3() : this.bounds;
     if (b && this.cam.viewportW >= 2) {
       const [cx, cy, wpp] = this.cam.fitFor(
         b[0],
