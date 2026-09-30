@@ -145,6 +145,9 @@ function InterpView() {
   // not a persisted setting.
   const narrow = useSignal(false);
   const legendOpen = useSignal<boolean | null>(null);
+  // Narrow viewports: the analysis list is a drawer so the chart owns the
+  // screen. null = auto (closed once an analysis is showing).
+  const railOpen = useSignal<boolean | null>(null);
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 900px)");
     narrow.value = mq.matches;
@@ -505,13 +508,31 @@ function InterpView() {
           </section>
   );
 
+  const railIsOpen = railOpen.value ?? !feature;
   return (
     <div class={`interp-page${intro ? " has-task" : ""}`} role="main">
-      <aside class="interp-rail">
+      <aside class={`interp-rail${narrow.value && !railIsOpen ? " is-collapsed" : ""}`}>
         <div class="interp-rail-head">
           <h1 class="interp-rail-title">Internals</h1>
           <span class="interp-rail-count">{railCount}</span>
         </div>
+        {narrow.value && (
+          <button
+            type="button"
+            class="interp-rail-toggle"
+            aria-expanded={railIsOpen}
+            aria-controls="interp-rail-list"
+            onClick={() => (railOpen.value = !railIsOpen)}
+          >
+            <span class="interp-rail-toggle-label">Analysis</span>
+            <span class="interp-rail-toggle-value">
+              {feature ? `#${feature.n} ${feature.label}` : "Choose an analysis"}
+            </span>
+            <span class="interp-rail-toggle-caret" aria-hidden="true">
+              ▾
+            </span>
+          </button>
+        )}
         <div class="interp-model">
           <SelectRow
             label="Model"
@@ -568,7 +589,7 @@ function InterpView() {
             </button>
           </div>
         )}
-        <div class="interp-rail-scroll">
+        <div class="interp-rail-scroll" id="interp-rail-list">
           {!research && toursSection}
           {[...byGroup.entries()].map(([group, feats]) => (
             <section key={group} class="interp-rail-group">
@@ -581,7 +602,10 @@ function InterpView() {
                   type="button"
                   class={`interp-feature${f.id === interp.featureId ? " is-active" : ""}${a.state === "missing" ? " is-unavailable" : ""}`}
                   title={a.state === "missing" || a.state === "live" ? a.reason : undefined}
-                  onClick={() => appStore.getState().setInterpFeature(f.id)}
+                  onClick={() => {
+                    appStore.getState().setInterpFeature(f.id);
+                    if (narrow.value) railOpen.value = false;
+                  }}
                 >
                   <span class="interp-feature-n">#{f.n}</span>
                   <span class="interp-feature-label">{f.label}</span>

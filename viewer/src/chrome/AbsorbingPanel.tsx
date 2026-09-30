@@ -44,7 +44,14 @@ import {
 /** Available study ids, or null until the index has been read. The three-state
  *  (null / [] / ids) is the point: "not looked yet" and "looked, none shipped"
  *  must not render the same way. */
-const $ids = signal<string[] | null>(null);
+/** Whether this build ships `out/absorbing/` at all. The Seer tree deploys with
+ *  no `out/` beneath it, so probing for the index there is a guaranteed 404 on
+ *  every Transcripts visit. Like `behavior_study` in NebulAI's experience
+ *  manifest, the study is opt-in: a build that bakes one sets
+ *  `VITE_ABSORBING_STUDIES=1`, and every other build starts in "looked, none
+ *  shipped" without touching the network. */
+const STUDIES_SHIPPED = import.meta.env.VITE_ABSORBING_STUDIES === "1";
+const $ids = signal<string[] | null>(STUDIES_SHIPPED ? null : []);
 const $studyId = signal<string | null>(null);
 const $study = signal<AbsorbingStudy | null>(null);
 const $error = signal<string | null>(null);
@@ -53,7 +60,7 @@ const $collapsed = signal(false);
 let indexRequested = false;
 
 function ensureIndex(): void {
-  if (indexRequested) return;
+  if (indexRequested || !STUDIES_SHIPPED) return;
   indexRequested = true;
   loadStudyIndex()
     .then((list) => {

@@ -9,7 +9,7 @@
 
 .snapshot-page {
   position: fixed;
-  inset: 60px 0 0 0;
+  inset: var(--page-top) 0 0 0;
   z-index: 15;
   display: flex;
   flex-direction: column;
@@ -46,7 +46,7 @@
 
 .snapshot-side-block h3 {
   margin: 0;
-  font: 650 10.5px/1.2 var(--font-ui);
+  font: 650 12px/1.2 var(--font-ui);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text-faint);
@@ -89,13 +89,13 @@
 .snapshot-topic-n {
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .snapshot-keywords summary {
   cursor: pointer;
   color: var(--text-dim);
-  font: 500 11px/1.4 var(--font-ui);
+  font: 500 12px/1.4 var(--font-ui);
   letter-spacing: 0.04em;
   padding: 4px 0;
 }
@@ -112,7 +112,7 @@
   border-radius: var(--radius-pill);
   background: var(--bg-pill);
   color: var(--text-dim);
-  font: 500 11px/1.3 var(--font-mono);
+  font: 500 12px/1.3 var(--font-mono);
 }
 
 .snapshot-chip.is-hot {
@@ -150,7 +150,7 @@
   border-radius: var(--radius-form-ctl);
   background: var(--bg-pill);
   color: var(--text);
-  font: 500 11px/1.5 var(--font-mono);
+  font: 500 12px/1.5 var(--font-mono);
   resize: vertical;
 }
 
@@ -165,7 +165,7 @@
   border-radius: var(--radius-ctl);
   background: color-mix(in srgb, var(--danger) 16%, transparent);
   color: var(--text);
-  font: 500 11px/1.45 var(--font-mono);
+  font: 500 12px/1.45 var(--font-mono);
 }
 
 .snapshot-log-list {
@@ -216,7 +216,7 @@
 .snapshot-log-meta {
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .snapshot-log-x {
@@ -241,6 +241,10 @@
   position: relative;
   display: grid;
   place-items: center;
+  /* The ring sizes against the stage's OWN box (cq units below), not just its
+     width: a stage wider than it is tall used to crop the ring top and bottom. */
+  container-type: size;
+  min-height: min(calc(46vh / var(--chrome-zoom, 1)), 420px);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-card);
   background: var(--bg-raise);
@@ -249,9 +253,42 @@
 }
 
 .snapshot-graph {
-  width: min(100%, 640px);
+  width: min(640px, calc(100cqw - 32px), calc(100cqh - 32px));
   aspect-ratio: 1 / 1;
   display: block;
+}
+
+/* With a log loaded the turn card owns the stage's bottom-right, so the ring
+   must not sit under it. Wide stage: the ring keeps a 388px lane clear on the
+   right (card 340 + insets) and centres once there is room to. Narrow stage:
+   the ring goes to the top and the card spans the bottom (below). */
+svg.snapshot-graph {
+  --ring: min(640px, calc(100cqw - 420px), calc(100cqh - 32px));
+  width: var(--ring);
+  justify-self: start;
+  margin-left: max(24px, min(calc((100cqw - var(--ring)) / 2), calc(100cqw - var(--ring) - 388px)));
+}
+
+@container (max-width: 760px) {
+  svg.snapshot-graph {
+    --ring: min(560px, calc(100cqw - 24px), calc(100cqh - 196px));
+    align-self: start;
+    justify-self: center;
+    margin: 8px 0 0;
+  }
+  .snapshot-turn-card {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    max-width: none;
+    padding: 12px 14px;
+  }
+  .snapshot-turn-text {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
 }
 
 .snapshot-graph.is-empty {
@@ -277,7 +314,7 @@
   margin: 0 0 12px;
   max-width: 78ch;
   color: var(--text-dim);
-  font: 400 11px/1.55 var(--font-ui);
+  font: 400 12px/1.55 var(--font-ui);
   text-wrap: pretty;
 }
 
@@ -343,7 +380,7 @@
   border-radius: var(--radius-pill);
   background: var(--bg-pill);
   color: var(--text);
-  font: 650 10px/1.5 var(--font-ui);
+  font: 650 12px/1.5 var(--font-ui);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -358,7 +395,7 @@
 
 .snapshot-turn-pos {
   color: var(--text-faint);
-  font: 500 11px/1.2 var(--font-ui);
+  font: 500 12px/1.2 var(--font-ui);
   font-variant-numeric: tabular-nums;
 }
 
@@ -374,15 +411,46 @@
   gap: 5px;
 }
 
+/* The empty state is a card of its own — it no longer shares the stage with a
+   ghost ring, so nothing prints through it. */
 .snapshot-empty {
-  padding: 40px;
+  box-sizing: border-box;
+  margin: 16px;
+  padding: 32px 36px;
   text-align: center;
   color: var(--text-dim);
-  max-width: 440px;
+  width: min(440px, calc(100cqw - 32px));
   display: flex;
   flex-direction: column;
   gap: 12px;
   align-items: center;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  font: 400 14px/1.55 var(--font-ui);
+}
+
+.snapshot-empty p {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+.snapshot-empty-topic {
+  font-size: 13px;
+}
+
+.snapshot-empty-topic b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.snapshot-empty-glyph {
+  width: 56px;
+  height: 56px;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  opacity: 0.8;
 }
 
 .snapshot-empty h2 {
@@ -444,7 +512,20 @@
   border-radius: var(--radius-ctl);
   background: var(--bg-pill);
   color: var(--text);
-  font: 500 11px/1.5 var(--font-mono);
+  font: 500 12px/1.5 var(--font-mono);
   resize: vertical;
 }
 
+
+/* The active row sits on --accent-soft, where --text-faint drops to ~4.2:1. */
+.snapshot-topic.is-active .snapshot-topic-n {
+  color: var(--text-dim);
+}
+
+/* The transport is a shared primitive (11px); on this page its readouts are
+   the turn counter people read, so they meet the Seer 12px floor here rather
+   than in chrome.primitives.css. */
+.snapshot-transport .tp-count,
+.snapshot-transport .tp-now {
+  font-size: 12px;
+}

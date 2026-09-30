@@ -17,11 +17,58 @@ body.chooser {
   font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
 }
+/* the hero image bleeds past the column; never let it scroll the page */
+html:has(body.chooser) {
+  overflow-x: clip;
+}
 
 .chooser-main {
+  position: relative;
+  isolation: isolate;
   max-width: 1080px;
   margin: 0 auto;
-  padding: clamp(28px, 7vh, 88px) 16px 48px;
+  padding: clamp(28px, calc(7vh / var(--chooser-zoom, 1)), 88px) 16px 48px;
+}
+
+/* 4K: the page is laid out in CSS px; scale it as a whole (vh above is
+   divided back out, since viewport units inside a zoomed box are zoomed) */
+@media (min-width: 2200px) {
+  .chooser-main {
+    --chooser-zoom: 1.35;
+    zoom: 1.35;
+  }
+}
+@media (min-width: 3000px) {
+  .chooser-main {
+    --chooser-zoom: 1.75;
+    zoom: 1.75;
+  }
+}
+
+/* the real map, faded in behind the headline */
+.chooser-hero {
+  position: absolute;
+  z-index: -1;
+  top: -20px;
+  right: -12%;
+  width: min(78%, 900px);
+  height: auto;
+  opacity: 0.55;
+  pointer-events: none;
+  user-select: none;
+  -webkit-mask-image: radial-gradient(closest-side, #000 55%, transparent);
+  mask-image: radial-gradient(closest-side, #000 55%, transparent);
+}
+@media (max-width: 860px) {
+  .chooser-main {
+    overflow-x: clip;
+  }
+  .chooser-hero {
+    top: 0;
+    right: -30%;
+    width: 110%;
+    opacity: 0.35;
+  }
 }
 
 .chooser-brand {
@@ -85,6 +132,34 @@ body.chooser {
     border-color var(--t-fast) var(--ease-out),
     transform var(--t-fast) var(--ease-out);
 }
+/* the preview sits flush with the card's edges */
+.chooser-card-art {
+  display: block;
+  width: calc(100% + 40px);
+  height: auto;
+  aspect-ratio: 16 / 10;
+  margin: -22px -20px 6px;
+  object-fit: cover;
+  background: #0e0f12;
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* Learn is the suggested first path */
+.chooser-card.is-primary {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--hairline));
+}
+.chooser-card-badge {
+  margin-left: 8px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+.chooser-card.is-primary .chooser-card-kicker {
+  color: var(--accent);
+}
+
 .chooser-card:hover {
   border-color: var(--hairline-strong);
   transform: translateY(-1px);
@@ -94,7 +169,35 @@ body.chooser {
 }
 @media (prefers-reduced-motion: reduce) {
   .chooser-card,
-  .chooser-card:hover {
+  /* the preview sits flush with the card's edges */
+.chooser-card-art {
+  display: block;
+  width: calc(100% + 40px);
+  height: auto;
+  aspect-ratio: 16 / 10;
+  margin: -22px -20px 6px;
+  object-fit: cover;
+  background: #0e0f12;
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* Learn is the suggested first path */
+.chooser-card.is-primary {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--hairline));
+}
+.chooser-card-badge {
+  margin-left: 8px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+.chooser-card.is-primary .chooser-card-kicker {
+  color: var(--accent);
+}
+
+.chooser-card:hover {
     transition: none;
     transform: none;
   }

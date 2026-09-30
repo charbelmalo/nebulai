@@ -49,9 +49,9 @@ test("Research opens on an export chooser and loads no model map", async ({ page
   await expect(page.getByRole("heading", { level: 1, name: "Choose a model export" })).toBeVisible({
     timeout: 45_000,
   });
-  const gpt2 = page.getByRole("button", { name: /gpt2\s*Recommended/ });
+  const gpt2 = page.getByRole("button", { name: /^GPT-2\s*Recommended/ });
   await expect(gpt2).toContainText(/24 of 26 analyses available/);
-  await expect(page.getByRole("button", { name: /^gpt2-medium/ })).toContainText(/18 of 26/);
+  await expect(page.getByRole("button", { name: /^GPT-2 Medium\b/ })).toContainText(/18 of 26/);
   await expect(page.locator(".research-chooser-more summary")).toContainText(/map but no internals export/);
   // nothing has been chosen, so the address names no model
   expect(new URL(page.url()).hash).not.toContain("model=");
@@ -63,7 +63,7 @@ test("Research opens on an export chooser and loads no model map", async ({ page
 test("the first task completes by keyboard and exports the exact pinned bytes", async ({ page }) => {
   const { errors, maps } = watch(page);
   await page.goto("/research/?gpu=webgl&frozen=1");
-  const gpt2 = page.getByRole("button", { name: /gpt2\s*Recommended/ });
+  const gpt2 = page.getByRole("button", { name: /^GPT-2\s*Recommended/ });
   await expect(gpt2).toBeVisible({ timeout: 45_000 });
   await gpt2.focus();
   await page.keyboard.press("Enter");
@@ -173,7 +173,7 @@ test("without a GPU the task is complete through the table", async ({ page }) =>
 
 test("each export states which analyses it has", async ({ page }) => {
   await page.goto("/research/?gpu=webgl&frozen=1");
-  await page.getByRole("button", { name: /^gpt2-medium/ }).click({ timeout: 45_000 });
+  await page.getByRole("button", { name: /^GPT-2 Medium\b/ }).click({ timeout: 45_000 });
   await expect(page.locator(".interp-rail-count")).toHaveText("18 of 26 available");
   // the SAE views and the grokking toy are gpt2-only
   const sae = page.locator(".interp-feature.is-unavailable");
@@ -212,10 +212,10 @@ test("an analysis opened from Methods survives the export choice", async ({ page
   const chooser = page.locator(".research-chooser");
   await expect(chooser.locator(".research-chooser-request")).toContainText("You asked for");
   // the SAE views are exported for gpt2 only, and the chooser says so per export
-  await expect(page.getByRole("button", { name: /gpt2\s*Recommended/ })).toContainText(/Includes /);
-  await expect(page.getByRole("button", { name: /^gpt2-medium/ })).toContainText(/Does not include /);
+  await expect(page.getByRole("button", { name: /^GPT-2\s*Recommended/ })).toContainText(/Includes /);
+  await expect(page.getByRole("button", { name: /^GPT-2 Medium\b/ })).toContainText(/Does not include /);
   const requested = await page.evaluate(() => window.__store.getState().interp.featureId);
-  await page.getByRole("button", { name: /gpt2\s*Recommended/ }).click();
+  await page.getByRole("button", { name: /^GPT-2\s*Recommended/ }).click();
   await expect(page.locator(".interp-page")).toBeVisible();
   expect(await page.evaluate(() => window.__store.getState().interp.featureId)).toBe(requested);
   await expect(page.locator("aside.research-task")).toHaveCount(0);
@@ -229,6 +229,6 @@ test("a link naming an analysis but no export asks for the export", async ({ pag
   });
   await page.locator(".research-chooser-request button").click();
   await expect(page.locator(".research-chooser-request")).toHaveCount(0);
-  await page.getByRole("button", { name: /gpt2\s*Recommended/ }).click();
+  await page.getByRole("button", { name: /^GPT-2\s*Recommended/ }).click();
   await expect(page.locator("aside.research-task")).toContainText("Verified");
 });

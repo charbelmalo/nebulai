@@ -70,6 +70,10 @@ export interface ExperienceManifest {
     bytes: number;
   };
   artifacts: ManifestArtifact[];
+  /** Research's Behavior study. Absent = unknown (older manifests: the page
+   *  probes as before); null = authoritatively not published, so nothing is
+   *  fetched; an object = the published study file. */
+  behavior_study?: { path: string; bytes: number } | null;
 }
 
 export type ManifestResult =
@@ -199,6 +203,15 @@ export function validateManifest(raw: unknown): ManifestResult {
     if (!isBytes(ri.bytes)) err("research_intro.bytes must be a positive integer");
   }
 
+  if ("behavior_study" in raw && raw.behavior_study !== null) {
+    const bs = raw.behavior_study;
+    if (!isObj(bs)) err("behavior_study must be null or an object");
+    else {
+      if (!isSafeRelativePath(bs.path)) err("behavior_study.path is not a safe relative path");
+      if (!isBytes(bs.bytes)) err("behavior_study.bytes must be a positive integer");
+    }
+  }
+
   return errors.length ? { ok: false, errors } : { ok: true, manifest: raw as unknown as ExperienceManifest };
 }
 
@@ -239,6 +252,14 @@ export function manifestStatus(): ManifestStatus {
 }
 export function activeManifest(): ExperienceManifest | null {
   return status.state === "ok" ? status.manifest : null;
+}
+
+/** Whether this deploy publishes a Behavior study: true/false when the
+ *  manifest says so, null when it is silent (keep probing). */
+export function behaviorStudyPublished(): boolean | null {
+  const m = activeManifest();
+  if (!m || !("behavior_study" in m)) return null;
+  return m.behavior_study != null;
 }
 
 /** True only when the manifest AUTHORITATIVELY says this sidecar is not

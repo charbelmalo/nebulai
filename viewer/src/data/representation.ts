@@ -139,6 +139,13 @@ const MODEL_NAMES: Record<string, string> = {
   "gpt2-small": "GPT-2 Small",
   "gpt2-medium": "GPT-2 Medium",
   distilgpt2: "DistilGPT-2",
+  "EleutherAI/pythia-70m": "Pythia 70M",
+  "HuggingFaceTB/SmolLM2-135M": "SmolLM2 135M",
+  "google/gemma-4-26B-A4B-it": "Gemma 4 26B-A4B Instruct",
+  "inclusionai/ling-2.6-flash": "Ling 2.6 Flash",
+  "meta-models/Muse-Glimmer-30B": "Muse Glimmer 30B",
+  "mistralai/Mistral-Nemo-Instruct-2407": "Mistral Nemo Instruct 2407",
+  "Xenova/claude-tokenizer": "Claude tokenizer",
 };
 
 export function modelDisplayName(model: string): string {
@@ -168,4 +175,48 @@ export function datasetLabel(meta: {
   const parts = [modelDisplayName(model), what];
   if (typeof meta.layer === "number" && Number.isInteger(meta.layer)) parts.push(`Layer ${meta.layer}`);
   return parts.filter(Boolean).join(" · ");
+}
+
+/** A chooser card's reading of one published map, from its index entry alone
+ *  (no map is fetched): a human title, what a point is, the layer when the
+ *  unit names one, and the family the choosers group by. The raw id always
+ *  travels with it and is shown as the caption. */
+export interface DatasetCard {
+  title: string;
+  subtitle: string;
+  layer: number | null;
+  family: string;
+}
+
+const GPT2_FAMILY = new Set(["gpt2", "gpt2-small", "gpt2-medium", "distilgpt2"]);
+
+export function describeDataset(d: { id: string; model?: unknown; unit?: unknown }): DatasetCard {
+  const model = typeof d.model === "string" && d.model ? d.model : d.id;
+  const unit = typeof d.unit === "string" ? d.unit : "";
+  const rep = classifyRepresentation({ unit });
+  // the layer is the digits after a block/layer segment of the unit's hook
+  const m = /(?:^|[(,\s.])(?:layers?|h|blocks)\.(\d+)\./.exec(unit);
+  const layer = m ? Number(m[1]) : null;
+  if (unit.startsWith("probe_concept(")) {
+    const embedder = /\(([^()]+)\)\s*$/.exec(unit)?.[1]?.trim();
+    return {
+      title: `Concept probe: ${model}`,
+      subtitle: `Probe texts embedded by ${embedder ?? "an external model"}`,
+      layer: null,
+      family: "Concept probes",
+    };
+  }
+  const noun = REPRESENTATION_COPY[rep].pluralNoun;
+  let subtitle = noun.charAt(0).toUpperCase() + noun.slice(1);
+  if (rep === "external_text_embedding") {
+    const inner = /\(([^()]+)\)\s*$/.exec(unit)?.[1]?.trim();
+    if (inner) subtitle = `Vocabulary embedded by ${inner}`;
+  }
+  if (layer !== null) subtitle += ` · layer ${layer}`;
+  const family = GPT2_FAMILY.has(model)
+    ? "GPT-2 family"
+    : model === "HuggingFaceTB/SmolLM2-135M"
+      ? "SmolLM2"
+      : "Other models";
+  return { title: modelDisplayName(model), subtitle, layer, family };
 }

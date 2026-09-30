@@ -625,7 +625,7 @@ export function AtlasWorkspace({ hidden = false }: { hidden?: boolean }) {
   const ds = $dataset.value;
   const id = $datasetId.value;
   return (
-    <aside class={ds ? "atlas-workspace has-data" : "atlas-workspace"} aria-label="Atlas workspace" hidden={hidden}>
+    <aside class={ds ? "atlas-workspace has-data" : "atlas-workspace"} aria-label="Atlas workspace" hidden={hidden} data-map-occluder="left">
       {ds && id ? <EvidenceHeader ds={ds} datasetId={id} /> : <h2 class="aw-title">No map open</h2>}
       <Toolbar />
       <LoadState />

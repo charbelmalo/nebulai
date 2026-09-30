@@ -119,23 +119,50 @@ function LoadingState() {
  *  the reader should learn what would produce one rather than watch a blank
  *  page. */
 function EmptyState() {
+  const go = (p: "interp" | "guide") => appStore.getState().setPage(p);
   return (
-    <div class="behavior-state">
-      <p class="behavior-kicker">Behavioral divergence</p>
-      <h1 class="behavior-title">No study is published here</h1>
+    <div class="behavior-state behavior-empty">
+      <p class="behavior-kicker">Behavior study · not published yet</p>
+      <h1 class="behavior-title">How do deployed models differ in what they associate?</h1>
       <p class="behavior-lede">
-        This page reads <code>out/behavior/behavior.json</code>, produced by{" "}
-        <code>nebulai behavior run</code>, then <code>nebulai behavior analyze</code>,
-        then <code>nebulai behavior publish &lt;study-id&gt;</code>. Nothing is fetched
-        from a model when you open this page, and no study ships with the viewer by
-        default.
+        This study will compare the association distributions of specific, pinned model
+        deployments under one frozen protocol: the same cues, the same sampling, the same
+        statistics. No study ships with this release, so there is nothing to read here yet.
       </p>
-      <p class="behavior-note">
-        The study compares the association distributions of specific pinned model
-        deployments under one frozen protocol. It describes no model&rsquo;s internals
-        and ranks no model. The method, the statistics and the claim contract are in{" "}
-        <code>docs/BEHAVIORAL-DIVERGENCE-PLAN.md</code>.
-      </p>
+      <figure class="behavior-preview" aria-label="What a published study shows">
+        <div class="behavior-preview-plot" aria-hidden="true">
+          {[0.9, 0.55, 0.72, 0.3, 0.64, 0.42, 0.8, 0.22].map((v, k) => (
+            <span
+              key={k}
+              class="behavior-preview-mark"
+              style={{ left: `${8 + k * 11.5}%`, bottom: `${14 + v * 62}%`, "--r": `${10 + Math.sqrt(v) * 18}px` }}
+            />
+          ))}
+        </div>
+        <figcaption>
+          <strong>When published:</strong> one mark per preregistered cue, its area proportional to
+          the measured divergence, with coverage and uncertainty stated beside it. It describes no
+          model&rsquo;s internals and ranks no model.
+        </figcaption>
+      </figure>
+      <div class="behavior-empty-actions">
+        <button type="button" class="behavior-empty-btn is-primary" onClick={() => go("interp")}>
+          Open Internals
+        </button>
+        <button type="button" class="behavior-empty-btn" onClick={() => go("guide")}>
+          Read the methods
+        </button>
+      </div>
+      <details class="behavior-maintainers">
+        <summary>For maintainers</summary>
+        <p>
+          The page reads <code>out/behavior/behavior.json</code>, produced by{" "}
+          <code>nebulai behavior run</code>, then <code>nebulai behavior analyze</code>, then{" "}
+          <code>nebulai behavior publish &lt;study-id&gt;</code>. The method, statistics and claim
+          contract are in <code>docs/BEHAVIORAL-DIVERGENCE-PLAN.md</code>. Nothing is fetched from a
+          model when this page opens.
+        </p>
+      </details>
     </div>
   );
 }

@@ -52,6 +52,7 @@ import {
   type KeywordReport,
   type KeywordRequest,
   type KeywordSample,
+  type OriginId,
   type ProjectRow,
 } from "../seer/keyword";
 
@@ -244,15 +245,23 @@ function Rail({ loadError }: { loadError: string | null }) {
       <div class="kw-card">
         <div class="kw-eyebrow">where to look</div>
         {loadError ? (
-          <div class="kw-error">
-            <strong>Cannot reach the capture server.</strong>
-            <span class="kw-mono">{loadError}</span>
+          /* Neutral, not red: on a first visit nothing has failed — the local
+             server simply is not running yet. The raw error stays one click
+             away for the case where it should have been. */
+          <div class="kw-setup">
+            <strong>Connect the capture server</strong>
             <span>
-              This page reads the transcripts through <code>seer serve</code> at{" "}
-              <code>{base || "(no server configured)"}</code>, because a project's logs
-              run to hundreds of megabytes and must not be loaded into a browser. Start
-              it with <code>seer serve</code>, or set the address in Settings.
+              Projects are listed by <code>seer serve</code>, which reads transcripts on
+              this machine — a project's logs run to hundreds of megabytes and are never
+              loaded into a browser. Start it, then reload; or set its address in
+              Settings.
             </span>
+            <details class="kw-setup-detail">
+              <summary>connection details</summary>
+              <span class="kw-mono">
+                {base || "(no server configured)"} — {loadError}
+              </span>
+            </details>
           </div>
         ) : (
           <>
@@ -351,6 +360,16 @@ function Rail({ loadError }: { loadError: string | null }) {
         {showChannels.value && <ChannelPicker />}
       </div>
 
+      {/* Senses and exclusions refine a count of a word; with no word typed
+          they are two long forms about nothing, so they wait as one line. */}
+      {!$term.value.trim() && $senses.value.length === 0 && $excludes.value.length === 0 ? (
+        <div class="kw-card kw-card-collapsed">
+          <div class="kw-eyebrow">senses &amp; exclusions</div>
+          <div class="kw-note">
+            Split or trim the count by your own patterns — available once you type a word.
+          </div>
+        </div>
+      ) : (
       <div class="kw-card">
         <PatternRows
           title="senses"
@@ -369,10 +388,17 @@ function Rail({ loadError }: { loadError: string | null }) {
           rows={$excludes}
         />
       </div>
+      )}
 
       {$formError.value && <div class="kw-error kw-error-form">{$formError.value}</div>}
 
-      <button class="btn-primary kw-run" type="button" disabled={running} onClick={run}>
+      <button
+        class="btn-primary kw-run"
+        type="button"
+        disabled={running || loadError !== null}
+        title={loadError !== null ? "needs seer serve — see “where to look”" : undefined}
+        onClick={run}
+      >
         {running ? "scanning…" : "Scan the transcripts"}
       </button>
     </aside>
@@ -513,6 +539,47 @@ function Stage() {
   return <Report rep={job.report} job={job} />;
 }
 
+/** What an answer looks like, before there is one: a single made-up split of
+ *  one word's occurrences across the five parties that write into context.
+ *  Labelled as a sample on its face — it is an illustration of the report's
+ *  shape, never a count. `metadata` is left out: it is bookkeeping the agent
+ *  never read, and the report sets it apart the same way. */
+const SAMPLE_SPLIT: [OriginId, number][] = [
+  ["human", 9],
+  ["standing", 22],
+  ["harness", 14],
+  ["model", 31],
+  ["environment", 24],
+];
+
+function SampleSplit() {
+  return (
+    <figure class="kw-sample">
+      <figcaption>
+        <span class="kw-sample-badge">Sample — not a scan</span>
+        how one word's occurrences might split by who wrote them
+      </figcaption>
+      <div
+        class="kw-sample-bar"
+        role="img"
+        aria-label={`Illustrative split: ${SAMPLE_SPLIT.map(([o, n]) => `${o} ${n}%`).join(", ")}. Not measured.`}
+      >
+        {SAMPLE_SPLIT.map(([o, n]) => (
+          <span key={o} style={{ flexGrow: n, background: ORIGIN_COLOR[o] }} title={`${o} · ${n}%`} />
+        ))}
+      </div>
+      <div class="kw-sample-keys" aria-hidden="true">
+        {SAMPLE_SPLIT.map(([o, n]) => (
+          <span key={o}>
+            <i style={{ background: ORIGIN_COLOR[o] }} />
+            {o} <b>{n}%</b>
+          </span>
+        ))}
+      </div>
+    </figure>
+  );
+}
+
 function Explainer() {
   return (
     <div class="kw-explainer">
@@ -523,6 +590,7 @@ function Explainer() {
         that “keeps coming up” tells you nothing about where the behaviour came from.
         This reads the transcripts on disk and splits every occurrence by who wrote it.
       </p>
+      <SampleSplit />
       <ul class="kw-origin-legend">
         {ORIGINS.map((o) => (
           <li key={o}>

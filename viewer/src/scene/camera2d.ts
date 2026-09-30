@@ -15,6 +15,18 @@ export interface CameraTween {
   duration: number;
 }
 
+/** CSS px of the viewport hidden behind chrome panels on each side. Fits and
+ *  fly-tos frame the free rectangle between them instead of the whole canvas,
+ *  so a map is never centred under the rail that covers it. */
+export interface ViewInsets {
+  l: number;
+  r: number;
+  t: number;
+  b: number;
+}
+
+export const NO_INSETS: ViewInsets = Object.freeze({ l: 0, r: 0, t: 0, b: 0 });
+
 export function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
@@ -44,16 +56,55 @@ export class Camera2D {
     this.viewportH = Math.max(h, 1);
   }
 
-  /** Frame a world-space AABB with paddingPx of margin on every side. */
-  fitBounds(minX: number, minY: number, maxX: number, maxY: number, paddingPx = 48): void {
+  /** Frame a world-space AABB with paddingPx of margin on every side of the
+   *  free rectangle the insets leave. */
+  fitBounds(
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number,
+    paddingPx = 48,
+    insets: ViewInsets = NO_INSETS,
+  ): void {
+    const [cx, cy, wpp] = this.fitFor(minX, minY, maxX, maxY, paddingPx, insets);
+    this.cx = cx;
+    this.cy = cy;
+    this.wpp = wpp;
+    this.tween = null;
+  }
+
+  /** The camera (cx, cy, wpp) that fitBounds would settle on — for flyTo. */
+  fitFor(
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number,
+    paddingPx = 48,
+    insets: ViewInsets = NO_INSETS,
+  ): [number, number, number] {
     const w = Math.max(maxX - minX, 1e-9);
     const h = Math.max(maxY - minY, 1e-9);
-    const availW = Math.max(this.viewportW - paddingPx * 2, 1);
-    const availH = Math.max(this.viewportH - paddingPx * 2, 1);
-    this.cx = (minX + maxX) / 2;
-    this.cy = (minY + maxY) / 2;
-    this.wpp = this.clampWpp(Math.max(w / availW, h / availH));
-    this.tween = null;
+    const availW = Math.max(this.freeW(insets) - paddingPx * 2, 1);
+    const availH = Math.max(this.freeH(insets) - paddingPx * 2, 1);
+    const wpp = this.clampWpp(Math.max(w / availW, h / availH));
+    const [cx, cy] = this.centerFor((minX + maxX) / 2, (minY + maxY) / 2, wpp, insets);
+    return [cx, cy, wpp];
+  }
+
+  freeW(insets: ViewInsets = NO_INSETS): number {
+    return Math.max(this.viewportW - insets.l - insets.r, 1);
+  }
+
+  freeH(insets: ViewInsets = NO_INSETS): number {
+    return Math.max(this.viewportH - insets.t - insets.b, 1);
+  }
+
+  /** The camera centre that shows world (x, y) at the middle of the free
+   *  rectangle at zoom wpp (screen y grows down, world y up). */
+  centerFor(x: number, y: number, wpp: number, insets: ViewInsets = NO_INSETS): [number, number] {
+    const dx = (insets.l - insets.r) / 2;
+    const dy = (insets.t - insets.b) / 2;
+    return [x - dx * wpp, y + dy * wpp];
   }
 
   panPixels(dxPx: number, dyPx: number): void {

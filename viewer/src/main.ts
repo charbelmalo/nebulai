@@ -50,7 +50,7 @@ import { bootShell, finishShellBoot, type BootedShell } from "./app/boot-shell";
 import type { Capabilities } from "@psychix/viz/capabilities";
 import { appStore, type ViewMode } from "./app/store";
 import { NEBULAI_APP } from "./chrome/apps/nebulai";
-import { $compareTour } from "./chrome/state";
+import { $behaviorPublished, $compareTour } from "./chrome/state";
 import { applyTourStep, findTour, type Tour } from "./chrome/tours";
 import { lessonIdOf, parseLessonKeys } from "./chrome/learn/lesson";
 import { registerInterpUrlHooks } from "./chrome/urlState";
@@ -70,6 +70,7 @@ import {
   type ManifestArtifact,
   loadManifest,
   setManifestStatus,
+  behaviorStudyPublished,
   STARTER_DATASET_ID,
 } from "./data/experience";
 import { APP_ROOT, DATA_BASE } from "./data/base";
@@ -256,6 +257,7 @@ async function bootAtlas(shell: BootedShell, t0: number): Promise<() => void> {
     loadManifest(DATA_BASE),
   ]);
   setManifestStatus(manifest);
+  $behaviorPublished.value = behaviorStudyPublished();
   if (manifest.state === "invalid") {
     console.warn("[nebulai] experience.json ignored:", manifest.errors.join("; "));
   }

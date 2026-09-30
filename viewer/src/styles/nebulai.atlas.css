@@ -5,12 +5,12 @@
 .atlas-workspace,
 .inspector {
   position: absolute;
-  top: 76px;
+  top: var(--nav-clear);
   z-index: 12;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-height: calc(100vh - 76px - 88px);
+  max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - var(--nav-clear) - 88px);
   box-sizing: border-box;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -32,7 +32,7 @@
 /* with a map open the panel takes its full height and the results list
    absorbs the slack, so the pager never scrolls out of reach */
 .atlas-workspace.has-data {
-  height: calc(100vh - 76px - 88px);
+  height: calc(calc(100vh / var(--chrome-zoom, 1)) - var(--nav-clear) - 88px);
 }
 
 .atlas-workspace > * {
@@ -231,8 +231,21 @@
   border-top: 1px solid var(--hairline);
 }
 
+/* map names run to ~45 characters ("GPT-2 Small · SAE decoder directions ·
+   Layer 8"): stack the label and give the select the panel's full width so
+   the name is never cut under the chevron */
+.aw-toolbar > .ctl-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
 .aw-toolbar .ctl-select {
-  max-width: 220px;
+  width: 100%;
+  max-width: none;
+  min-height: 36px;
+  padding-right: 28px;
+  text-overflow: ellipsis;
 }
 
 .aw-dims {
@@ -545,10 +558,10 @@
 
 .pin-notice {
   position: absolute;
-  top: 76px;
+  top: var(--nav-clear);
   left: 50%;
   z-index: 21;
-  width: min(520px, calc(100vw - 32px));
+  width: min(520px, calc(calc(100vw / var(--chrome-zoom, 1)) - 32px));
   box-sizing: border-box;
   transform: translateX(-50%);
   display: flex;
@@ -589,7 +602,7 @@
   position: absolute;
   top: 50%;
   left: calc(50% + 202px);
-  width: min(380px, calc(100vw - 500px));
+  width: min(380px, calc(calc(100vw / var(--chrome-zoom, 1)) - 500px));
   margin: 0;
   transform: translate(-50%, -50%);
   color: var(--text-dim);
@@ -623,11 +636,11 @@
     left: 16px;
     right: 16px;
     width: auto;
-    max-height: calc(100vh - 76px - 136px);
+    max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - var(--nav-clear) - 136px);
   }
 
   .atlas-workspace.has-data {
-    height: calc(100vh - 76px - 136px);
+    height: calc(calc(100vh / var(--chrome-zoom, 1)) - var(--nav-clear) - 136px);
   }
 }
 
@@ -640,11 +653,11 @@
 
   .atlas-workspace,
   .inspector {
-    max-height: calc(100vh - 130px - 136px);
+    max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - 130px - 136px);
   }
 
   .atlas-workspace.has-data {
-    height: calc(100vh - 130px - 136px);
+    height: calc(calc(100vh / var(--chrome-zoom, 1)) - 130px - 136px);
   }
 }
 
@@ -697,4 +710,32 @@
    named button group the tests and screen readers address */
 .atlas-switch > [role="group"] {
   display: flex;
+}
+
+/* The inspector scrolls as one column; on short viewports (1180×820 tablets,
+   small laptops) its evidence list pushed Save finding / Copy unit link out
+   of view. Pin the action block to the bottom edge of the scroller so the
+   primary task is always reachable. Negative margins let the footer's own
+   background reach the panel's padding edge. */
+.inspector-actions {
+  position: sticky;
+  bottom: -18px;
+  z-index: 1;
+  margin: 0 -18px -18px;
+  padding: 12px 18px 18px;
+  background: color-mix(in srgb, var(--bg-raise) 94%, transparent);
+  border-radius: 0 0 var(--radius-card) var(--radius-card);
+}
+
+/* Camera framing (AtlasDriver.occlusionInsets): below 1024px the inspector
+   spans the width under the nav, so it hides the top of the map rather than
+   a side, and the workspace is a Map/Results tab, never beside the map. */
+@media (max-width: 1023px) {
+  .inspector {
+    --map-occluder: top;
+  }
+
+  .atlas-workspace {
+    --map-occluder: none;
+  }
 }

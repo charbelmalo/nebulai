@@ -692,6 +692,7 @@ section supersedes the plain `rsync --delete` app sync in §5 for the live host.
 | Entries | `learn/`, `atlas/`, `research/` (each an `index.html`) | replaced per release |
 | Code | `assets/*` (content-hashed names) | additive — old chunks stay |
 | Hand tracking | `models/` | rarely |
+| Chooser art | `chooser/` (from `viewer/public/chooser/`, made by `scripts/make_chooser_art.py`) | rarely |
 | Manifest | `out/experience.json` | yes — names the current artifacts |
 | Map index | `out/index.json` | yes |
 | Artifacts | `out/artifacts/<sha256>/nebulai.json` | **never** — immutable once published |
@@ -763,6 +764,12 @@ docker cp homelab-caddy:/srv/www/research/psychiX/seer/.                  "$R/se
 
 # 1. data first: artifacts, then the manifest
 ../scripts/sync-out.sh publish --apply
+#    map thumbnails (out/<dataset>/thumb.webp, from scripts/make_thumbs.py) are
+#    not part of `publish`; they are new files, so copy them in additively
+for t in ../out/*/thumb.webp; do
+  d=$(basename "$(dirname "$t")")
+  docker cp "$t" "homelab-caddy:/srv/www/research/psychiX/nebulai-maps/out/$d/thumb.webp"
+done
 
 # 2. stage the build inside the container
 docker exec homelab-caddy rm -rf /tmp/nbstage /tmp/seerstage
@@ -774,6 +781,7 @@ docker cp dist/seer/.    homelab-caddy:/tmp/seerstage
 docker exec homelab-caddy sh -c '
   A=/srv/www/research/psychiX/nebulai-maps S=/tmp/nbstage
   cp -a $S/assets/. $A/assets/ && cp -a $S/models/. $A/models/ &&
+  mkdir -p $A/chooser && cp -a $S/chooser/. $A/chooser/ &&
   for e in learn atlas research; do
     rm -rf $A/$e.new && cp -a $S/$e $A/$e.new && rm -rf $A/$e && mv $A/$e.new $A/$e
   done &&

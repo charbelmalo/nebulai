@@ -10,7 +10,9 @@ import { useEffect } from "preact/hooks";
 import { appStore } from "../../app/store";
 import { activeManifest, manifestStatus } from "../../data/experience";
 import { interpBase, loadInterpIndex, primeBundle, type InterpIndex } from "../../data/interp";
-import { INTERP_FEATURES } from "../../scene/interp/registry";
+import { describeDataset } from "../../data/representation";
+import { GROUP_LABEL, INTERP_FEATURES } from "../../scene/interp/registry";
+import { DatasetThumb, SpectrumThumb } from "../DatasetThumb";
 import { availability, availableCount } from "../../scene/interp/requirements";
 import { $datasets } from "../state";
 import {
@@ -126,12 +128,19 @@ export function ResearchChooser() {
   useEffect(() => {
     for (const d of withExport) ensureExportIndex(d.id);
   }, [withExport.map((d) => d.id).join("|")]);
+  // the recommended card draws the first task's real spectrum (9 kB, verified
+  // once and reused by the task itself)
+  useEffect(() => {
+    if (ri) ensureIntroCheck(ri);
+  }, [ri?.sha256]);
+  const check = $introCheck.value;
 
   const loading = datasets.length === 0 && manifestStatus().state === "unloaded";
   const requested = $requestedFeature.value;
 
   return (
     <div class="research-chooser" role="main" aria-labelledby="research-chooser-title">
+      <p class="research-chooser-kicker">Research · Internals</p>
       <h1 id="research-chooser-title" class="research-chooser-title">
         Choose a model export
       </h1>
@@ -176,10 +185,20 @@ export function ResearchChooser() {
                   onClick={() => openExport(d.id)}
                   aria-describedby={`export-${d.id}-count${has !== null ? ` export-${d.id}-has` : ""}${recommended && requested === null ? ` export-${d.id}-why` : ""}`}
                 >
+                  {recommended && check.state === "verified" ? (
+                    <SpectrumThumb
+                      freqs={check.json.freqs}
+                      power={check.json.power_mean}
+                      caption="First task: position power spectrum"
+                    />
+                  ) : (
+                    <DatasetThumb path={d.path} caption="Token embedding map" />
+                  )}
                   <span class="research-export-head">
-                    <span class="research-export-name">{d.id}</span>
+                    <span class="research-export-name">{describeDataset(d).title}</span>
                     {recommended && <span class="research-export-badge">Recommended</span>}
                   </span>
+                  <span class="research-export-id">{d.id}</span>
                   <span class="research-export-count" id={`export-${d.id}-count`}>
                     {idx === null
                       ? "Export index could not be read"
@@ -209,6 +228,36 @@ export function ResearchChooser() {
           })}
         </ul>
       )}
+      <section class="research-coverage" aria-labelledby="research-coverage-title">
+        <h2 id="research-coverage-title" class="research-coverage-title">
+          The {FEATURE_IDS.length} registered analyses
+        </h2>
+        <p class="research-coverage-lede">
+          What each export can show depends on the files it includes. The chooser above counts
+          them per export; these are the kinds.
+        </p>
+        <ul class="research-coverage-list">
+          {(Object.keys(GROUP_LABEL) as (keyof typeof GROUP_LABEL)[]).map((g) => {
+            const fs = INTERP_FEATURES.filter((f) => f.group === g);
+            if (fs.length === 0) return null;
+            return (
+              <li key={g} class="research-coverage-group">
+                <span class="research-coverage-name">{GROUP_LABEL[g]}</span>
+                <span class="research-coverage-count">
+                  {fs.length} {fs.length === 1 ? "analysis" : "analyses"}
+                </span>
+                <span class="research-coverage-examples">
+                  {fs
+                    .slice(0, 3)
+                    .map((f) => f.label)
+                    .join(" · ")}
+                  {fs.length > 3 ? " …" : ""}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
       {mapOnly.length > 0 && (
         <details class="research-chooser-more">
           <summary>

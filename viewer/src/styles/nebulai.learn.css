@@ -5,14 +5,14 @@
 
 .lesson-panel {
   position: absolute;
-  top: 76px;
+  top: var(--nav-clear);
   left: 32px;
   z-index: 12;
   display: flex;
   flex-direction: column;
   gap: 12px;
   width: 400px;
-  max-height: calc(100vh - 76px - 88px);
+  max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - var(--nav-clear) - 88px);
   box-sizing: border-box;
   overflow-x: hidden;
   overflow-y: auto;
@@ -121,7 +121,7 @@
 /* the results list keeps a usable height inside the scrolling lesson */
 .lesson-panel .rt-scroll {
   flex: none;
-  height: min(300px, 40vh);
+  height: min(300px, calc(40vh / var(--chrome-zoom, 1)));
   min-height: 160px;
 }
 
@@ -276,7 +276,7 @@ a.aw-btn {
     left: 16px;
     right: 16px;
     width: auto;
-    max-height: calc(100vh - 76px - 136px);
+    max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - var(--nav-clear) - 136px);
   }
 
   .episode-bar {
@@ -287,7 +287,7 @@ a.aw-btn {
 @media (max-width: 900px) {
   .lesson-panel {
     top: 130px;
-    max-height: calc(100vh - 130px - 136px);
+    max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - 130px - 136px);
   }
 }
 
@@ -301,11 +301,40 @@ a.aw-btn {
 /* ── the catalog's featured lesson ───────────────────────────────────── */
 
 .lesson-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 300px);
+  gap: 0 28px;
+  max-width: 960px;
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--hairline));
+}
+
+.lesson-card-body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-width: 720px;
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--hairline));
+  min-width: 0;
+}
+
+/* a close-up of the lesson's own map around its first unit */
+.lesson-card-art {
+  align-self: center;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+@media (max-width: 720px) {
+  .lesson-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .lesson-card-art {
+    order: -1;
+    margin-bottom: 16px;
+  }
 }
 
 .lesson-card-kicker {
@@ -347,14 +376,42 @@ a.aw-btn {
   border-radius: 8px;
 }
 
-/* narrow: the unit's evidence is long, so the step controls stay in reach */
-@media (max-width: 1023px) {
+/* The step content (results table, the unit's evidence) is taller than the
+   panel on every screen short of 4K, so the step controls stay pinned to the
+   panel's lower edge instead of scrolling out of reach. */
+.lesson-nav {
+  position: sticky;
+  bottom: -18px;
+  z-index: 1;
+  margin: 0 -18px -18px;
+  padding: 10px 18px 14px;
+  background: var(--bg-raise);
+  border-radius: 0 0 var(--radius-card) var(--radius-card);
+}
+
+/* phones: the task, not the chrome around it, gets the height — tighter
+   panel padding, and the search field's label duplicates the section title */
+@media (max-width: 720px) {
+  .lesson-panel {
+    gap: 10px;
+    padding: 12px 14px 18px;
+  }
+
   .lesson-nav {
-    position: sticky;
-    bottom: -18px;
-    z-index: 1;
-    margin: 0 -18px -18px;
-    padding: 10px 18px 14px;
-    background: var(--bg-raise);
+    margin: 0 -14px -18px;
+    padding: 8px 14px 12px;
+  }
+
+  .lesson-panel .rt-search-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .lesson-panel .rt-scroll {
+    height: min(300px, calc(46vh / var(--chrome-zoom, 1)));
   }
 }

@@ -7,3 +7,8 @@ import { signal } from "@preact/signals";
 import { appStore, type BehaviorUI } from "../../app/store";
 
 export const $behavior = signal<BehaviorUI>(appStore.getState().behavior);
+
+/** Whether this deploy publishes a Behavior study (from the release
+ *  manifest; null = the manifest does not say). Not a store slice: main.ts
+ *  sets it once at boot, and the nav reads it to mark the tab. */
+export const $behaviorPublished = signal<boolean | null>(null);
