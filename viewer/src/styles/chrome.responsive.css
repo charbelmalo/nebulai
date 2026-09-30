@@ -382,3 +382,29 @@
     inset: -12px -4px;
   }
 }
+
+/* ── Touch target floor, Atlas sidebar (coarse pointers only) ─────────────
+   The sidebar is only on screen in landscape (1180×820 iPad), which the
+   820-wide pass above never saw. `.aw-toolbar .ctl-select` sets its own
+   36px, so it needs the matching specificity. */
+@media (pointer: coarse) {
+  .aw-toolbar .ctl-select,
+  .rt-search,
+  .aw-about > summary,
+  .aw-disclosure > summary {
+    min-height: 44px;
+  }
+  .ctl-slider {
+    min-height: 44px; /* the thumb stays centred in the taller box */
+  }
+  .aw-advanced,
+  .dirmake-btn {
+    position: relative;
+  }
+  .aw-advanced::after,
+  .dirmake-btn::after {
+    content: "";
+    position: absolute;
+    inset: -13px -4px; /* 16–19px tall → 44px+ */
+  }
+}
