@@ -262,6 +262,7 @@ function LessonBody({ tour, step, ds, datasetId }: { tour: Tour; step: number; d
     <>
       <aside
         class="lesson-panel"
+        data-map-occluder="left"
         aria-labelledby="lesson-step-title"
         hidden={narrow && !noGpu && $learnPanel.value === "map"}
       >
@@ -410,7 +411,8 @@ function LessonState({ tour, step, blocked }: { tour: Tour; step: number; blocke
   }, [blocked]);
   const pct = loading.total > 0 ? ` — ${Math.round((loading.loaded / loading.total) * 100)}%` : "";
   return (
-    <aside class="lesson-panel" aria-labelledby="lesson-state-title">
+    <aside class="lesson-panel"
+        data-map-occluder="left" aria-labelledby="lesson-state-title">
       <div class="lesson-top">
         <p class="lesson-kicker">
           Lesson · <span>{tour.label}</span>

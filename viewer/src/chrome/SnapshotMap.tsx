@@ -83,12 +83,17 @@ export function SnapshotMap() {
       <div class="snapshot-shell">
         <SnapshotLeft dragOver={dragOver.value} setDragOver={(v) => (dragOver.value = v)} />
         <div class="snapshot-stage">
-          <SnapshotGraph
-            keywords={activeTopic?.keywords ?? []}
-            active={new Set(analysis.activeKeywords)}
-            edges={analysis.edges}
-            totals={analysis.totals}
-          />
+          {/* The ring only draws once there is a log to measure. Before that it
+              was a ghost the empty-state copy printed straight over — a graph
+              with no data under it reads as a graph whose data is zero. */}
+          {activeLog && (
+            <SnapshotGraph
+              keywords={activeTopic?.keywords ?? []}
+              active={new Set(analysis.activeKeywords)}
+              edges={analysis.edges}
+              totals={analysis.totals}
+            />
+          )}
           {activeLog && (
             <div class="snapshot-turn-card">
               <div class="snapshot-turn-head">
@@ -113,11 +118,24 @@ export function SnapshotMap() {
           )}
           {!activeLog && (
             <div class="snapshot-empty">
+              <svg class="snapshot-empty-glyph" viewBox="0 0 64 64" aria-hidden="true">
+                <circle cx="32" cy="32" r="22" />
+                <circle cx="32" cy="10" r="3.5" />
+                <circle cx="51" cy="43" r="3.5" />
+                <circle cx="13" cy="43" r="3.5" />
+                <path d="M32 10 L51 43 M13 43 L51 43" />
+              </svg>
               <h2>Drop a conversation log</h2>
               <p>
                 Paste JSON on the left, drop a file anywhere, or load the sample to see how the
                 connections evolve turn by turn.
               </p>
+              {activeTopic && (
+                <p class="snapshot-empty-topic">
+                  The ring will draw the {activeTopic.keywords.length} keywords of{" "}
+                  <b>{activeTopic.name}</b>.
+                </p>
+              )}
               <button
                 type="button"
                 class="btn-primary"
@@ -130,6 +148,9 @@ export function SnapshotMap() {
         </div>
       </div>
 
+      {/* The timeline (note + scrubber) only exists for a loaded log: a "−/−"
+          counter and a play button with nothing to play are a dead control. */}
+      {activeLog && (
       <footer class="snapshot-footer">
         {/* HONESTY: the ring is an ARRANGEMENT, not a projection. `layoutRadial`
             spaces keywords evenly by their index in the topic preset, so angle
@@ -160,6 +181,7 @@ export function SnapshotMap() {
           onChange={(i) => appStore.getState().setTurnIndex(i)}
         />
       </footer>
+      )}
     </div>
   );
 }

@@ -146,6 +146,13 @@ const researchFile = join(outRoot, RESEARCH.bundle_path);
 if (!existsSync(researchFile)) fail(`research intro bundle ${RESEARCH.bundle_path} is missing`);
 const researchBytes = readFileSync(researchFile);
 
+// The Behavior study is optional: stating its absence lets the viewer show the
+// explainer without first requesting a file the static host does not have.
+const behaviorFile = join(outRoot, "behavior", "behavior.json");
+const behavior_study = existsSync(behaviorFile)
+  ? { path: "behavior/behavior.json", bytes: readFileSync(behaviorFile).byteLength }
+  : null;
+
 const manifest: ExperienceManifest = {
   schema_version: 1,
   entry_experiences: ["learn", "atlas", "research"],
@@ -156,6 +163,7 @@ const manifest: ExperienceManifest = {
     sha256: sha256(researchBytes),
     bytes: researchBytes.byteLength,
   },
+  behavior_study,
   artifacts: artifacts.sort((a, b) =>
     a.dataset_id === b.dataset_id ? Number(b.current) - Number(a.current) : a.dataset_id < b.dataset_id ? -1 : 1,
   ),
@@ -179,4 +187,5 @@ console.log(
     `${(total / 1e6).toFixed(1)} MB current; experience.json ${check ? "valid" : unchanged ? "unchanged" : "written"}`,
 );
 console.log(`  default_atlas  ${starter.dataset_id} @ ${starter.sha256.slice(0, 12)}`);
+console.log(`  behavior_study ${behavior_study ? behavior_study.path : "not published"}`);
 console.log(`  research_intro ${RESEARCH.bundle_path} @ ${manifest.research_intro.sha256.slice(0, 12)}`);

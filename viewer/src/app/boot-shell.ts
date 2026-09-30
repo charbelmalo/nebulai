@@ -27,6 +27,7 @@ import { probeCapabilities, type Capabilities } from "@psychix/viz/capabilities"
 import { mountChrome } from "../chrome/mount";
 import type { AppShell } from "../chrome/apps/types";
 import { applyUrlState, readUrlState, startUrlSync, type UrlState } from "../chrome/urlState";
+import { promoteSearchToHash } from "./searchToHash";
 import { appStore } from "./store";
 
 declare global {
@@ -82,6 +83,7 @@ export async function bootShell(
   // the persistent provenance line (data source, build): a labelled landmark
   status.setAttribute("role", "contentinfo");
   status.setAttribute("aria-label", "Data source");
+  status.dataset.mapOccluder = "bottom"; // the atlas camera frames above it
   // the MetaLine truncates to one line on compact viewports (chrome.base.css);
   // tapping it reveals the full provenance string instead of leaving it clipped
   status.addEventListener("click", () => status.classList.toggle("is-expanded"));
@@ -94,6 +96,8 @@ export async function bootShell(
   appStore.getState().setCapabilities(caps);
 
   // permalink: read once, before the chrome mounts, so app routing can use it
+  // (`?lesson=…` query links are folded into the hash first)
+  promoteSearchToHash();
   const urlState = readUrlState();
   resolveContext?.(urlState);
 

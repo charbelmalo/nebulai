@@ -21,6 +21,9 @@
          used to open the single app at this address, to the experience that
          now hosts them. -->
     <main class="chooser-main">
+      <!-- the real GPT-2 Small SAE map (scripts/make_chooser_art.py), a
+           static image: the chooser still fetches no model -->
+      <img class="chooser-hero" src="/chooser/hero.webp" alt="" width="1600" height="900" fetchpriority="high" />
       <header class="chooser-head">
         <p class="chooser-brand">
           <svg class="chooser-mark" viewBox="0 0 24 24" aria-hidden="true">
@@ -39,8 +42,16 @@
       </header>
 
       <ul class="chooser-cards" role="list">
-        <li class="chooser-card">
-          <p class="chooser-card-kicker">Learn</p>
+        <li class="chooser-card is-primary">
+          <img
+            class="chooser-card-art"
+            src="/chooser/learn.webp"
+            width="640"
+            height="400"
+            loading="lazy"
+            alt="Close-up of the map with one unit ringed: the direction labelled numbers and quantities."
+          />
+          <p class="chooser-card-kicker">Learn <span class="chooser-card-badge">Start here</span></p>
           <h2 class="chooser-card-title">
             <a class="chooser-card-link" href="learn/">Learn how maps work</a>
           </h2>
@@ -51,6 +62,14 @@
           <p class="chooser-card-meta">For newcomers · about 5 minutes · no GPU needed</p>
         </li>
         <li class="chooser-card">
+          <img
+            class="chooser-card-art"
+            src="/chooser/atlas.webp"
+            width="640"
+            height="400"
+            loading="lazy"
+            alt="The GPT-2 Small SAE map: 4,096 decoder directions, coloured by cluster."
+          />
           <p class="chooser-card-kicker">Atlas</p>
           <h2 class="chooser-card-title">
             <a class="chooser-card-link" href="atlas/">Explore a model</a>
@@ -62,6 +81,14 @@
           <p class="chooser-card-meta">For engineers and designers · search, inspect, save</p>
         </li>
         <li class="chooser-card">
+          <img
+            class="chooser-card-art"
+            src="/chooser/research.svg"
+            width="480"
+            height="300"
+            loading="lazy"
+            alt="Power spectrum of GPT-2 position embeddings, log power against log frequency."
+          />
           <p class="chooser-card-kicker">Research</p>
           <h2 class="chooser-card-title">
             <a class="chooser-card-link" href="research/">Inspect research evidence</a>

@@ -77,7 +77,7 @@ export function Sidebar() {
   }
 
   return (
-    <aside class="sidebar" aria-label="Settings">
+    <aside class="sidebar" aria-label="Settings" data-map-occluder="left">
       <header class="sidebar-head">
         <Tabs
           tabs={["Settings", "Additional"]}

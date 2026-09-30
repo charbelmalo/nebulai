@@ -15,6 +15,7 @@ import "@psychix/viz/tokens.css";
 import "./styles/chooser.css";
 import { resolveExperience, type RouteIntent } from "./app/experience";
 import { HUB_URL, SEER_APP_URL } from "./chrome/apps/links";
+import { promoteSearchToHash } from "./app/searchToHash";
 
 const PAGES = ["map", "behavior", "interp", "guide"] as const;
 const VIEWS = ["atlas", "chord", "hierarchy", "compare"] as const;
@@ -40,6 +41,7 @@ function intentFrom(hash: URLSearchParams, search: URLSearchParams): RouteIntent
   };
 }
 
+promoteSearchToHash();
 const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
 const search = new URLSearchParams(location.search);
 const { experience } = resolveExperience({

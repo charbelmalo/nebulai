@@ -26,20 +26,7 @@
     grid-template-columns: 1fr;
   }
   .snapshot-side {
-    max-height: 40vh;
-  }
-  .topnav {
-    top: 64px;
-    left: 12px;
-    right: 12px;
-    transform: none;
-    overflow-x: auto;
-    justify-content: flex-start;
-  }
-  .topnav-pill {
-    flex: none;
-    padding: 6px 12px;
-    font-size: 11.5px;
+    max-height: calc(40vh / var(--chrome-zoom, 1));
   }
   /* the panels that collide with this relocated nav row are pushed clear at the
      end of the file — see "narrow-viewport nav clearance". They can't be moved
@@ -58,7 +45,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    max-height: 22vh;
+    max-height: calc(22vh / var(--chrome-zoom, 1));
   }
   .interp-rail-group {
     margin-bottom: 0;
@@ -66,6 +53,39 @@
   .interp-legend {
     max-width: calc(100% - 40px);
   }
+}
+
+/* ── Nav as its own row (<=1100px) ─────────────────────────────────────
+   Below 1100px the centered pill collides with the wordmark and the
+   right-hand tools, so it becomes a full-width strip at y=64; --page-top and
+   --nav-clear (chrome.base.css) move every page and panel below it. */
+@media (max-width: 1100px) {
+  .topnav {
+    top: 64px;
+    left: 12px;
+    right: 12px;
+    transform: none;
+    overflow-x: auto;
+    justify-content: flex-start;
+  }
+  .topnav-pill {
+    flex: none;
+    padding: 6px 12px;
+    font-size: 11.5px;
+  }
+}
+
+/* Touch tablet in landscape: the 44px target floor makes the pill ~54px
+   tall, so it lifts to y=12 and content starts at --page-top (74px). */
+@media (min-width: 1101px) and (max-width: 1280px) and (pointer: coarse) {
+  .topnav {
+    top: 12px;
+  }
+}
+
+.topnav-pill,
+.topnav-cross {
+  white-space: nowrap;
 }
 
 /* ── Touch target floor (coarse pointers only) ────────────────────────────
@@ -134,10 +154,10 @@
     top: 130px;
   }
   .sidebar {
-    max-height: calc(100vh - 214px);
+    max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - 214px);
   }
   .search-panel {
-    max-height: calc(100vh - 374px);
+    max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - 374px);
   }
 
   /* Panels go full-bleed at this width, so a FAB that shares their band lands on
@@ -162,11 +182,11 @@
 }
 
 /* ── NebulAI experience nav on narrow viewports ───────────────────────────
-   The strip keeps its ≤900px position but must not scroll-clip its menus, so
+   The strip keeps its ≤1100px position but must not scroll-clip its menus, so
    it wraps instead; each menu then anchors to the whole strip (full width)
    rather than to its own button, which could sit mid-row at 390px and push a
    right-aligned panel off the left edge. */
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .topnav.xnav {
     flex-wrap: wrap;
     overflow: visible;
@@ -199,5 +219,166 @@
 @media (prefers-reduced-motion: reduce) {
   .xnav-caret {
     transition: none;
+  }
+}
+
+/* The collapsed section menu names its experience so it reads as navigation
+   ("Research · Internals"), not as a filter on the page. */
+.xnav-trigger-exp {
+  opacity: 0.72;
+  font-weight: 500;
+}
+
+/* ── Internals analysis drawer (≤900px) ──────────────────────────────────
+   The rail's list pushed the chart below the fold on tablets and phones.
+   It collapses behind one toggle that names the current analysis. */
+.interp-rail-toggle {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  width: calc(100% - 32px);
+  min-height: 44px;
+  margin: 0 16px 12px;
+  padding: 8px 14px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-card);
+  background: var(--bg-raise);
+  color: var(--text);
+  font: 600 13px/1.3 var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+.interp-rail-toggle-label {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.interp-rail-toggle-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.interp-rail-toggle[aria-expanded="true"] .interp-rail-toggle-caret {
+  transform: rotate(180deg);
+}
+.interp-rail.is-collapsed .interp-rail-scroll,
+.interp-rail.is-collapsed .interp-rail-foot,
+.interp-rail.is-collapsed .interp-model-hint {
+  display: none;
+}
+@media (max-width: 900px) {
+  .interp-rail:not(.is-collapsed) .interp-rail-scroll {
+    max-height: calc(46vh / var(--chrome-zoom, 1));
+    overflow-y: auto;
+  }
+}
+
+/* a colour, not opacity: 0.7 over the pill's dim text measured 4.17:1 */
+.xnav-pill-note {
+  font-weight: 500;
+  color: var(--text-faint);
+}
+@media (max-width: 1280px) {
+  .xnav-pill-note {
+    display: none;
+  }
+}
+
+/* phones: "Experiences" keeps the nav on one row; the full name stays in the
+   accessible label */
+@media (max-width: 720px) {
+  .xnav-other-lead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .xnav-other-rest {
+    display: inline-block;
+  }
+  .xnav-other-rest::first-letter {
+    text-transform: uppercase;
+  }
+}
+
+/* 4K / large desktop: the chrome is laid out in CSS px, so at 3840×2160 every
+   panel, label and button renders at a third of the width it was designed
+   for (the audit's "tiny UI" finding). Scale the chrome layer as a whole —
+   never the canvas, whose buffer already follows devicePixelRatio. The
+   factor is also a custom property so script that mixes CSS lengths with
+   screen px (AtlasDriver's --nav-clear inset) can apply it. Viewport units
+   inside a zoomed element are zoomed too, so every vh/vw in the chrome
+   sheets is written `calc(Nvh / var(--chrome-zoom, 1))` to cancel it. */
+@media (min-width: 2200px) {
+  #chrome {
+    --chrome-zoom: 1.35;
+  }
+}
+
+@media (min-width: 3000px) {
+  #chrome {
+    --chrome-zoom: 1.75;
+  }
+}
+
+#chrome {
+  zoom: var(--chrome-zoom, 1);
+}
+
+/* ── Touch target floor, second pass (coarse pointers only) ───────────────
+   Measured at 820×1180 with touch: these were the remaining sub-44px targets
+   across Learn, Atlas and Research. Buttons that already look like buttons
+   take min-height; text links and the wordmark grow an invisible hit area
+   instead (same ::before/::after idiom as above), so nothing is redesigned. */
+@media (pointer: coarse) {
+  .topbar-settings,
+  .ctl-select,
+  .guide-card-open,
+  .research-btn,
+  .lesson-card-actions .aw-btn,
+  .interp-legend-toggle {
+    min-height: 44px;
+  }
+  .interp-legend-toggle {
+    min-width: 44px;
+  }
+  .settings-nav-item {
+    min-height: 44px;
+  }
+  .settings-close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .research-chooser-more > summary {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+  }
+  /* map labels are buttons; overflow:hidden (for the ellipsis) would clip a
+     hit-area pseudo-element, so the pill itself takes the floor */
+  .cluster-pill {
+    min-height: 44px;
+  }
+  .topbar-home,
+  .interp-model-back,
+  .research-link {
+    position: relative;
+  }
+  .topbar-home::after,
+  .interp-model-back::after,
+  .research-link::after {
+    content: "";
+    position: absolute;
+    inset: -12px -6px; /* 20–26px tall → 44px+ */
+  }
+  /* the switch track is 21px tall; its ::before hit area grows to 45px */
+  .ctl-switch::before {
+    inset: -12px -4px;
   }
 }

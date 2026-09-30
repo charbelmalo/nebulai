@@ -48,10 +48,10 @@
 
 .sidebar {
   position: absolute;
-  top: 76px;
+  top: var(--nav-clear);
   left: 32px;
   width: 280px;
-  max-height: calc(100vh - 160px);
+  max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - 160px);
   overflow-y: auto;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-card);
@@ -91,7 +91,7 @@
 
 .sidebar-fab {
   position: absolute;
-  top: 76px;
+  top: var(--nav-clear);
   left: 32px;
   width: 42px;
   height: 42px;
@@ -353,8 +353,8 @@
      slides under the top bar. Bound it and scroll instead: the honesty text is
      the part that varies in length, and it must never push the ramp off screen
      to get itself seen. The bound mirrors `.search-panel`'s own
-     `calc(100vh - 320px)` so both cards on the right rail share one envelope. */
-  max-height: calc(100vh - 300px);
+     `calc(calc(100vh / var(--chrome-zoom, 1)) - 320px)` so both cards on the right rail share one envelope. */
+  max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - 300px);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -583,7 +583,7 @@
 
 .settings-panel {
   width: min(1120px, 100%);
-  max-height: calc(100vh - 80px);
+  max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - 80px);
   display: grid;
   grid-template-columns: 232px 1fr;
   grid-template-rows: auto 1fr;
@@ -1471,7 +1471,7 @@ button.topnav-cross {
   top: calc(100% + 10px);
   left: 0;
   min-width: 220px;
-  max-width: min(340px, calc(100vw - 24px));
+  max-width: min(340px, calc(calc(100vw / var(--chrome-zoom, 1)) - 24px));
   padding: 8px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-card);
@@ -1576,13 +1576,13 @@ button.topnav-cross {
 
 .xnav-notice {
   position: absolute;
-  top: 74px;
+  top: calc(var(--nav-clear) - 2px);
   left: 50%;
   z-index: 21;
   display: flex;
   align-items: center;
   gap: 10px;
-  max-width: min(520px, calc(100vw - 24px));
+  max-width: min(520px, calc(calc(100vw / var(--chrome-zoom, 1)) - 24px));
   padding: 8px 8px 8px 14px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);

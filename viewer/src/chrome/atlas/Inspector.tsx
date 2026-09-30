@@ -134,6 +134,7 @@ export function Inspector({
   return (
     <aside
       class="inspector"
+      data-map-occluder="right"
       aria-labelledby="inspector-title"
       onKeyDown={(e) => {
         if (closable && e.key === "Escape" && !(e.target as HTMLElement).closest("textarea")) {

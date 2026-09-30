@@ -28,7 +28,7 @@ import type { Dataset } from "../../data/loader";
 import { hullRadius, type ClusterHull } from "../../data/hulls";
 import { BeamBadges, type BadgeSpec } from "../../chrome/BeamBadges";
 import { Tooltip } from "../../chrome/Tooltip";
-import { Camera2D, centerForTarget, easeInOutCubic } from "../camera2d";
+import { Camera2D, centerForTarget, easeInOutCubic, NO_INSETS, type ViewInsets } from "../camera2d";
 import { axisLayout, blendedPosition, mapBounds } from "../axisLayout";
 import { LabelOverlay } from "../labels/LabelOverlay";
 import { BeamsLayer, type Beam } from "../layers/BeamsLayer";
@@ -1013,13 +1013,55 @@ export class AtlasDriver implements SceneDriver {
     this.cameraDirty = true;
   }
 
+  private occluderWatch: ResizeObserver | null = null;
+
+  /** Re-frame the automatic overview when a panel that covers the map mounts
+   *  or changes size — the workspace rail gets its data after the first fit.
+   *  Once the user drives the camera their view is left alone. */
+  private watchOccluders(): void {
+    if (this.occluderWatch || typeof ResizeObserver === "undefined" || typeof document === "undefined") return;
+    let refitQueued = false;
+    const refit = () => {
+      if (refitQueued) return;
+      refitQueued = true;
+      requestAnimationFrame(() => {
+        refitQueued = false;
+        if (this.userDroveCamera || !this.bounds || this.cam.isFlying) return;
+        this.fitPending = true;
+        this.applyFit();
+        this.cameraDirty = true;
+      });
+    };
+    const ro = new ResizeObserver(refit);
+    let scanQueued = false;
+    const scan = () => {
+      if (scanQueued) return;
+      scanQueued = true;
+      requestAnimationFrame(() => {
+        scanQueued = false;
+        for (const el of document.querySelectorAll("[data-map-occluder]")) ro.observe(el);
+      });
+    };
+    scan();
+    const mo = new MutationObserver(scan);
+    mo.observe(document.getElementById("chrome") ?? document.body, { childList: true, subtree: true });
+    this.occluderWatch = ro;
+    this.unsubscribes.push(() => {
+      ro.disconnect();
+      mo.disconnect();
+      this.occluderWatch = null;
+    });
+  }
+
   private applyFit(): void {
+    this.watchOccluders();
     if (!this.fitPending) return;
     if (this.cam.viewportW < 2 || this.cam.viewportH < 2) return;
     // frame whichever cloud the current dimension shows
-    const b = appStore.getState().dims === 3 ? this.bounds3 : this.bounds;
+    const flat = appStore.getState().dims !== 3;
+    const b = flat ? this.bounds : this.bounds3;
     if (!b) return;
-    this.cam.fitBounds(b[0], b[1], b[2], b[3], 72);
+    this.cam.fitBounds(b[0], b[1], b[2], b[3], 72, flat ? this.occlusionInsets() : NO_INSETS);
     this.clearOrbitPivot();
     this.fitPending = false;
   }
@@ -1045,12 +1087,15 @@ export class AtlasDriver implements SceneDriver {
     this.clearOrbitPivot();
     const b = dims === 3 ? this.bounds3 : this.bounds;
     if (b && this.cam.viewportW >= 2) {
-      const pad = 72;
-      const wpp = Math.max(
-        (b[2] - b[0]) / Math.max(this.cam.viewportW - pad * 2, 1),
-        (b[3] - b[1]) / Math.max(this.cam.viewportH - pad * 2, 1),
+      const [cx, cy, wpp] = this.cam.fitFor(
+        b[0],
+        b[1],
+        b[2],
+        b[3],
+        72,
+        dims === 2 ? this.occlusionInsets() : NO_INSETS,
       );
-      this.cam.flyTo((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, wpp, now, duration);
+      this.cam.flyTo(cx, cy, wpp, now, duration);
     }
     // the dimension switch re-frames — resizes keep auto-fitting again
     this.userDroveCamera = false;
@@ -1222,12 +1267,101 @@ export class AtlasDriver implements SceneDriver {
       this.cam.flyTo(cx, cy, wpp, performance.now());
       return;
     }
+    // The same selection opens the inspector, which is not in the DOM yet on
+    // this tick: measuring now frames the point under that panel. Wait two
+    // frames so the occluders are laid out, then frame the free area.
+    const token = ++this.flyToken;
+    const run = () => {
+      if (token === this.flyToken) this.flyToPoint2D(id);
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => requestAnimationFrame(run));
+    else run();
+  }
+
+  private flyToken = 0;
+
+  private flyToPoint2D(id: number): void {
+    if (!this.dataset) return;
     const p = this.dataset.columns.pos2;
     const x = p[id * 2];
     const y = p[id * 2 + 1];
     if (x === undefined || y === undefined) return;
-    const wpp = Math.max((this.mapExtent * 0.06) / fitPx, this.cam.minWpp);
-    this.cam.flyTo(x, y, wpp, performance.now());
+    // frame the unit WITH its nearest neighbours: a fixed window lands on a
+    // lone dot wherever the map is sparse, and the context is the point
+    const insets = this.occlusionInsets();
+    const freePx = Math.min(this.cam.freeW(insets), this.cam.freeH(insets)) * 0.6;
+    const span = Math.min(
+      Math.max(this.neighbourRadius(id, 24) * 2.4, this.mapExtent * 0.12),
+      this.mapExtent * 0.4,
+    );
+    const wpp = Math.max(span / freePx, this.cam.minWpp);
+    const [cx, cy] = this.cam.centerFor(x, y, wpp, insets);
+    this.cam.flyTo(cx, cy, wpp, performance.now());
+  }
+
+  /** Distance from point `id` to its k-th nearest neighbour on the flat map
+   *  (one linear pass; runs only on an explicit select). */
+  private neighbourRadius(id: number, k: number): number {
+    const p = this.dataset?.columns.pos2;
+    if (!p) return 0;
+    const x = p[id * 2]!;
+    const y = p[id * 2 + 1]!;
+    const best = new Float64Array(k).fill(Infinity);
+    const n = p.length / 2;
+    for (let i = 0; i < n; i++) {
+      if (i === id) continue;
+      const dx = p[i * 2]! - x;
+      const dy = p[i * 2 + 1]! - y;
+      const d = dx * dx + dy * dy;
+      if (d >= best[k - 1]!) continue;
+      let j = k - 1;
+      while (j > 0 && best[j - 1]! > d) {
+        best[j] = best[j - 1]!;
+        j--;
+      }
+      best[j] = d;
+    }
+    const r = best[k - 1]!;
+    return Number.isFinite(r) ? Math.sqrt(r) : 0;
+  }
+
+  /** How much of the canvas each chrome panel covers, from the elements that
+   *  declare `data-map-occluder="left|right|top|bottom"`. A side panel counts
+   *  only when it spans most of the canvas along that side — a short legend
+   *  card in a corner does not shrink the whole frame. Neither axis gives
+   *  away more than 60 % of the canvas, so a phone never frames a sliver. */
+  private occlusionInsets(): ViewInsets {
+    if (typeof document === "undefined") return NO_INSETS;
+    const c = this.renderer.domElement.getBoundingClientRect();
+    if (c.width < 2 || c.height < 2) return NO_INSETS;
+    // the nav rows end where the stylesheet's --nav-clear says content may start
+    // …in chrome px: on 4K screens #chrome is zoomed (--chrome-zoom), so
+    // scale it to the screen px the canvas rect is measured in
+    const chrome = document.getElementById("chrome");
+    const zoom = chrome ? parseFloat(getComputedStyle(chrome).getPropertyValue("--chrome-zoom")) || 1 : 1;
+    const navClear =
+      parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--nav-clear")) * zoom;
+    const ins = { l: 0, r: 0, t: Number.isFinite(navClear) ? Math.max(0, navClear - 12 - c.top) : 0, b: 0 };
+    for (const el of document.querySelectorAll<HTMLElement>("[data-map-occluder]")) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) continue;
+      // a stylesheet may move a panel per breakpoint (a left rail becomes a
+      // bottom sheet on phones): --map-occluder overrides the attribute
+      const side = getComputedStyle(el).getPropertyValue("--map-occluder").trim() || el.dataset.mapOccluder;
+      const tall = r.height >= c.height * 0.5;
+      const wide = r.width >= c.width * 0.5;
+      if (side === "left" && tall) ins.l = Math.max(ins.l, r.right - c.left);
+      else if (side === "right" && tall) ins.r = Math.max(ins.r, c.right - r.left);
+      else if (side === "top" && wide) ins.t = Math.max(ins.t, r.bottom - c.top);
+      else if (side === "bottom" && wide) ins.b = Math.max(ins.b, c.bottom - r.top);
+    }
+    const shrink = (a: number, b: number, total: number): [number, number] => {
+      const s = a + b > total * 0.6 ? (total * 0.6) / (a + b) : 1;
+      return [Math.max(0, a * s), Math.max(0, b * s)];
+    };
+    [ins.l, ins.r] = shrink(ins.l, ins.r, c.width);
+    [ins.t, ins.b] = shrink(ins.t, ins.b, c.height);
+    return ins;
   }
 
   /** Cinematic zoom onto one cluster (pill click / future keyboard nav). */
@@ -1254,8 +1388,11 @@ export class AtlasDriver implements SceneDriver {
     const hull = this.hullsById.get(clusterId);
     if (!hull) return;
     this.userDroveCamera = true;
-    const wpp = Math.max((hullRadius(hull) * 2) / fitPx, this.cam.minWpp);
-    this.cam.flyTo(hull.anchor[0], hull.anchor[1], wpp, performance.now());
+    const insets = this.occlusionInsets();
+    const freePx = Math.min(this.cam.freeW(insets), this.cam.freeH(insets)) * 0.55;
+    const wpp = Math.max((hullRadius(hull) * 2) / freePx, this.cam.minWpp);
+    const [cx, cy] = this.cam.centerFor(hull.anchor[0], hull.anchor[1], wpp, insets);
+    this.cam.flyTo(cx, cy, wpp, performance.now());
   }
 
   // ── hand rig ────────────────────────────────────────────────────────────

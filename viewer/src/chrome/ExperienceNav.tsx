@@ -26,7 +26,7 @@ import { appStore, type Experience, type Page } from "../app/store";
 import { EXPERIENCES } from "../app/experience";
 import { APP_ROOT } from "../data/base";
 import type { ExperienceChrome, SiblingLink } from "./apps/nav";
-import { $compactViewport, $datasetId, $experience, $experienceNotice, $page, $tour } from "./state";
+import { $behaviorPublished, $compactViewport, $datasetId, $experience, $experienceNotice, $page, $tour } from "./state";
 import { findTour } from "./tours";
 
 /** sessionStorage key for "where Help came from", so Learn's Back link can
@@ -168,7 +168,12 @@ function PagePills({ exp }: { exp: ExperienceChrome }) {
     const current = exp.nav.find((n) => n.page === page) ?? exp.nav[0]!;
     return (
       <Disclosure
-        label={current.label}
+        label={
+          <>
+            <span class="xnav-trigger-exp">{exp.label} · </span>
+            {current.label}
+          </>
+        }
         buttonLabel={`${exp.label} sections, current: ${current.label}`}
         buttonClass="topnav-pill is-active xnav-trigger"
       >
@@ -205,6 +210,9 @@ function PagePills({ exp }: { exp: ExperienceChrome }) {
           onClick={() => go(n.page)}
         >
           {n.label}
+          {n.page === "behavior" && $behaviorPublished.value === false && (
+            <span class="xnav-pill-note"> · not published</span>
+          )}
         </button>
       ))}
     </>
@@ -279,7 +287,12 @@ function OtherExperiences({
   const datasetId = $datasetId.value;
   return (
     <Disclosure
-      label="Other experiences"
+      label={
+        <>
+          <span class="xnav-other-lead">Other </span>
+          <span class="xnav-other-rest">experiences</span>
+        </>
+      }
       buttonClass="topnav-cross xnav-trigger"
       panelClass="xnav-panel xnav-other"
     >

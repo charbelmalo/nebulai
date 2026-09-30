@@ -264,37 +264,48 @@ function IntroLessonCard() {
   return (
     <section class="guide-group guide-lesson" aria-labelledby="lesson-card-title">
       <article class={`guide-card lesson-card is-${av.state}`}>
-        <p class="lesson-card-kicker">
-          Start here · {tour.steps.length} steps
-          {done && <span class="lesson-card-done"> · Completed</span>}
-        </p>
-        <h2 class="lesson-card-title" id="lesson-card-title">
-          {tour.label}
-        </h2>
-        <p class="guide-card-blurb">{tour.blurb}</p>
-        <div class="guide-card-row">
-          <span class="guide-card-tag">Map</span>
-          <span class="guide-card-source">
-            GPT-2 Small · SAE directions at layer 8
-            {av.state === "ready" ? ` · sha256 ${av.sha256.slice(0, 12)}…` : ""}
-          </span>
-        </div>
-        {av.state !== "ready" && (
-          <p class={`episode-gate is-${av.state}`}>
-            {av.state === "pending" ? av.reason : `Not available here — ${av.reason}`}
+        <div class="lesson-card-body">
+          <p class="lesson-card-kicker">
+            Start here · {tour.steps.length} steps
+            {done && <span class="lesson-card-done"> · Completed</span>}
           </p>
-        )}
-        <div class="lesson-card-actions">
-          <button
-            type="button"
-            class="aw-btn aw-btn-primary"
-            ref={startRef}
-            disabled={av.state !== "ready"}
-            onClick={() => requestEpisodeStep(tour.id, 0)}
-          >
-            {done ? "Take the lesson again" : "Start the lesson"}
-          </button>
+          <h2 class="lesson-card-title" id="lesson-card-title">
+            {tour.label}
+          </h2>
+          <p class="guide-card-blurb">{tour.blurb}</p>
+          <div class="guide-card-row">
+            <span class="guide-card-tag">Map</span>
+            <span class="guide-card-source">
+              GPT-2 Small · SAE directions at layer 8
+              {av.state === "ready" ? ` · sha256 ${av.sha256.slice(0, 12)}…` : ""}
+            </span>
+          </div>
+          {av.state !== "ready" && (
+            <p class={`episode-gate is-${av.state}`}>
+              {av.state === "pending" ? av.reason : `Not available here — ${av.reason}`}
+            </p>
+          )}
+          <div class="lesson-card-actions">
+            <button
+              type="button"
+              class="aw-btn aw-btn-primary"
+              ref={startRef}
+              disabled={av.state !== "ready"}
+              onClick={() => requestEpisodeStep(tour.id, 0)}
+            >
+              {done ? "Take the lesson again" : "Start the lesson"}
+            </button>
+          </div>
         </div>
+        <img
+          class="lesson-card-art"
+          src={new URL("chooser/learn.webp", APP_ROOT).href}
+          alt="A close-up of the lesson's map: one direction ringed, its neighbours scattered around it"
+          width="640"
+          height="400"
+          loading="lazy"
+          decoding="async"
+        />
       </article>
     </section>
   );

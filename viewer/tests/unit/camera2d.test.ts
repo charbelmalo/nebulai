@@ -283,3 +283,39 @@ function groundUnder(
   const bb = b / Math.cos(el);
   return [cam.cx + a * cosAz - bb * sinAz, cam.cy + a * sinAz + bb * cosAz];
 }
+
+describe("Camera2D insets (chrome panels over the canvas)", () => {
+  it("centres a point in the free rect, not the canvas", () => {
+    const cam = new Camera2D();
+    cam.setViewport(1000, 800);
+    const insets = { l: 400, r: 200, t: 80, b: 40 };
+    const [cx, cy] = cam.centerFor(10, 20, 0.5, insets);
+    cam.cx = cx;
+    cam.cy = cy;
+    cam.wpp = 0.5;
+    const [sx, sy] = cam.worldToScreen(10, 20);
+    // free rect is x 400..800, y 80..760 → its centre is (600, 420)
+    expect(sx).toBeCloseTo(600, 6);
+    expect(sy).toBeCloseTo(420, 6);
+  });
+
+  it("fits bounds inside the free rect with its padding", () => {
+    const cam = new Camera2D();
+    cam.setViewport(1000, 800);
+    const insets = { l: 400, r: 0, t: 0, b: 0 };
+    cam.fitBounds(-1, -1, 1, 1, 50, insets);
+    const [x0] = cam.worldToScreen(-1, 0);
+    const [x1] = cam.worldToScreen(1, 0);
+    expect(x0).toBeGreaterThanOrEqual(450 - 1e-6);
+    expect(x1).toBeLessThanOrEqual(950 + 1e-6);
+    expect((x0 + x1) / 2).toBeCloseTo(700, 6);
+  });
+
+  it("without insets behaves exactly like the old whole-canvas fit", () => {
+    const a = new Camera2D();
+    a.setViewport(1000, 800);
+    a.fitBounds(-3, -2, 5, 6, 48);
+    expect(a.cx).toBeCloseTo(1, 9);
+    expect(a.cy).toBeCloseTo(2, 9);
+  });
+});

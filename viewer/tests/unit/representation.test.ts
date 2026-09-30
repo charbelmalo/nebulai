@@ -57,8 +57,8 @@ describe("datasetLabel", () => {
     );
   });
   it("shows unknown model ids verbatim and falls back to the dataset id", () => {
-    expect(datasetLabel({ model: "EleutherAI/pythia-70m", unit: "token_embedding" })).toBe(
-      "EleutherAI/pythia-70m · Token embedding rows",
+    expect(datasetLabel({ model: "acme/unlisted-70m", unit: "token_embedding" })).toBe(
+      "acme/unlisted-70m · Token embedding rows",
     );
     expect(datasetLabel({ unit: "token_embedding" }, "toy")).toBe("toy · Token embedding rows");
   });
