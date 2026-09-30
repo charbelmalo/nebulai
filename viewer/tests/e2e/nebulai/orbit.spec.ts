@@ -82,6 +82,19 @@ test("3-D orbit to the horizon and around keeps every point drawn and on screen"
   await page.evaluate(() => window.__store.getState().setDims(3));
   await waitForSettle(page);
 
+  // the toggle lands inside the first 400 ms of page life — the camera must
+  // still take the 3-D re-frame (an idle wheel-orbit clock of 0 read as "an
+  // orbit gesture just now" and skipped it, leaving the flat fit behind)
+  const fit = await page.evaluate(() => {
+    const d = window.__driver as unknown as {
+      cam: { wpp: number; fitFor(...a: unknown[]): [number, number, number] };
+      frameBox3(): [number, number, number, number];
+    };
+    const b = d.frameBox3();
+    return { wpp: d.cam.wpp, want: d.cam.fitFor(b[0], b[1], b[2], b[3], 72, { l: 0, r: 0, t: 0, b: 0 })[2] };
+  });
+  expect(fit.wpp / fit.want).toBeCloseTo(1, 3);
+
   // the fit frames the tilted cloud, not its xy bounds
   const rest = await probe(page);
   expect(rest.behindNear + rest.pastFar).toBe(0);

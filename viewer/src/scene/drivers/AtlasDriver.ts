@@ -162,6 +162,9 @@ export class AtlasDriver implements SceneDriver {
 
   private dragging = false;
   private pointerDown: { x: number; y: number } | null = null;
+  /** the cluster whose label pill the current press started on — a press
+   *  that never becomes a drag is that pill's click (see onPointerDown) */
+  private pillDown: number | null = null;
   private lastPointer: { x: number; y: number } | null = null;
 
   // orbit: user azimuth + extra elevation, scaled by morph so a flat 2-D map
@@ -192,7 +195,10 @@ export class AtlasDriver implements SceneDriver {
   // around it instead of swinging off-frame around a z=0 ground point.
   private orbitPivot: { p2: [number, number]; p3: [number, number, number] } | null = null;
   private orbitAnchor: { a: number; b: number } | null = null;
-  private wheelOrbitAt = 0; // last wheel-orbit tick — a fresh swipe re-grabs
+  // last wheel-orbit tick — a fresh swipe re-grabs. -Infinity, not 0: 0 reads
+  // as "an orbit just now" for the first WHEEL_GESTURE_GAP_MS of page life,
+  // so a dims toggle that early skipped its re-frame (see onDimsChange)
+  private wheelOrbitAt = -Infinity;
   /** orbit-vs-zoom latched for the duration of one wheel gesture */
   private wheelMode: "orbit" | "zoom" | null = null;
   private wheelGestureAt = 0;
@@ -493,12 +499,16 @@ export class AtlasDriver implements SceneDriver {
     this.centroid3ById = new Map(ds.columns.clusters.map((c) => [c.id, c.centroid]));
 
     const overlay = document.getElementById("overlay-html")!;
-    this.labels = new LabelOverlay(overlay, ds.hulls, ds.columns.clusters, (cid) => {
-      appStore.getState().setSelection({ kind: "cluster", id: cid });
-      // flyToCluster is morph-aware — it aims at the pos2 hull anchor when flat
-      // and the pos3 centroid mid-flythrough, so pills fly correctly in both
-      this.flyToCluster(cid);
-    });
+    this.labels = new LabelOverlay(
+      overlay,
+      ds.hulls,
+      ds.columns.clusters,
+      (cid) => this.selectClusterPill(cid),
+      {
+        pointerdown: (e, cid) => this.onPointerDown(e, cid),
+        wheel: (e) => this.onWheel(e),
+      },
+    );
 
     const t = appStore.getState().toggles;
     this.territories.visible = t.territories;
@@ -846,9 +856,19 @@ export class AtlasDriver implements SceneDriver {
 
   /** Resolve the orbit pivot and capture its anchor. Called at the start of
    *  every orbit interaction, before hover is cleared. */
-  private grabOrbitPivot(useHover = true): void {
-    this.orbitPivot = this.resolveOrbitPivot(useHover);
+  private grabOrbitPivot(useHover = true, cluster: number | null = null): void {
+    this.orbitPivot = (cluster !== null && this.clusterPivot(cluster)) || this.resolveOrbitPivot(useHover);
     this.captureOrbitAnchor();
+  }
+
+  /** A cluster as an orbit pivot: its label anchor flat, its pos3 centroid in
+   *  the flythrough (the same pair its pill projects from). */
+  private clusterPivot(
+    id: number,
+  ): { p2: [number, number]; p3: [number, number, number] } | null {
+    const c3 = this.centroid3ById.get(id);
+    const hull = this.hullsById.get(id);
+    return c3 && hull ? { p2: [hull.anchor[0], hull.anchor[1]], p3: [c3[0], c3[1], c3[2]] } : null;
   }
 
   private clearOrbitPivot(): void {
@@ -875,9 +895,8 @@ export class AtlasDriver implements SceneDriver {
     const sel = appStore.getState().selection;
     if (sel?.kind === "point") return point(sel.id);
     if (sel?.kind === "cluster") {
-      const c3 = this.centroid3ById.get(sel.id);
-      const hull = this.hullsById.get(sel.id);
-      if (c3 && hull) return { p2: [hull.anchor[0], hull.anchor[1]], p3: [...c3] };
+      const pv = this.clusterPivot(sel.id);
+      if (pv) return pv;
     }
     // median depth of the points currently in frame, pivot at the view center.
     // Strided sample, not a full scan — see PIVOT_DEPTH_SAMPLES. The stride is
@@ -1610,50 +1629,22 @@ export class AtlasDriver implements SceneDriver {
     this.hullsById.clear();
   }
 
+  /** A label pill was activated — by keyboard, or by a press on it that
+   *  never became a drag. */
+  private selectClusterPill(cid: number): void {
+    appStore.getState().setSelection({ kind: "cluster", id: cid });
+    // flyToCluster is morph-aware — it aims at the pos2 hull anchor when flat
+    // and the pos3 centroid mid-flythrough, so pills fly correctly in both
+    this.flyToCluster(cid);
+  }
+
   // ── pointer gestures ────────────────────────────────────────────────────
 
   private attachPointer(): void {
     const c = this.canvas;
     const opts = { signal: this.abort.signal };
 
-    c.addEventListener(
-      "pointerdown",
-      (e) => {
-        if (e.pointerType === "touch") {
-          this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-          // a second finger ends whatever the first one was doing and starts
-          // the pinch/twist/tilt gesture from a fresh baseline
-          if (this.touches.size >= 2) {
-            this.pointerDown = null;
-            this.lastPointer = null;
-            this.dragging = false;
-            this.orbiting = false;
-            this.orbitLast = null;
-            this.beginPinch();
-            this.hoverClear();
-            return;
-          }
-        }
-        // middle (wheel-click) or right button → orbit the camera
-        if (e.button === 1 || e.button === 2) {
-          e.preventDefault();
-          c.setPointerCapture(e.pointerId);
-          this.orbiting = true;
-          this.orbitLast = { x: e.clientX, y: e.clientY };
-          // before hoverClear — the node under the cursor heads the pivot chain
-          this.grabOrbitPivot();
-          this.hoverClear();
-          c.style.cursor = "move";
-          return;
-        }
-        if (e.button !== 0) return;
-        c.setPointerCapture(e.pointerId);
-        this.pointerDown = { x: e.clientX, y: e.clientY };
-        this.lastPointer = { x: e.clientX, y: e.clientY };
-        this.dragging = false;
-      },
-      opts,
-    );
+    c.addEventListener("pointerdown", (e) => this.onPointerDown(e, null), opts);
 
     // right-drag orbits; suppress the browser context menu on the canvas
     c.addEventListener("contextmenu", (e) => e.preventDefault(), opts);
@@ -1713,6 +1704,7 @@ export class AtlasDriver implements SceneDriver {
         this.pointerDown = null;
         this.lastPointer = null;
         this.dragging = false;
+        this.pillDown = null;
         this.orbiting = false;
         this.orbitLast = null;
         this.clearOrbitPivot(); // same reason as pointerup — don't leave a live anchor
@@ -1754,11 +1746,18 @@ export class AtlasDriver implements SceneDriver {
           return;
         }
         const wasDrag = this.dragging;
+        const pill = this.pillDown;
         this.pointerDown = null;
         this.lastPointer = null;
         this.dragging = false;
+        this.pillDown = null;
         c.style.cursor = "";
         if (wasDrag) return;
+        // a press on a label pill that never moved is that pill's click
+        if (pill !== null) {
+          this.selectClusterPill(pill);
+          return;
+        }
 
         // click/tap: select the picked point's cluster (noise → point selection)
         if (this.morph > 0.5 && this.hoveredIndex === null) {
@@ -1782,66 +1781,10 @@ export class AtlasDriver implements SceneDriver {
       opts,
     );
 
-    c.addEventListener(
-      "wheel",
-      (e) => {
-        e.preventDefault();
-        this.userDroveCamera = true;
-        // normalize to pixels first — Firefox reports lines and a page-scroll
-        // wheel reports pages, both of which read as a near-dead zoom otherwise
-        const unit =
-          e.deltaMode === 1 ? WHEEL_LINE_PX : e.deltaMode === 2 ? WHEEL_PAGE_PX : 1;
-        const dx = e.deltaX * unit;
-        const dy = e.deltaY * unit;
-        // trackpad pinch arrives as ctrl+wheel with a much smaller delta, so it
-        // needs its own gain to feel 1:1 with the fingers
-        const pinching = e.ctrlKey;
-
-        // Latch orbit-vs-zoom for the whole gesture. A trackpad swipe is never
-        // purely one axis, so deciding per event flips branches mid-swipe and
-        // thrashes the pivot (see WHEEL_GESTURE_GAP_MS). The first event of a
-        // gesture decides; the rest follow it until the fingers lift.
-        const now = performance.now();
-        if (now - this.wheelGestureAt > WHEEL_GESTURE_GAP_MS) this.wheelMode = null;
-        this.wheelGestureAt = now;
-        if (this.wheelMode === null) {
-          // in 3-D a horizontal-dominant two-finger swipe orbits the azimuth,
-          // and shift+swipe takes elevation — vertical stays zoom, which is the
-          // one gesture a plain mouse wheel also has to serve
-          const orbits =
-            this.morph > 0.02 && !pinching && (Math.abs(dx) > Math.abs(dy) || e.shiftKey);
-          this.wheelMode = orbits ? "orbit" : "zoom";
-        }
-
-        if (this.wheelMode === "orbit") {
-          this.refreshWheelOrbitPivot();
-          this.ensure3DForOrbit();
-          // shift is read live so a swipe can cross from azimuth to elevation
-          // without the pivot being torn down and re-resolved between them
-          if (e.shiftKey) this.orbitBy(0, dy * WHEEL_ORBIT_EL);
-          else this.orbitBy(dx * WHEEL_ORBIT_AZ, 0);
-          return;
-        }
-
-        // zoom re-centers on its own cursor anchor — the orbit pivot yields
-        this.clearOrbitPivot();
-        // accumulate in log space, drained over ~120 ms in stepNavigation so
-        // discrete wheel ticks read as one continuous glide
-        const step = Math.max(
-          -WHEEL_ZOOM_MAX,
-          Math.min(dy * (pinching ? PINCH_ZOOM_GAIN : WHEEL_ZOOM_GAIN), WHEEL_ZOOM_MAX),
-        );
-        if (this.reducedMotion) {
-          this.zoomAtScreen(e.clientX, e.clientY, Math.exp(step));
-        } else {
-          this.zoomPending += step;
-          this.zoomAnchor = { x: e.clientX, y: e.clientY };
-        }
-        this.cameraDirty = true;
-        this.hoverDirty = true;
-      },
-      { signal: this.abort.signal, passive: false },
-    );
+    c.addEventListener("wheel", (e) => this.onWheel(e), {
+      signal: this.abort.signal,
+      passive: false,
+    });
 
     window.addEventListener(
       "keydown",
@@ -1850,6 +1793,115 @@ export class AtlasDriver implements SceneDriver {
       },
       opts,
     );
+  }
+
+  /** Pointer-down on the canvas, or on a label pill over it (`pill` = its
+   *  cluster). A pill hands its press here so a drag, orbit or pinch that
+   *  starts on a label drives the map like any other: the pointer is captured
+   *  to the canvas, whose move/up listeners then run the gesture, and a press
+   *  that never becomes a drag is the pill's click (see pointerup). */
+  private onPointerDown(e: PointerEvent, pill: number | null): void {
+    const c = this.canvas;
+    if (pill !== null) {
+      e.stopPropagation();
+      try {
+        c.setPointerCapture(e.pointerId);
+      } catch {
+        return; // pointer already gone (released before this ran)
+      }
+    }
+    if (e.pointerType === "touch") {
+      this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      // a second finger ends whatever the first one was doing and starts
+      // the pinch/twist/tilt gesture from a fresh baseline
+      if (this.touches.size >= 2) {
+        this.pointerDown = null;
+        this.lastPointer = null;
+        this.dragging = false;
+        this.orbiting = false;
+        this.orbitLast = null;
+        this.pillDown = null;
+        this.beginPinch();
+        this.hoverClear();
+        return;
+      }
+    }
+    // middle (wheel-click) or right button → orbit the camera
+    if (e.button === 1 || e.button === 2) {
+      e.preventDefault();
+      c.setPointerCapture(e.pointerId);
+      this.orbiting = true;
+      this.orbitLast = { x: e.clientX, y: e.clientY };
+      // before hoverClear — the node under the cursor heads the pivot chain,
+      // unless the orbit started on a label: then it spins about that cluster
+      this.grabOrbitPivot(true, pill);
+      this.hoverClear();
+      c.style.cursor = "move";
+      return;
+    }
+    if (e.button !== 0) return;
+    c.setPointerCapture(e.pointerId);
+    this.pointerDown = { x: e.clientX, y: e.clientY };
+    this.lastPointer = { x: e.clientX, y: e.clientY };
+    this.dragging = false;
+    this.pillDown = pill;
+  }
+
+  private onWheel(e: WheelEvent): void {
+    e.preventDefault();
+    this.userDroveCamera = true;
+    // normalize to pixels first — Firefox reports lines and a page-scroll
+    // wheel reports pages, both of which read as a near-dead zoom otherwise
+    const unit =
+      e.deltaMode === 1 ? WHEEL_LINE_PX : e.deltaMode === 2 ? WHEEL_PAGE_PX : 1;
+    const dx = e.deltaX * unit;
+    const dy = e.deltaY * unit;
+    // trackpad pinch arrives as ctrl+wheel with a much smaller delta, so it
+    // needs its own gain to feel 1:1 with the fingers
+    const pinching = e.ctrlKey;
+
+    // Latch orbit-vs-zoom for the whole gesture. A trackpad swipe is never
+    // purely one axis, so deciding per event flips branches mid-swipe and
+    // thrashes the pivot (see WHEEL_GESTURE_GAP_MS). The first event of a
+    // gesture decides; the rest follow it until the fingers lift.
+    const now = performance.now();
+    if (now - this.wheelGestureAt > WHEEL_GESTURE_GAP_MS) this.wheelMode = null;
+    this.wheelGestureAt = now;
+    if (this.wheelMode === null) {
+      // in 3-D a horizontal-dominant two-finger swipe orbits the azimuth,
+      // and shift+swipe takes elevation — vertical stays zoom, which is the
+      // one gesture a plain mouse wheel also has to serve
+      const orbits =
+        this.morph > 0.02 && !pinching && (Math.abs(dx) > Math.abs(dy) || e.shiftKey);
+      this.wheelMode = orbits ? "orbit" : "zoom";
+    }
+
+    if (this.wheelMode === "orbit") {
+      this.refreshWheelOrbitPivot();
+      this.ensure3DForOrbit();
+      // shift is read live so a swipe can cross from azimuth to elevation
+      // without the pivot being torn down and re-resolved between them
+      if (e.shiftKey) this.orbitBy(0, dy * WHEEL_ORBIT_EL);
+      else this.orbitBy(dx * WHEEL_ORBIT_AZ, 0);
+      return;
+    }
+
+    // zoom re-centers on its own cursor anchor — the orbit pivot yields
+    this.clearOrbitPivot();
+    // accumulate in log space, drained over ~120 ms in stepNavigation so
+    // discrete wheel ticks read as one continuous glide
+    const step = Math.max(
+      -WHEEL_ZOOM_MAX,
+      Math.min(dy * (pinching ? PINCH_ZOOM_GAIN : WHEEL_ZOOM_GAIN), WHEEL_ZOOM_MAX),
+    );
+    if (this.reducedMotion) {
+      this.zoomAtScreen(e.clientX, e.clientY, Math.exp(step));
+    } else {
+      this.zoomPending += step;
+      this.zoomAnchor = { x: e.clientX, y: e.clientY };
+    }
+    this.cameraDirty = true;
+    this.hoverDirty = true;
   }
 
   /** Turn a picked point into a store selection: its cluster, or the bare point

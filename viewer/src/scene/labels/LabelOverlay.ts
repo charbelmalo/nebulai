@@ -30,6 +30,16 @@ interface Pill {
  *  null = outside the clip range (hide the pill). */
 export type ProjectWorld = (x: number, y: number, z: number) => [number, number] | null;
 
+/** The canvas gesture recognizer, handed the pointer and wheel input that
+ *  lands on a pill. Pills sit over the canvas, so without this every drag,
+ *  orbit, pinch or wheel that happened to start on a label went to the button
+ *  and the map never moved. The recognizer captures the pointer to the canvas
+ *  and calls a press-and-release that never became a drag a pill click. */
+export interface PillGestures {
+  pointerdown(e: PointerEvent, clusterId: number): void;
+  wheel(e: WheelEvent): void;
+}
+
 export class LabelOverlay {
   private pills: Pill[] = [];
   private root: HTMLElement;
@@ -39,6 +49,7 @@ export class LabelOverlay {
     hulls: ClusterHull[],
     clusters: NebulaiCluster[],
     onSelect: (clusterId: number) => void,
+    gestures?: PillGestures,
   ) {
     this.root = document.createElement("div");
     this.root.className = "label-overlay";
@@ -62,8 +73,18 @@ export class LabelOverlay {
       el.style.visibility = "hidden";
       el.addEventListener("click", (e) => {
         e.stopPropagation();
+        // with a recognizer, pointer clicks arrive through it (as a tap that
+        // never moved); only keyboard activation (detail 0) reaches this path
+        if (gestures && e.detail !== 0) return;
         onSelect(hull.clusterId);
       });
+      if (gestures) {
+        const cid = hull.clusterId;
+        el.addEventListener("pointerdown", (e) => gestures.pointerdown(e, cid));
+        el.addEventListener("wheel", (e) => gestures.wheel(e), { passive: false });
+        // right-drag orbits from a pill just as from the canvas
+        el.addEventListener("contextmenu", (e) => e.preventDefault());
+      }
       this.root.appendChild(el);
 
       const c3 = centroids.get(hull.clusterId);

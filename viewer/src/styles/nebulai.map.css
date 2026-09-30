@@ -45,6 +45,7 @@
   white-space: nowrap;
   pointer-events: auto;
   cursor: pointer;
+  touch-action: none; /* a pan/pinch that starts on a pill drives the map */
   will-change: transform;
   transition:
     color var(--t-fast) var(--ease-out),
