@@ -32,6 +32,13 @@ test("axis: a direction lays the map out, with its null cloud under it", async (
     hash: `model=gpt2&axis=${DIRECTION}&axist=1`,
   });
   test.skip(tier !== "webgpu", `probe fell back to ${tier}`);
+  // the directions sidecar is built per machine (`nebulai directions`); the
+  // dev server answers a missing file with the SPA fallback, so check the type
+  const hasDirections = await page.evaluate(async () => {
+    const res = await fetch("out/gpt2/directions.json");
+    return res.ok && (res.headers.get("content-type") ?? "").includes("json");
+  });
+  test.skip(!hasDirections, "this deploy ships no out/gpt2/directions.json");
 
   // the direction sidecar is fetched after the map; the permalink's axis is
   // applied when it lands, so wait on the STATE rather than on a duration

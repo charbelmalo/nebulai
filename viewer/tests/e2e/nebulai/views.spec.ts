@@ -59,6 +59,12 @@ test("atlas: confidence floor culls low-confidence points (gate direction locked
     page.evaluate(async () => {
       const cv = document.querySelector("canvas") as HTMLCanvasElement;
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      // The driver repaints on demand, so a static scene submits no frame this
+      // tick — and a composited WebGL drawing buffer reads back cleared without
+      // `preserveDrawingBuffer`. Draw synchronously here so the pixels below are
+      // this frame's, not an undefined buffer. (Screenshot goldens are immune:
+      // they sample the compositor, which still holds the last committed frame.)
+      (window.__driver as unknown as { renderNow?: () => void })?.renderNow?.();
       const off = document.createElement("canvas");
       off.width = cv.width;
       off.height = cv.height;
@@ -88,7 +94,7 @@ test("atlas: confidence floor culls low-confidence points (gate direction locked
   expect(open).toBeGreaterThan(culled * 1.05);
 });
 
-test("hand control is reachable from the sidebar, and only where it steers", async ({
+test("hand control is reachable from the workspace, and only where it steers", async ({
   page,
 }, testInfo) => {
   test.skip(rungOf(testInfo) === "webgpu", "chrome is identical on both rungs");
@@ -102,7 +108,10 @@ test("hand control is reachable from the sidebar, and only where it steers", asy
   // The bug this pins: the rig shipped with its only switch at the bottom of
   // the Settings overlay's General tab, so the feature was invisible from the
   // view it drives and nobody could turn it on.
-  const sidebar = page.locator(".sidebar");
+  // Atlas keeps it in the workspace's Display disclosure, next to the other
+  // controls of the view it drives.
+  const sidebar = page.locator(".atlas-workspace");
+  await sidebar.locator("summary", { hasText: "Display" }).click();
   const toggle = sidebar.getByRole("switch", { name: "Hand control" });
   await expect(toggle).toBeVisible();
   await expect(toggle).toBeEnabled(); // localhost is a secure context
@@ -156,7 +165,7 @@ test("hand control is reachable from the sidebar, and only where it steers", asy
   // Only the atlas has a driver to steer, so the row must not advertise itself
   // in a view where turning it on would do nothing.
   await page.evaluate(() => window.__store.getState().setViewMode("chord"));
-  await expect(sidebar.getByRole("switch", { name: "Hand control" })).toHaveCount(0);
+  await expect(page.getByRole("switch", { name: "Hand control" })).toHaveCount(0);
 });
 
 test("channel lens: the permalink lights it, and the filter narrows the map", async ({
@@ -172,8 +181,11 @@ test("channel lens: the permalink lights it, and the filter narrows the map", as
     hash: "page=map&model=gpt2&channel=we_centroid_dist",
   });
   const hasChannels = await page.evaluate(async () => {
+    // the dev server answers a missing file with the SPA fallback (200 +
+    // index.html), so `res.ok` alone would claim a sidecar that is not there
     const res = await fetch("out/gpt2/channels.json");
-    return res.ok;
+    if (!res.ok || !(res.headers.get("content-type") ?? "").includes("json")) return false;
+    return true;
   });
   test.skip(!hasChannels, "this deploy ships no out/gpt2/channels.json");
 
@@ -250,7 +262,8 @@ test("channel lens: an unknown channel in the URL is dropped, not half-applied",
 
 test("v1-style hierarchy gating: radio disabled only without edges", async ({ page }, testInfo) => {
   test.skip(rungOf(testInfo) === "webgpu", "chrome is identical on both rungs");
-  await bootApp(page, "webgl");
+  // Hierarchy is an advanced map mode, so its radio lives in Research's map.
+  await bootApp(page, "webgl", { hash: "experience=research&page=map&view=atlas" });
   // all live exports are v2 — the hierarchy radio must be enabled
   const radio = page.locator('.legend input[type="radio"][value="hierarchy"]');
   await expect(radio).toBeEnabled();

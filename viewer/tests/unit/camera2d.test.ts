@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Camera2D, centerForTarget, easeInOutCubic } from "../../src/scene/camera2d";
+import { Camera2D, centerForTarget, cloudFrameBox, easeInOutCubic } from "../../src/scene/camera2d";
 
 function makeCam(): Camera2D {
   const cam = new Camera2D();
@@ -200,6 +200,49 @@ describe("Camera2D in the orbit frame", () => {
     expect(projectOrbit(cam, p, az, el)[1]).toBeCloseTo(400, 6);
   });
 
+  it("cloudFrameBox fits the whole tilted cloud, centered, at every frame", () => {
+    // a cloud parked off the z = 0 plane the way the real pos3 frame is
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    const n = 400;
+    const q = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      q[i * 3] = 3.6 + rnd() * 5.6;
+      q[i * 3 + 1] = 2 + rnd() * 5.5;
+      q[i * 3 + 2] = 4.1 + rnd() * 6;
+    }
+    for (const az of AZ) {
+      for (const el of EL) {
+        const cam = makeCam();
+        const box = cloudFrameBox(q, n, az, el)!;
+        cam.fitBounds(box[0], box[1], box[2], box[3], 72);
+        let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+        for (let i = 0; i < n; i++) {
+          const [sx, sy] = projectOrbit(cam, [q[i * 3]!, q[i * 3 + 1]!, q[i * 3 + 2]!], az, el);
+          x0 = Math.min(x0, sx); x1 = Math.max(x1, sx);
+          y0 = Math.min(y0, sy); y1 = Math.max(y1, sy);
+        }
+        // inside the padded viewport, and centered on it
+        expect(x0).toBeGreaterThanOrEqual(72 - 1e-6);
+        expect(x1).toBeLessThanOrEqual(1000 - 72 + 1e-6);
+        expect(y0).toBeGreaterThanOrEqual(72 - 1e-6);
+        expect(y1).toBeLessThanOrEqual(800 - 72 + 1e-6);
+        expect((x0 + x1) / 2).toBeCloseTo(500, 6);
+        expect((y0 + y1) / 2).toBeCloseTo(400, 6);
+      }
+    }
+  });
+
+  it("cloudFrameBox is the plain xy bounds on a flat map", () => {
+    const q = [1, 2, 50, -3, 7, -40, 4, -1, 9];
+    const b = cloudFrameBox(q, 3, 0, 0)!;
+    expect(b[0]).toBeCloseTo(-3, 12);
+    expect(b[1]).toBeCloseTo(-1, 12);
+    expect(b[2]).toBeCloseTo(4, 12);
+    expect(b[3]).toBeCloseTo(7, 12);
+    expect(cloudFrameBox([], 0, 0.4, 0.6)).toBeNull();
+  });
+
   it("zoomAtInFrame holds the ground point under the cursor at every frame", () => {
     for (const az of AZ) {
       for (const el of EL) {
@@ -283,3 +326,39 @@ function groundUnder(
   const bb = b / Math.cos(el);
   return [cam.cx + a * cosAz - bb * sinAz, cam.cy + a * sinAz + bb * cosAz];
 }
+
+describe("Camera2D insets (chrome panels over the canvas)", () => {
+  it("centres a point in the free rect, not the canvas", () => {
+    const cam = new Camera2D();
+    cam.setViewport(1000, 800);
+    const insets = { l: 400, r: 200, t: 80, b: 40 };
+    const [cx, cy] = cam.centerFor(10, 20, 0.5, insets);
+    cam.cx = cx;
+    cam.cy = cy;
+    cam.wpp = 0.5;
+    const [sx, sy] = cam.worldToScreen(10, 20);
+    // free rect is x 400..800, y 80..760 → its centre is (600, 420)
+    expect(sx).toBeCloseTo(600, 6);
+    expect(sy).toBeCloseTo(420, 6);
+  });
+
+  it("fits bounds inside the free rect with its padding", () => {
+    const cam = new Camera2D();
+    cam.setViewport(1000, 800);
+    const insets = { l: 400, r: 0, t: 0, b: 0 };
+    cam.fitBounds(-1, -1, 1, 1, 50, insets);
+    const [x0] = cam.worldToScreen(-1, 0);
+    const [x1] = cam.worldToScreen(1, 0);
+    expect(x0).toBeGreaterThanOrEqual(450 - 1e-6);
+    expect(x1).toBeLessThanOrEqual(950 + 1e-6);
+    expect((x0 + x1) / 2).toBeCloseTo(700, 6);
+  });
+
+  it("without insets behaves exactly like the old whole-canvas fit", () => {
+    const a = new Camera2D();
+    a.setViewport(1000, 800);
+    a.fitBounds(-3, -2, 5, 6, 48);
+    expect(a.cx).toBeCloseTo(1, 9);
+    expect(a.cy).toBeCloseTo(2, 9);
+  });
+});

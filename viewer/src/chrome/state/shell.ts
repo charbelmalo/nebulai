@@ -14,7 +14,7 @@
  *  rather than re-worded, so read "above" as "in state/atlas.ts". */
 
 import { signal } from "@preact/signals";
-import { appStore, type AppId, type Page, type Settings } from "../../app/store";
+import { appStore, type AppId, type Experience, type Page, type Settings } from "../../app/store";
 import type { Capabilities } from "@psychix/viz/capabilities";
 
 const s = appStore.getState();
@@ -29,6 +29,9 @@ export const $capabilities = signal<Capabilities | null>(s.capabilities);
 export const $settings = signal<Settings>(s.settings);
 export const $settingsOpen = signal<boolean>(s.settingsOpen);
 export const $page = signal<Page>(s.page);
+/** NebulAI's experience (null on Seer) and its one-shot boot notice. */
+export const $experience = signal<Experience | null>(s.experience);
+export const $experienceNotice = signal<string | null>(s.experienceNotice);
 
 /** Compact-viewport signal (phone widths, or a coarse pointer under 900px —
  *  tablets in portrait). Also NOT a store mirror: the viewport is a property
@@ -42,8 +45,10 @@ export const $page = signal<Page>(s.page);
  *  bare `matchMedia()` at module scope would throw on import (see
  *  src/viz/capabilities.ts for the same guard). `null` (no matchMedia
  *  available) reads as "not compact". */
-const COMPACT_QUERY =
-  "(max-width: 720px), ((pointer: coarse) and (max-width: 900px))";
+/* Phones only: an 820px tablet has room for four section pills in the
+   full-width nav row, and hiding Research's destinations there behind one
+   menu made them undiscoverable (UI audit 2026-09-30). */
+const COMPACT_QUERY = "(max-width: 720px)";
 const mql = typeof matchMedia !== "undefined" ? matchMedia(COMPACT_QUERY) : null;
 
 export function isCompactViewport(mql: { matches: boolean } | null): boolean {
@@ -69,7 +74,15 @@ mql?.addEventListener("change", (e) => {
 const compactAtBoot = $compactViewport.peek();
 export const $sidebarOpen = signal<boolean>(!compactAtBoot);
 export const $searchCollapsed = signal<boolean>(compactAtBoot);
-export const $legendCollapsed = signal<boolean>(compactAtBoot);
+/** The legend card sits over the lower-right of the map; below 1280px it
+ *  covers points the camera just framed, so it also starts collapsed on
+ *  tablets and small laptops. Same peek-once rule as above. */
+const legendNarrowAtBoot =
+  compactAtBoot ||
+  (typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? window.matchMedia("(max-width: 1279px)").matches
+    : false);
+export const $legendCollapsed = signal<boolean>(legendNarrowAtBoot);
 export const $compareCollapsed = signal<boolean>(compactAtBoot);
 
 export type PanelName = "sidebar" | "search" | "legend" | "compare";

@@ -5,25 +5,32 @@
  *  only lists features whose driver is live and backed by real data — an
  *  unimplemented feature never appears, so the page can't overstate what it shows.
  *
- *  The active model is the current dataset id (bundles are per-model). If a model
- *  has no interp export, the driver's setModel rejects and we say so plainly. */
+ *  The active model is Internals' own choice (`interpModel`). Research sets it
+ *  only from its explicit export chooser, so opening an analysis never loads a
+ *  model map; Learn's guided episodes fall back to the dataset they opened.
+ *  If a model has no interp export, the driver's setModel rejects and we say
+ *  so plainly. */
 
 import { signal, useSignal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
-import { requestDataset } from "../app/actions";
 import { appStore } from "../app/store";
 import {
   LIVE_TRACE_PREFIX,
   cachedBundle,
   hasInterp,
+  interpBase,
   isLiveTrace,
   loadInterpIndex,
   putLiveTrace,
   registerLivePrompt,
   startBundleCapture,
   takeBundleCapture,
+  type InterpIndex,
   type TraceBundle,
 } from "../data/interp";
+import { APP_ROOT } from "../data/base";
+import { availability, availableCount } from "../scene/interp/requirements";
+import { $introCheck, ResearchChooser, ResearchTask, isIntroView } from "./research/ResearchIntro";
 import type { DatasetEntry } from "../data/schema";
 import type { InterpDriver, InterpGroup } from "../scene/interp/InterpDriver";
 import { GROUP_LABEL, INTERP_FEATURES, findFeature } from "../scene/interp/registry";
@@ -35,7 +42,9 @@ import {
   $capabilities,
   $datasetId,
   $datasets,
+  $experience,
   $interp,
+  $interpModel,
   $interpSelection,
   $loading,
   $probing,
@@ -83,12 +92,37 @@ function probeInterpAvail(entries: DatasetEntry[]): void {
   );
 }
 
+const FEATURE_IDS = INTERP_FEATURES.map((f) => f.id);
+
+/** A guided tour's address in Learn, where tours run with their controls. */
+const learnTourHref = (id: string) =>
+  `${new URL("learn/", APP_ROOT).href}#episode=${encodeURIComponent(id)}&step=0`;
+
 export function InterpPage() {
+  // Research starts on its chooser: no export is assumed, and no map is loaded
+  if ($experience.value === "research" && !$interpModel.value) return <ResearchChooser />;
+  return <InterpView />;
+}
+
+function InterpView() {
   const interp = $interp.value;
-  const model = $datasetId.value;
+  const research = $experience.value === "research";
+  const model = research ? $interpModel.value : ($interpModel.value ?? $datasetId.value);
   const caps = $capabilities.value;
   const tier = caps?.tier ?? "webgl";
+  const staticTier = tier === "static";
   const feature = findFeature(interp.featureId);
+  // Research's first task: the chart waits until the pinned bundle's bytes
+  // match the release manifest, then renders exactly those bytes
+  const intro = research ? isIntroView(model, interp.featureId) : null;
+  const introState = intro ? $introCheck.value.state : "none";
+  const chartBlocked: "static" | "pending" | "failed" | null = staticTier
+    ? "static"
+    : intro && introState !== "verified"
+      ? introState === "pending"
+        ? "pending"
+        : "failed"
+      : null;
 
   const status = useSignal<"loading" | "ready" | "error">("loading");
   // bundle URLs the active view was computed from (captured during the
@@ -111,6 +145,9 @@ export function InterpPage() {
   // not a persisted setting.
   const narrow = useSignal(false);
   const legendOpen = useSignal<boolean | null>(null);
+  // Narrow viewports: the analysis list is a drawer so the chart owns the
+  // screen. null = auto (closed once an analysis is showing).
+  const railOpen = useSignal<boolean | null>(null);
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 900px)");
     narrow.value = mq.matches;
@@ -120,8 +157,13 @@ export function InterpPage() {
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
   }, []);
+  // Beside Research's task column the stage is narrower and the task already
+  // carries the explanation, so the key starts collapsed there
   const legendIsOpen =
-    legendOpen.value ?? (!narrow.value && feature?.legendCollapsed !== true);
+    legendOpen.value ??
+    (!narrow.value &&
+      feature?.legendCollapsed !== true &&
+      !intro);
 
   // Per-trace features render one bundled prompt at a time (all of the forward
   // group, plus anything flagged perTrace). Load the trace list for the model
@@ -137,20 +179,25 @@ export function InterpPage() {
   // bundle isn't in it" (SAE/trained bundles are legitimately gpt2-only — the
   // res-jb SAE release covers gpt2), so the error card can tell the truth.
   const hasIdx = useSignal<boolean | null>(null);
+  // the export's own bundle list: what the rail marks available
+  const exportIdx = useSignal<InterpIndex | null | undefined>(undefined);
   useEffect(() => {
     if (!model) return;
     let ok = true;
     hasIdx.value = null;
+    exportIdx.value = undefined;
     loadInterpIndex(model)
       .then((idx) => {
         if (!ok) return;
         traces.value = idx.traces ?? [];
         hasIdx.value = true;
+        exportIdx.value = idx;
       })
       .catch(() => {
         if (!ok) return;
         traces.value = [];
         hasIdx.value = false;
+        exportIdx.value = null;
       });
     return () => {
       ok = false;
@@ -170,6 +217,7 @@ export function InterpPage() {
     // loop). The host is laid out by flex inside `.chart-card-body`, so it is
     // the plot area minus the header and the stat strip — the truth.
     const host = canvas?.parentElement;
+    if (chartBlocked) return;
     if (!canvas || !overlay || !host || !model || !feature) return;
 
     let disposed = false;
@@ -274,7 +322,7 @@ export function InterpPage() {
         driverRef.current = null;
       }
     };
-  }, [interp.featureId, model, tier, resolvedTrace]);
+  }, [interp.featureId, model, tier, resolvedTrace, chartBlocked]);
 
   // cross-view linking (2a): forward every selection change to the live driver
   const sel = $interpSelection.value;
@@ -325,6 +373,7 @@ export function InterpPage() {
   const activeTour = tourRef ? findTour(tourRef.id) : undefined;
   const tourStep = activeTour && tourRef ? activeTour.steps[tourRef.step] : undefined;
   const modelTours = TOURS.filter((t) => t.model === model);
+  const setModel = (id: string) => appStore.getState().setInterpModel(id);
   const exitTour = () => appStore.getState().setTour(null);
   const startTour = (id: string) => {
     const t = findTour(id);
@@ -413,19 +462,87 @@ export function InterpPage() {
     byGroup.set(f.group, arr);
   }
 
+  const idxNow = exportIdx.value;
+  const railCount =
+    idxNow === undefined
+      ? `${FEATURE_IDS.length} registered`
+      : `${availableCount(FEATURE_IDS, idxNow)} of ${FEATURE_IDS.length} available`;
+
+  // Research lists its analyses first; tours run in Learn and come last there
+  const toursSection = (
+          <section class="interp-rail-group interp-tours">
+            <h2 class="interp-rail-group-title">{research ? "Guided tours, in Learn" : "Guided tours"}</h2>
+            {research && modelTours.length > 0 ? (
+              // tours run in Learn, with their step controls; Research links
+              // there rather than hosting a lesson behind its own title
+              modelTours.map((t) => (
+                <a
+                  key={t.id}
+                  class="interp-feature interp-tour-btn"
+                  href={learnTourHref(t.id)}
+                  title={t.blurb}
+                >
+                  <span class="interp-feature-n">⚑</span>
+                  <span class="interp-feature-label">{t.label}</span>
+                  <span class="interp-feature-avail">opens Learn</span>
+                </a>
+              ))
+            ) : modelTours.length > 0 ? (
+              modelTours.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  class={`interp-feature interp-tour-btn${tourRef?.id === t.id ? " is-active" : ""}`}
+                  title={t.blurb}
+                  onClick={() => startTour(t.id)}
+                >
+                  <span class="interp-feature-n">⚑</span>
+                  <span class="interp-feature-label">{t.label}</span>
+                </button>
+              ))
+            ) : (
+              <p class="interp-tours-hint">
+                tours quote gpt2 bundle numbers — switch to gpt2 to take one
+              </p>
+            )}
+          </section>
+  );
+
+  const railIsOpen = railOpen.value ?? !feature;
   return (
-    <div class="interp-page" role="main">
-      <aside class="interp-rail">
+    <div class={`interp-page${intro ? " has-task" : ""}`} role="main">
+      <aside class={`interp-rail${narrow.value && !railIsOpen ? " is-collapsed" : ""}`}>
         <div class="interp-rail-head">
-          <span class="interp-rail-title">Internals</span>
-          <span class="interp-rail-count">{INTERP_FEATURES.length} live</span>
+          <h1 class="interp-rail-title">Internals</h1>
+          <span class="interp-rail-count">{railCount}</span>
         </div>
+        {narrow.value && (
+          <button
+            type="button"
+            class="interp-rail-toggle"
+            aria-expanded={railIsOpen}
+            aria-controls="interp-rail-list"
+            onClick={() => (railOpen.value = !railIsOpen)}
+          >
+            <span class="interp-rail-toggle-label">Analysis</span>
+            <span class="interp-rail-toggle-value">
+              {feature ? `#${feature.n} ${feature.label}` : "Choose an analysis"}
+            </span>
+            <span class="interp-rail-toggle-caret" aria-hidden="true">
+              ▾
+            </span>
+          </button>
+        )}
         <div class="interp-model">
           <SelectRow
             label="Model"
             value={model ?? ""}
-            disabled={$loading.value.active || $viewMode.value === "compare"}
-            options={$datasets.value.map((d) => {
+            disabled={!research && $viewMode.value === "compare"}
+            options={$datasets.value
+              // Research lists only exports it can open; elsewhere map-only
+              // models stay visible, marked as such
+              .filter((d) => !research || avail === null || avail[d.id] || d.id === model)
+              .map((d) => {
               const has = avail?.[d.id];
               return {
                 value: d.id,
@@ -433,8 +550,17 @@ export function InterpPage() {
                   has === true ? `${d.id} ✓` : has === false ? `${d.id} — map only` : d.id,
               };
             })}
-            onChange={(id) => requestDataset(id)}
+            onChange={setModel}
           />
+          {research && (
+            <button
+              type="button"
+              class="interp-model-back"
+              onClick={() => appStore.getState().setInterpModel(null)}
+            >
+              All exports
+            </button>
+          )}
           <p class="interp-model-hint">
             {avail === null
               ? "checking which models have an internals export…"
@@ -463,40 +589,28 @@ export function InterpPage() {
             </button>
           </div>
         )}
-        <div class="interp-rail-scroll">
-          <section class="interp-rail-group interp-tours">
-            <h4 class="interp-rail-group-title">Guided tours</h4>
-            {modelTours.length > 0 ? (
-              modelTours.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  class={`interp-feature interp-tour-btn${tourRef?.id === t.id ? " is-active" : ""}`}
-                  title={t.blurb}
-                  onClick={() => startTour(t.id)}
-                >
-                  <span class="interp-feature-n">⚑</span>
-                  <span class="interp-feature-label">{t.label}</span>
-                </button>
-              ))
-            ) : (
-              <p class="interp-tours-hint">
-                tours quote gpt2 bundle numbers — switch to gpt2 to take one
-              </p>
-            )}
-          </section>
+        <div class="interp-rail-scroll" id="interp-rail-list">
+          {!research && toursSection}
           {[...byGroup.entries()].map(([group, feats]) => (
             <section key={group} class="interp-rail-group">
-              <h4 class="interp-rail-group-title">{GROUP_LABEL[group]}</h4>
-              {feats.map((f) => (
+              <h2 class="interp-rail-group-title">{GROUP_LABEL[group]}</h2>
+              {feats.map((f) => {
+                const a = availability(f.id, idxNow);
+                return (
                 <button
                   key={f.id}
                   type="button"
-                  class={`interp-feature${f.id === interp.featureId ? " is-active" : ""}`}
-                  onClick={() => appStore.getState().setInterpFeature(f.id)}
+                  class={`interp-feature${f.id === interp.featureId ? " is-active" : ""}${a.state === "missing" ? " is-unavailable" : ""}`}
+                  title={a.state === "missing" || a.state === "live" ? a.reason : undefined}
+                  onClick={() => {
+                    appStore.getState().setInterpFeature(f.id);
+                    if (narrow.value) railOpen.value = false;
+                  }}
                 >
                   <span class="interp-feature-n">#{f.n}</span>
                   <span class="interp-feature-label">{f.label}</span>
+                  {a.state === "missing" && <span class="interp-feature-avail">not exported</span>}
+                  {a.state === "live" && <span class="interp-feature-avail">live server</span>}
                   {sel && f.linksTo?.includes(sel.kind) && (
                     <span
                       class="interp-feature-link"
@@ -504,9 +618,11 @@ export function InterpPage() {
                     />
                   )}
                 </button>
-              ))}
+                );
+              })}
             </section>
           ))}
+          {research && toursSection}
         </div>
         <p class="interp-rail-foot">
           Each view renders one real computed quantity. Hover any curve for exact
@@ -578,7 +694,16 @@ export function InterpPage() {
           </div>
         )}
 
+        {model && model !== "gpt2" && (
+          // the registry's descriptions are written against GPT-2 small; say
+          // so rather than let its counts pass as this export's
+          <p class="interp-model-note">
+            The descriptions on this page quote GPT-2 small (12 layers, 768 dimensions). {model}{" "}
+            has its own sizes, shown in the chart and its figures.
+          </p>
+        )}
         <ChartCard
+          level={2}
           class="interp-chart"
           n={feature?.n}
           title={feature?.label ?? "Internals"}
@@ -620,6 +745,9 @@ export function InterpPage() {
             from the registry, zero driver changes), and given a visible focus
             ring in CSS. Exact per-point values are announced by the driver's
             tooltip, which is an aria-live="polite" status region. */}
+        {chartBlocked === "static" && feature ? (
+          <StaticChart feature={feature} model={model} intro={!!intro} idx={idxNow} />
+        ) : (
         <div
           class="interp-canvas-host"
           tabIndex={0}
@@ -641,6 +769,7 @@ export function InterpPage() {
           <canvas key={interp.featureId} ref={canvasRef} class="interp-canvas" />
           <div ref={overlayRef} class="interp-overlay" />
         </div>
+        )}
 
         {/* The intervention figure is half stage and half text: the columns say
             how far the distribution moved, the rail says what it moved to. The
@@ -665,7 +794,7 @@ export function InterpPage() {
                 ×
               </button>
             </div>
-            <h4 class="interp-tourbar-title">{tourStep.title}</h4>
+            <h3 class="interp-tourbar-title">{tourStep.title}</h3>
             <p class="interp-tourbar-caption">{tourStep.caption}</p>
             <div class="interp-tourbar-nav">
               <button
@@ -686,7 +815,7 @@ export function InterpPage() {
           </div>
         )}
 
-        {feature && (
+        {feature && !chartBlocked && (
           <div
             class={`interp-legend corner-${feature.legendCorner ?? "tr"}${legendIsOpen ? "" : " is-collapsed"}`}
           >
@@ -699,7 +828,11 @@ export function InterpPage() {
               <span class="interp-legend-n">#{feature.n}</span>
               <h3 class="interp-legend-title">key</h3>
             </div>
-            {legendIsOpen && <p class="interp-legend-blurb">{feature.blurb}</p>}
+            {legendIsOpen && (
+              <p class="interp-legend-blurb" tabIndex={0} role="note" aria-label="About this chart">
+                {feature.blurb}
+              </p>
+            )}
             {legendIsOpen && feature.legend && (
               <ul class="interp-legend-keys">
                 {feature.legend.map((k) => (
@@ -717,7 +850,17 @@ export function InterpPage() {
           </div>
         )}
 
-        {$loading.value.active ? (
+        {chartBlocked === "pending" ? (
+          <div class="interp-status is-loading">
+            <strong>Checking the file</strong>
+            <span>The chart opens once {intro?.bundle_path} matches the release.</span>
+          </div>
+        ) : chartBlocked === "failed" ? (
+          <div class="interp-status is-error">
+            <strong>Chart withheld</strong>
+            <span>The pinned file failed its check. The task panel says what was found.</span>
+          </div>
+        ) : chartBlocked ? null : !research && $loading.value.active ? (
           <div class="interp-status is-loading">
             <strong>Switching model…</strong>
             <span>
@@ -753,7 +896,7 @@ export function InterpPage() {
             </span>
           </div>
         ) : null}
-        {status.value === "error" && !$loading.value.active && isLiveTrace(resolvedTrace) ? (
+        {chartBlocked ? null : status.value === "error" && !$loading.value.active && isLiveTrace(resolvedTrace) ? (
           // the failure is about the typed prompt, not a missing export — say
           // so, and offer the way back to the bundled prompts that DO work
           <div class="interp-status is-error">
@@ -812,7 +955,7 @@ export function InterpPage() {
                       key={d.id}
                       type="button"
                       class="interp-status-switch"
-                      onClick={() => requestDataset(d.id)}
+                      onClick={() => setModel(d.id)}
                     >
                       switch to {d.id}
                     </button>
@@ -832,6 +975,46 @@ export function InterpPage() {
         )}
         </ChartCard>
       </div>
+      {intro && <ResearchTask ri={intro} staticTier={staticTier} />}
+    </div>
+  );
+}
+
+/** No WebGL or WebGPU: the chart cannot be drawn, but what it would plot can
+ *  still be stated exactly, and its source files are still the evidence. */
+function StaticChart(props: {
+  feature: NonNullable<ReturnType<typeof findFeature>>;
+  model: string | null;
+  intro: boolean;
+  idx: InterpIndex | null | undefined;
+}) {
+  const { feature, model } = props;
+  const a = availability(feature.id, props.idx);
+  return (
+    <div class="interp-static">
+      <p class="interp-static-lede">
+        <strong>This chart needs WebGL or WebGPU, which this browser does not provide.</strong>{" "}
+        The method and source below say exactly what it plots
+        {props.intro ? ", and the task panel lists its values." : "."}
+      </p>
+      <h3>Method</h3>
+      <p>{feature.math}</p>
+      <h3>Source</h3>
+      <p>{feature.source}</p>
+      {model && a.state === "available" && (
+        <p class="interp-static-files">
+          Source file{a.files.length > 1 ? "s" : ""}:{" "}
+          {a.files.map((f, i) => (
+            <span key={f}>
+              {i > 0 && ", "}
+              <a href={`${interpBase(model)}/${f}`} download={`${model}-${f}`}>
+                {f}
+              </a>
+            </span>
+          ))}
+        </p>
+      )}
+      {a.state === "missing" && <p class="interp-static-files">{a.reason}</p>}
     </div>
   );
 }

@@ -25,6 +25,12 @@ import {
   type ViewMode,
 } from "../app/store";
 import { requestViewMode } from "../app/actions";
+import { isExperience, type Experience } from "../app/experience";
+import type { PinParse } from "../data/finding";
+
+/** The pinned-unit hash keys (data/finding.ts PIN_KEYS), repeated here as
+ *  plain strings so writing them needs no NebulAI-only import. */
+const PIN_KEYS = ["artifact", "point", "unit_kind", "unit_index"] as const;
 
 const VIEWS: readonly ViewMode[] = ["atlas", "chord", "hierarchy", "compare"];
 const BVIEWS: readonly BehaviorView[] = ["landscape", "ranked", "table"];
@@ -53,6 +59,11 @@ export interface InterpUrlHooks {
   /** play episode `id` at `step`. Asynchronous inside — a step may name a model
    *  that still has to be fetched — so it is injected rather than imported. */
   runEpisode?(id: string, step: number): void;
+  /** validate Learn's `lesson` / `lesson_step` keys against the lesson
+   *  registry; returns the namespaced tour id and a valid step */
+  parseLesson?(lesson: string | null, step: string | null): { tourId: string; step: number } | null;
+  /** parse the pinned-unit keys (NebulAI only; Seer has no atlas units) */
+  parsePin?(p: URLSearchParams): PinParse;
 }
 
 const NO_INTERP: InterpUrlHooks = { knownFeature: () => false, shareableTrace: () => false };
@@ -90,6 +101,15 @@ export interface UrlState {
   cue?: string;
   /** Behavior: landscape | ranked | table */
   bview?: BehaviorView;
+  /** NebulAI experience named by the link. Kept RAW: whether it can host the
+   *  rest of the link is app/experience.ts's decision, and an unknown value is
+   *  simply ignored there. */
+  experience?: string;
+  /** contextual help's way back (`return=atlas`) */
+  returnTo?: Experience;
+  /** pinned unit: a verified identity tuple, or why the keys are unusable.
+   *  Absent when the link names no pin at all. */
+  pin?: Exclude<PinParse, null>;
 }
 
 /** Parse the current hash. Unknown keys/values are dropped, never guessed. */
@@ -156,10 +176,23 @@ export function readUrlState(): UrlState {
     const step = Number(p.get("step") ?? "0");
     out.step = Number.isInteger(step) && step >= 0 ? step : 0;
   }
+  // Learn's lesson keys ride the same runner as episodes, under a namespaced
+  // tour id; a recognised lesson wins over a stray episode key
+  const lesson = interpHooks.parseLesson?.(p.get("lesson"), p.get("lesson_step")) ?? null;
+  if (lesson) {
+    out.episode = lesson.tourId;
+    out.step = lesson.step;
+  }
   const cue = p.get("cue");
   if (cue && cue.trim()) out.cue = cue;
   const bview = p.get("bview");
   if (bview && (BVIEWS as readonly string[]).includes(bview)) out.bview = bview as BehaviorView;
+  const experience = p.get("experience");
+  if (experience) out.experience = experience;
+  const ret = p.get("return");
+  if (isExperience(ret)) out.returnTo = ret;
+  const pin = interpHooks.parsePin?.(p) ?? null;
+  if (pin) out.pin = pin;
   return out;
 }
 
@@ -193,11 +226,35 @@ export function applyUrlState(u: UrlState): void {
   if (u.episode) interpHooks.runEpisode?.(u.episode, u.step ?? 0);
 }
 
+/** The model the address named at boot. Until the first load starts,
+ *  resolves or fails, the store has no dataset yet — and a hash rewritten in
+ *  that window would drop `model=`, so a link copied (or a return address
+ *  remembered) a moment after opening would lose the map it was opened on. */
+let bootModel: string | null = null;
+/** The pin keys exactly as the boot link carried them. A malformed pin is
+ *  kept in the address while its error is on screen, so the link the visitor
+ *  pasted is still the one they can copy back and inspect. */
+let bootPinRaw: [string, string][] = [];
+
 function buildHash(): string {
   const st = appStore.getState();
+  if (bootModel && (st.datasetId || st.pendingDatasetId || st.loadError || st.interpModel))
+    bootModel = null;
+  // Internals names its own model. Research's Internals never borrows the
+  // map's: with no export chosen, the address carries none (the chooser).
+  const model =
+    st.page === "interp" && st.interpModel
+      ? st.interpModel
+      : st.experience === "research" && st.page === "interp"
+        ? bootModel
+        : (st.pendingDatasetId ?? st.datasetId ?? bootModel);
   const p = new URLSearchParams();
+  // the experience is written explicitly so a link pasted anywhere under the
+  // app — including the root chooser — reopens in the same context
+  if (st.experience) p.set("experience", st.experience);
   p.set("page", st.page);
-  if (st.datasetId) p.set("model", st.datasetId);
+  if (model) p.set("model", model);
+  const pin = st.pin;
   if (st.page === "map") {
     if (st.viewMode !== "atlas") p.set("view", st.viewMode);
     if (st.dims === 3) p.set("dims", "3");
@@ -217,6 +274,25 @@ function buildHash(): string {
       // opens with the null on, which is the only default R5 allows.
       if (!st.axis.showNull) p.set("axisnull", "0");
     }
+    // a pin is written only while it is honest: the verified unit is still
+    // the selection, it is still loading, or its link failed and is on screen
+    if (pin.status === "ok" || pin.status === "pending") {
+      p.set("model", pin.pin.datasetId);
+      p.set("artifact", pin.pin.sha256);
+      p.set("point", String(pin.pin.pointId));
+      p.set("unit_kind", pin.pin.unitKind);
+      p.set("unit_index", String(pin.pin.unitIndex));
+    } else if (pin.status === "error" && pin.source === "link") {
+      if (pin.pin) {
+        p.set("model", pin.pin.datasetId);
+        p.set("artifact", pin.pin.sha256);
+        p.set("point", String(pin.pin.pointId));
+        p.set("unit_kind", pin.pin.unitKind);
+        p.set("unit_index", String(pin.pin.unitIndex));
+      } else {
+        for (const [k, v] of bootPinRaw) p.set(k, v);
+      }
+    }
   } else if (st.page === "behavior") {
     if (st.behavior.view !== "landscape") p.set("bview", st.behavior.view);
     if (st.behavior.cue) p.set("cue", st.behavior.cue);
@@ -231,9 +307,15 @@ function buildHash(): string {
   // an episode is a position in a narrative, not a property of one page: it has
   // to survive the step that carries it from Internals to the Map
   if (st.tour) {
-    p.set("episode", st.tour.id);
-    p.set("step", String(st.tour.step));
+    if (st.tour.id.startsWith("lesson:")) {
+      p.set("lesson", st.tour.id.slice("lesson:".length));
+      p.set("lesson_step", String(st.tour.step));
+    } else {
+      p.set("episode", st.tour.id);
+      p.set("step", String(st.tour.step));
+    }
   }
+  if (st.returnTo) p.set("return", st.returnTo);
   return `#${p.toString()}`;
 }
 
@@ -243,6 +325,9 @@ function buildHash(): string {
  *  which would leave the hash stale exactly when a user copies a link from a
  *  backgrounded window. */
 export function startUrlSync(): void {
+  bootModel = readUrlState().model ?? null;
+  const raw = new URLSearchParams(location.hash.replace(/^#/, ""));
+  bootPinRaw = PIN_KEYS.filter((k) => raw.has(k)).map((k) => [k, raw.get(k)!]);
   let queued = false;
   const sync = () => {
     queued = false;

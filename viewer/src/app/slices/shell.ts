@@ -14,6 +14,7 @@
 import type { StateCreator } from "zustand";
 import type { Capabilities } from "@psychix/viz/capabilities";
 import type { AppState } from "../store";
+import type { Experience } from "../experience";
 
 /** Which instrument this document is. Set once at boot by the entry module
  *  (`main.ts` → "nebulai", `seer-main.ts` → "seer") and never again: it is the
@@ -100,6 +101,17 @@ export interface ShellSlice {
   settings: Settings;
   settingsOpen: boolean; // Settings page overlay visibility
   page: Page;
+  /** NebulAI's experience (Learn · Atlas · Research), resolved once at boot
+   *  from the entry path and the permalink. null on Seer and before boot.
+   *  Switching experience is a navigation to another entry, not a store write,
+   *  so this is write-once in practice — see app/experience.ts. */
+  experience: Experience | null;
+  /** One-shot explanation shown when boot had to open a different
+   *  experience than the one the link asked for. */
+  experienceNotice: string | null;
+  /** Where contextual help came from (Atlas → Learn), so Learn can offer the
+   *  way back. Travels in the hash as `return=`; never inferred. */
+  returnTo: Experience | null;
 
   /** Declare which instrument is running and land on its first page. Called
    *  exactly once, by the entry module, before the chrome mounts. */
@@ -108,6 +120,8 @@ export interface ShellSlice {
   setSetting<K extends keyof Settings>(key: K, value: Settings[K]): void;
   setSettingsOpen(open: boolean): void;
   setPage(p: Page): void;
+  setExperience(e: Experience | null, notice?: string | null, returnTo?: Experience | null): void;
+  dismissExperienceNotice(): void;
 }
 
 export const createShellSlice: StateCreator<AppState, [], [], ShellSlice> = (set) => ({
@@ -130,6 +144,9 @@ export const createShellSlice: StateCreator<AppState, [], [], ShellSlice> = (set
   },
   settingsOpen: false,
   page: "map",
+  experience: null,
+  experienceNotice: null,
+  returnTo: null,
 
   setApp: (app) => set({ app, page: APP_PAGES[app][0]! }),
   setCapabilities: (capabilities) => set({ capabilities }),
@@ -146,4 +163,7 @@ export const createShellSlice: StateCreator<AppState, [], [], ShellSlice> = (set
   // `map`, whichever way the request arrived (nav click or permalink).
   setPage: (page) =>
     set((s) => (APP_PAGES[s.app].includes(page) ? { page } : {})),
+  setExperience: (experience, notice = null, returnTo = null) =>
+    set({ experience, experienceNotice: notice, returnTo: returnTo === experience ? null : returnTo }),
+  dismissExperienceNotice: () => set({ experienceNotice: null }),
 });

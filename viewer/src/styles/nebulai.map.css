@@ -45,6 +45,7 @@
   white-space: nowrap;
   pointer-events: auto;
   cursor: pointer;
+  touch-action: none; /* a pan/pinch that starts on a pill drives the map */
   will-change: transform;
   transition:
     color var(--t-fast) var(--ease-out),
@@ -159,7 +160,7 @@
 
 .compare-panel {
   max-width: 300px;
-  max-height: min(72vh, 560px);
+  max-height: min(calc(72vh / var(--chrome-zoom, 1)), 560px);
   overflow-y: auto;
 }
 
@@ -179,7 +180,7 @@
        grow to 560px and put its top edge at y112 — 6px UNDER the nav. This is
        the band that is actually free: 140px reserved below (see above) plus
        130px above (nav bottom + the same 12px gap the FAB row uses). */
-    max-height: calc(100vh - 270px);
+    max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - 270px);
   }
   .compare-fab {
     bottom: 140px;
@@ -571,12 +572,12 @@
 
 .search-panel {
   position: absolute;
-  top: 76px;
+  top: var(--nav-clear);
   right: 32px;
   display: flex;
   flex-direction: column;
   width: 300px;
-  max-height: calc(100vh - 320px);
+  max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - 320px);
   padding: 14px 16px 16px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-card);
@@ -587,7 +588,7 @@
 
 .search-fab {
   position: absolute;
-  top: 76px;
+  top: var(--nav-clear);
   right: 32px;
   padding: 9px 18px;
   border: 1px solid var(--hairline);
@@ -1039,7 +1040,7 @@
   left: 16px;
   bottom: 16px;
   width: 300px;
-  max-height: 46vh;
+  max-height: calc(46vh / var(--chrome-zoom, 1));
   overflow-y: auto;
   padding: 12px 14px 14px;
   border: 1px solid var(--hairline);
@@ -1243,4 +1244,312 @@
   margin: 5px 0 0;
   color: var(--text-faint);
   font: 400 9.5px/1.5 var(--font-ui);
+}
+
+/* ── Research Comparisons: explicit map chooser (chrome/MapChooser.tsx) ── */
+
+.map-chooser {
+  position: fixed;
+  inset: var(--page-top) 0 0 0;
+  z-index: 5;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: clamp(28px, calc(5vh / var(--chrome-zoom, 1)), 56px) max(16px, calc((calc(100vw / var(--chrome-zoom, 1)) - var(--chooser-max, 1120px)) / 2)) 64px;
+  background: var(--bg);
+}
+
+.map-chooser-head {
+  max-width: 68ch;
+  margin-bottom: 20px;
+}
+
+.map-chooser-kicker {
+  margin: 0 0 8px;
+  color: var(--accent);
+  font: 600 11px/1.3 var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.map-chooser-title {
+  margin: 0 0 10px;
+  color: var(--text);
+  font: 700 clamp(26px, calc(3vw / var(--chrome-zoom, 1)), 36px)/1.15 var(--font-ui);
+  letter-spacing: -0.02em;
+}
+
+.map-chooser-lede,
+.map-chooser-empty {
+  margin: 0 0 16px;
+  color: var(--text-dim);
+  font: 400 14px/1.6 var(--font-ui);
+}
+
+.map-chooser-error {
+  margin: 0 0 12px;
+  color: var(--danger);
+  font: 500 12.5px/1.45 var(--font-ui);
+}
+
+.map-chooser-tools {
+  position: sticky;
+  top: calc(-1 * clamp(28px, calc(5vh / var(--chrome-zoom, 1)), 56px));
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin: 0 0 8px;
+  padding: 10px 0;
+  background: var(--bg);
+}
+
+.map-chooser-search {
+  flex: 1 1 280px;
+  max-width: 420px;
+}
+
+.map-chooser-search input {
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 0 14px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-raise);
+  color: var(--text);
+  font: 400 14px/1 var(--font-ui);
+}
+
+.map-chooser-search input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.map-chooser-count {
+  margin: 0;
+  color: var(--text-dim);
+  font: 500 12px/1.3 var(--font-ui);
+}
+
+.map-chooser-group {
+  margin-top: 22px;
+}
+
+.map-chooser-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 10px;
+  color: var(--text);
+  font: 650 13px/1.3 var(--font-ui);
+  letter-spacing: 0.02em;
+}
+
+.map-chooser-group-title span {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.map-chooser-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.map-chooser-item {
+  display: grid;
+  grid-template-columns: 112px 1fr;
+  gap: 14px;
+  align-items: start;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--bg-raise);
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease-out);
+}
+
+.map-chooser-item:hover:not(:disabled),
+.map-chooser-item:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--hairline));
+  outline: none;
+}
+
+.map-chooser-item:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.map-chooser-item:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.map-chooser-body {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.map-chooser-name {
+  font: 650 15px/1.3 var(--font-ui);
+}
+
+.map-chooser-sub {
+  color: var(--text);
+  font: 400 13px/1.4 var(--font-ui);
+  opacity: 0.86;
+}
+
+.map-chooser-meta,
+.map-chooser-state {
+  color: var(--text-dim);
+  font: 400 12px/1.4 var(--font-ui);
+}
+
+.map-chooser-id {
+  color: var(--text-dim);
+  font: 400 11px/1.4 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.map-chooser-more,
+.map-chooser-link {
+  min-height: 44px;
+  margin-top: 8px;
+  padding: 0 14px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--text);
+  font: 600 13px/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.map-chooser-link {
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* ── shared map thumbnail (chrome/DatasetThumb.tsx) ── */
+
+.dataset-thumb {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  aspect-ratio: 8 / 5;
+  border: 1px solid var(--hairline);
+  border-radius: calc(var(--radius-card) - 4px);
+  background:
+    radial-gradient(80% 90% at 50% 50%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 70%),
+    #0e0f12;
+}
+
+.dataset-thumb img,
+.dataset-thumb svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.dataset-thumb-caption {
+  position: absolute;
+  left: 8px;
+  bottom: 6px;
+  color: rgba(255, 255, 255, 0.78);
+  font: 500 11px/1.3 var(--font-ui);
+  text-shadow: 0 1px 3px #000;
+}
+
+@media (min-width: 721px) {
+  .map-chooser-list {
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  }
+  .map-chooser-item {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .map-chooser-body {
+    padding: 0 4px 4px;
+  }
+}
+
+@media (max-width: 520px) {
+  .map-chooser-item {
+    grid-template-columns: 96px 1fr;
+  }
+}
+
+/* Atlas's replacement for the Type select (Sidebar AdvancedHandoff). */
+.sidebar-handoff {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  align-items: baseline;
+  padding: 6px 0;
+}
+
+.sidebar-handoff-label {
+  color: var(--text-dim);
+  font: 500 12px/1.3 var(--font-ui);
+}
+
+.sidebar-handoff-value {
+  justify-self: end;
+  color: var(--text);
+  font: 600 12px/1.3 var(--font-ui);
+}
+
+.sidebar-handoff-link {
+  grid-column: 1 / -1;
+  color: var(--text-dim);
+  font: 500 11.5px/1.4 var(--font-ui);
+  text-decoration: underline;
+  text-decoration-color: var(--hairline-strong);
+  text-underline-offset: 3px;
+}
+
+.sidebar-handoff-link:hover,
+.sidebar-handoff-link:focus-visible {
+  color: var(--text);
+}
+
+/* 4K: the pills live in #overlay-html (screen-px positioned by the camera),
+   not in the zoomed #chrome, so they grow by type size instead of `zoom` —
+   a zoom would scale their translate() and misplace them. */
+@media (min-width: 2200px) {
+  .cluster-pill {
+    gap: 9px;
+    max-width: 300px;
+    padding: 7px 16px;
+    font-size: 15px;
+  }
+
+  .cluster-pill::before {
+    width: 8px;
+    height: 8px;
+  }
+}
+
+@media (min-width: 3000px) {
+  .cluster-pill {
+    max-width: 380px;
+    padding: 8px 20px;
+    font-size: 19px;
+  }
 }

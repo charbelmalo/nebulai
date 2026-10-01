@@ -21,6 +21,7 @@
  *  At a few hundred cues the file is small, so this is a plain fetch with no
  *  worker, following `data/compare.ts`. */
 
+import { behaviorStudyPublished } from "./experience";
 import { DATA_BASE } from "./base";
 
 /** One arm (one pinned model deployment) of one cue. */
@@ -259,6 +260,9 @@ let cached: BehaviorData | null | undefined;
  *  renders an explanation of what would produce the file. */
 export async function loadBehavior(base = DATA_BASE): Promise<BehaviorData | null> {
   if (cached !== undefined) return cached;
+  // the release manifest says no study ships here: do not request a file
+  // the host is known not to have (it only produced a 404 in the console)
+  if (behaviorStudyPublished() === false) return (cached = null);
   try {
     const res = await fetch(`${base}/behavior/behavior.json`);
     cached = res.ok ? ((await res.json()) as BehaviorData) : null;

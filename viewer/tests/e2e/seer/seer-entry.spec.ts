@@ -91,12 +91,13 @@ test("seer.html boots the shared shell with no atlas artifacts", async ({ page }
   expect(errors).toEqual([]);
 });
 
-test("seer.html navigates its own three pages and no others", async ({ page }) => {
+test("seer.html navigates its own four pages and no others", async ({ page }) => {
   await bootSeer(page);
 
   expect(await page.locator(".topnav-pill").allInnerTexts()).toEqual([
     "Live",
     "Transcripts",
+    "Keywords",
     "Topics",
   ]);
 
@@ -105,6 +106,9 @@ test("seer.html navigates its own three pages and no others", async ({ page }) =
   await page.locator(".topnav-pill", { hasText: "Transcripts" }).click();
   expect(await page.evaluate(() => window.__store.getState().page)).toBe("sessions");
   await expect(page.locator(".sessions-page")).toBeVisible();
+
+  await page.locator(".topnav-pill", { hasText: "Keywords" }).click();
+  expect(await page.evaluate(() => window.__store.getState().page)).toBe("keyword");
 
   await page.locator(".topnav-pill", { hasText: "Topics" }).click();
   expect(await page.evaluate(() => window.__store.getState().page)).toBe("snapshot");
@@ -131,11 +135,11 @@ test("seer.html links back to Nebulai as the other instrument", async ({ page })
   );
 
   // it really is a way out of this document, not a nav pill in disguise
+  // NebulAI's root is now its experience chooser: Seer hands the visitor the
+  // choice of Learn / Atlas / Research rather than dropping them into one
   await cross.click();
-  await page.waitForFunction(() => window.__store?.getState().app === "nebulai", undefined, {
-    timeout: 45_000,
-  });
-  expect(await page.evaluate(() => window.__store.getState().page)).toBe("map");
+  await page.waitForURL(/\/index\.html$/);
+  await expect(page.locator(".chooser-card-link")).toHaveCount(3);
 });
 
 test("an Internals permalink opened on seer.html is refused, not half-applied", async ({

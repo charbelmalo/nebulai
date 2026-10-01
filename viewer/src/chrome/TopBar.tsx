@@ -60,20 +60,32 @@ export function TopBar({ app }: { app: AppShell }) {
   return (
     <>
       <header class="topbar">
-        <BrandMark mark={app.mark} />
-        <span class="topbar-word" title={app.tagline}>
-          {app.wordmark.head}
-          {app.wordmark.tail && <span class="topbar-word-dim">{app.wordmark.tail}</span>}
-        </span>
+        {app.homeHref ? (
+          <a class="topbar-home" href={app.homeHref} title={`${app.tagline} — all experiences`}>
+            <BrandMark mark={app.mark} />
+            <Wordmark app={app} />
+          </a>
+        ) : (
+          <>
+            <BrandMark mark={app.mark} />
+            <Wordmark app={app} />
+          </>
+        )}
+        {app.renderBrandExtras?.()}
       </header>
-      <nav class="topnav" aria-label="Primary">
-        {app.nav.map((item) => (
-          <NavPill key={item.page} label={item.label} pageId={item.page} active={page} />
-        ))}
-        <span class="topnav-sep" aria-hidden="true" />
-        <CrossLink link={app.sibling} />
-        {app.hub && <CrossLink link={app.hub} />}
-      </nav>
+      {app.renderTopNav ? (
+        app.renderTopNav()
+      ) : (
+        <nav class="topnav" aria-label="Primary">
+          {app.nav.map((item) => (
+            <NavPill key={item.page} label={item.label} pageId={item.page} active={page} />
+          ))}
+          <span class="topnav-sep" aria-hidden="true" />
+          <CrossLink link={app.sibling} />
+          {app.hub && <CrossLink link={app.hub} />}
+        </nav>
+      )}
+      {app.renderBanner?.()}
       <div class="topbar-tools">
         <button
           type="button"
@@ -146,6 +158,15 @@ export function TopBar({ app }: { app: AppShell }) {
         <span>Settings</span>
       </button>
     </>
+  );
+}
+
+function Wordmark({ app }: { app: AppShell }) {
+  return (
+    <span class="topbar-word" title={app.tagline}>
+      {app.wordmark.head}
+      {app.wordmark.tail && <span class="topbar-word-dim">{app.wordmark.tail}</span>}
+    </span>
   );
 }
 

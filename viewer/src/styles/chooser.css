@@ -1,0 +1,302 @@
+/* chooser.css — the NebulAI root chooser. Owner: src/chooser-main.ts only.
+   Deliberately self-contained: the chooser loads the two token sheets and
+   this file, nothing from the app chrome, so it paints before any app code
+   has been fetched. Same editorial dark system as the app: graphite
+   surfaces, monochrome type, one accent, sharp corners. */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body.chooser {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+/* the hero image bleeds past the column; never let it scroll the page */
+html:has(body.chooser) {
+  overflow-x: clip;
+}
+/* with html non-visible, body's overflow no longer propagates to the
+   viewport, so this clips the bleed at the body box and scrollWidth stays
+   at the viewport (iPad Safari still pans a merely hidden overflow) */
+body.chooser {
+  overflow-x: clip;
+}
+
+.chooser-main {
+  position: relative;
+  isolation: isolate;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: clamp(28px, calc(7vh / var(--chooser-zoom, 1)), 88px) 16px 48px;
+}
+
+/* 4K: the page is laid out in CSS px; scale it as a whole (vh above is
+   divided back out, since viewport units inside a zoomed box are zoomed) */
+@media (min-width: 2200px) {
+  .chooser-main {
+    --chooser-zoom: 1.35;
+    zoom: 1.35;
+  }
+}
+@media (min-width: 3000px) {
+  .chooser-main {
+    --chooser-zoom: 1.75;
+    zoom: 1.75;
+  }
+}
+
+/* the real map, faded in behind the headline */
+.chooser-hero {
+  position: absolute;
+  z-index: -1;
+  top: -20px;
+  right: -12%;
+  width: min(78%, 900px);
+  height: auto;
+  opacity: 0.55;
+  pointer-events: none;
+  user-select: none;
+  -webkit-mask-image: radial-gradient(closest-side, #000 55%, transparent);
+  mask-image: radial-gradient(closest-side, #000 55%, transparent);
+}
+@media (max-width: 860px) {
+  .chooser-main {
+    overflow-x: clip;
+  }
+  .chooser-hero {
+    top: 0;
+    right: -30%;
+    width: 110%;
+    opacity: 0.35;
+  }
+}
+
+.chooser-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 28px;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.chooser-brand-dim {
+  color: var(--text-faint);
+}
+.chooser-mark {
+  width: 22px;
+  height: 22px;
+}
+
+.chooser-title {
+  margin: 0;
+  max-width: 18ch;
+  font-size: clamp(30px, 5.2vw, 52px);
+  line-height: 1.05;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+.chooser-lede {
+  margin: 18px 0 0;
+  max-width: 60ch;
+  color: var(--text-dim);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.chooser-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 40px 0 0;
+  padding: 0;
+  list-style: none;
+}
+@media (max-width: 860px) {
+  .chooser-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+.chooser-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 22px 20px 20px;
+  background: var(--bg-raise);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-card);
+  transition:
+    border-color var(--t-fast) var(--ease-out),
+    transform var(--t-fast) var(--ease-out);
+}
+/* the preview sits flush with the card's edges */
+.chooser-card-art {
+  display: block;
+  width: calc(100% + 40px);
+  height: auto;
+  aspect-ratio: 16 / 10;
+  margin: -22px -20px 6px;
+  object-fit: cover;
+  background: #0e0f12;
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* Learn is the suggested first path */
+.chooser-card.is-primary {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--hairline));
+}
+.chooser-card-badge {
+  margin-left: 8px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+.chooser-card.is-primary .chooser-card-kicker {
+  color: var(--accent);
+}
+
+.chooser-card:hover {
+  border-color: var(--hairline-strong);
+  transform: translateY(-1px);
+}
+.chooser-card:focus-within {
+  border-color: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .chooser-card,
+  /* the preview sits flush with the card's edges */
+.chooser-card-art {
+  display: block;
+  width: calc(100% + 40px);
+  height: auto;
+  aspect-ratio: 16 / 10;
+  margin: -22px -20px 6px;
+  object-fit: cover;
+  background: #0e0f12;
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* Learn is the suggested first path */
+.chooser-card.is-primary {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--hairline));
+}
+.chooser-card-badge {
+  margin-left: 8px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+.chooser-card.is-primary .chooser-card-kicker {
+  color: var(--accent);
+}
+
+.chooser-card:hover {
+    transition: none;
+    transform: none;
+  }
+}
+
+.chooser-card-kicker {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.chooser-card-title {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+/* the whole card is the hit target; the link text stays the accessible name */
+.chooser-card-link {
+  color: var(--text);
+  text-decoration: none;
+}
+.chooser-card-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.chooser-card-link:focus-visible {
+  outline: none;
+}
+.chooser-card-link::before {
+  content: "→ ";
+  color: var(--accent);
+}
+.chooser-card-body {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1.5;
+}
+.chooser-card-meta {
+  margin: auto 0 0;
+  padding-top: 8px;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+
+.chooser-foot {
+  margin-top: 40px;
+  padding-top: 20px;
+  border-top: 1px solid var(--hairline);
+  color: var(--text-dim);
+  font-size: 14px;
+}
+.chooser-foot-label {
+  margin: 0 0 8px;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.chooser-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.chooser-tools a {
+  color: var(--text);
+  text-decoration-color: var(--hairline-strong);
+  text-underline-offset: 3px;
+}
+.chooser-tools a:hover {
+  text-decoration-color: var(--accent);
+}
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.chooser-card:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  .chooser-tools a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}

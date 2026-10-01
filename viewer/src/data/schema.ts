@@ -67,6 +67,9 @@ export interface DatasetEntry {
    *  written before this field simply omit it and the viewer falls back to a
    *  network probe. */
   has_interp?: boolean;
+  /** the exported unit kind, e.g. "sae_decoder(gpt2-small-res-jb, blocks.8.hook_resid_pre)";
+   *  read by the choosers to describe a map without fetching it */
+  unit?: string;
 }
 
 export interface DatasetIndex {

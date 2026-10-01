@@ -18,6 +18,30 @@
   box-sizing: border-box;
 }
 
+/* Where content may start below the shared chrome. Pages (full layers) clear
+   the wordmark row; floating panels also clear the centered nav pill. The nav
+   becomes its own row at <=1100px (it cannot fit between the wordmark and the
+   right-hand tools there), and on a touch tablet in landscape its 44px targets
+   make the pill taller, so it lifts and the content steps down to match. */
+:root {
+  --page-top: 60px;
+  --nav-clear: 76px;
+}
+
+@media (max-width: 1100px) {
+  :root {
+    --page-top: 130px;
+    --nav-clear: 130px;
+  }
+}
+
+@media (min-width: 1101px) and (max-width: 1280px) and (pointer: coarse) {
+  :root {
+    --page-top: 74px;
+    --nav-clear: 84px;
+  }
+}
+
 html,
 body {
   margin: 0;
@@ -107,7 +131,7 @@ body {
   /* provenance must stay readable, not clipped: single line while it fits
      (desktop), wrap on narrow viewports */
   width: max-content;
-  max-width: calc(100vw - 24px);
+  max-width: calc(calc(100vw / var(--chrome-zoom, 1)) - 24px);
   text-align: center;
 }
 
@@ -116,7 +140,7 @@ body {
      it one line, truncated, and let a tap reveal the rest (main.ts toggles
      .is-expanded on click) */
   .boot-status {
-    max-width: calc(100vw - 24px);
+    max-width: calc(calc(100vw / var(--chrome-zoom, 1)) - 24px);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -141,3 +165,18 @@ body {
   transition: opacity 400ms ease 600ms;
 }
 
+
+/* Text for assistive technology only: captions, link suffixes, field names
+   whose visual label is the layout itself. */
+.sr-only {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

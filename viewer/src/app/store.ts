@@ -82,12 +82,18 @@ export { DEFAULT_TOPICS } from "./slices/snapshot";
 
 export { APP_PAGES } from "./slices/shell";
 export type { AppId, Page, Settings, ShellSlice } from "./slices/shell";
+export type { Experience } from "./experience";
 export type {
+  AtlasPanel,
   AtlasSlice,
   AxisUI,
   ChannelUI,
   CompareUI,
+  LoadFailure,
+  RendererState,
   MapQuery,
+  PinSource,
+  PinState,
   Selection,
   Toggles,
   ViewMode,

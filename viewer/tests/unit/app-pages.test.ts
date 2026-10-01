@@ -119,3 +119,19 @@ describe("setPage refuses the other instrument's pages", () => {
     expect(appStore.getState().page).toBe(before);
   });
 });
+
+describe("NebulAI experience navigation", () => {
+  it("every experience pill drives a real NebulAI page, and together they reach all four", async () => {
+    const { NEBULAI_EXPERIENCES } = await import("../../src/chrome/apps/nav");
+    const { APP_PAGES } = await import("../../src/app/store");
+    const reached = new Set<string>();
+    for (const exp of Object.values(NEBULAI_EXPERIENCES)) {
+      expect(exp.nav.length, exp.id).toBeGreaterThan(0);
+      for (const item of exp.nav) {
+        expect(APP_PAGES.nebulai, `${exp.id}:${item.label}`).toContain(item.page);
+        reached.add(item.page);
+      }
+    }
+    expect([...reached].sort()).toEqual([...APP_PAGES.nebulai].sort());
+  });
+});

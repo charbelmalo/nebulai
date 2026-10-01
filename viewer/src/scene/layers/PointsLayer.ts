@@ -120,6 +120,12 @@ export class PointsLayer {
   readonly uMorph = uniform(0);
   /** hovered instance index (float compare; -1 = none) */
   readonly uHover = uniform(-1);
+  /** selected point (-1 = none). Drawn as a ringed marker that ignores every
+   *  visibility gate — noise toggle, confidence floor, search and channel dim —
+   *  because a unit the inspector is describing must be findable on the map
+   *  whatever the display toggles say. It rides the point's own position, so
+   *  it follows the 2-D↔3-D morph and the axis layout for free. */
+  readonly uFocus = uniform(-1);
   /** user point-scale multiplier (Additional tab) */
   readonly uScale = uniform(1);
   /** 1 = noise dust visible, 0 = hidden (toggle) */
@@ -236,12 +242,13 @@ export class PointsLayer {
     material.positionNode = this.positionExpression();
 
     const hovered = instanceIndex.toFloat().equal(this.uHover);
+    const focused = instanceIndex.toFloat().equal(this.uFocus);
     // matches grow slightly while a search is live so they read at map zoom
     const searchScale = mix(float(1), mix(float(1), float(1.5), iMatch), this.uSearchMode);
     material.scaleNode = this.uSize
       .mul(this.uScale)
-      .mul(select(hovered, float(2.2), float(1)))
-      .mul(searchScale);
+      .mul(select(focused, float(3.2), select(hovered, float(2.2), float(1))))
+      .mul(select(focused, float(1), searchScale));
 
     // soft disc mask on the quad; hover pops to near-solid
     const d = uv().sub(0.5).length();
@@ -257,7 +264,16 @@ export class PointsLayer {
       .div(this.uChannel.w.sub(this.uChannel.z).max(float(1e-9)))
       .clamp(0, 1);
     const lensColor = select(missing, vec3(...NOT_MEASURED_RGB), rampNode(t));
-    material.colorNode = mix(iColor, lensColor, this.uChannelMode);
+    // the focus marker: a bright ring around a solid core of the point's
+    // own colour — legible on any cluster hue and on the noise grey
+    const ring = d.smoothstep(0.33, 0.39).mul(d.smoothstep(0.44, 0.5).oneMinus());
+    const core = d.smoothstep(0.12, 0.2).oneMinus();
+    const focusMask = ring.max(core);
+    material.colorNode = mix(
+      mix(iColor, lensColor, this.uChannelMode),
+      vec3(1, 1, 1),
+      select(focused, ring, float(0)),
+    );
 
     // visibility gates: noise toggle kills dust; confidence floor cuts weak
     // clustered points (noise is exempt so the two controls stay orthogonal)
@@ -274,11 +290,15 @@ export class PointsLayer {
       select(iValue.greaterThanEqual(this.uChannel.x).and(iValue.lessThanEqual(this.uChannel.y)), float(1), float(0)),
     );
     const channelDim = mix(float(1), mix(float(0.05), float(1), inWindow), this.uChannelMode);
-    material.opacityNode = disc
-      .mul(select(hovered, float(1), iAlpha))
-      .mul(gate)
-      .mul(searchDim)
-      .mul(channelDim);
+    material.opacityNode = select(
+      focused,
+      focusMask,
+      disc
+        .mul(select(hovered, float(1), iAlpha))
+        .mul(gate)
+        .mul(searchDim)
+        .mul(channelDim),
+    );
 
     this.material = material;
     this.object = new THREE.Sprite(material);

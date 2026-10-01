@@ -13,7 +13,7 @@
 
 .seer-page {
   position: fixed;
-  inset: 60px 0 0 0;
+  inset: var(--page-top) 0 0 0;
   z-index: 15;
   display: flex;
   flex-direction: column;
@@ -53,7 +53,7 @@
   padding: 10px 14px;
   border: 1px solid var(--hairline);
   background: var(--bg-raise);
-  font: 400 11px/1.4 var(--font-ui);
+  font: 400 12px/1.4 var(--font-ui);
   color: var(--text-dim);
 }
 
@@ -91,13 +91,13 @@
 .seer-link-hint {
   flex: 1 0 100%;
   color: var(--text-faint);
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .seer-link-hint code,
 .seer-empty code,
 .seer-note code {
-  font: 400 10.5px/1.4 var(--font-mono);
+  font: 400 12px/1.4 var(--font-mono);
   color: var(--text-dim);
   background: var(--bg-pill);
   padding: 1px 5px;
@@ -113,7 +113,7 @@
   border: 1px solid var(--hairline);
   border-left: 2px solid var(--success);
   background: var(--bg-raise);
-  font: 400 10.5px/1.4 var(--font-ui);
+  font: 400 12px/1.4 var(--font-ui);
   color: var(--text-faint);
 }
 
@@ -126,7 +126,7 @@
 .seer-observing-label {
   color: var(--text);
   font-weight: 600;
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.02em;
 }
 
@@ -151,7 +151,7 @@
 .seer-runs h3,
 .seer-card h3 {
   margin: 0;
-  font: 650 10.5px/1.2 var(--font-ui);
+  font: 650 12px/1.2 var(--font-ui);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text-faint);
@@ -162,7 +162,7 @@
 
 .seer-card h4 {
   margin: 0;
-  font: 600 11px/1.3 var(--font-ui);
+  font: 600 12px/1.3 var(--font-ui);
   color: var(--text-dim);
 }
 
@@ -178,7 +178,7 @@
   border-radius: var(--radius-form-pill);
   background: transparent;
   color: var(--text-dim);
-  font: 500 11px/1.2 var(--font-ui);
+  font: 500 12px/1.2 var(--font-ui);
   cursor: pointer;
   transition:
     color var(--t-fast) var(--ease-out),
@@ -203,7 +203,7 @@
   align-items: center;
   gap: 7px;
   color: var(--text-dim);
-  font: 500 11px/1.2 var(--font-ui);
+  font: 500 12px/1.2 var(--font-ui);
   cursor: pointer;
 }
 
@@ -224,7 +224,7 @@
   border-radius: var(--radius-form-ctl);
   background: var(--bg);
   color: var(--text);
-  font: 400 11.5px/1.5 var(--font-ui);
+  font: 400 12px/1.5 var(--font-ui);
   resize: vertical;
 }
 
@@ -251,13 +251,13 @@
 .seer-error {
   margin: 0;
   color: var(--danger);
-  font: 400 11px/1.5 var(--font-ui);
+  font: 400 12px/1.5 var(--font-ui);
 }
 
 .seer-note {
   margin: 0;
   color: var(--text-faint);
-  font: 400 10.5px/1.6 var(--font-ui);
+  font: 400 12px/1.6 var(--font-ui);
 }
 
 /* run list --------------------------------------------------------------- */
@@ -319,14 +319,14 @@
 }
 
 .seer-run-agent {
-  font: 600 11px/1.3 var(--font-ui);
+  font: 600 12px/1.3 var(--font-ui);
   display: inline-flex;
   align-items: center;
   gap: 5px;
 }
 
 .seer-run-mode {
-  font: 500 9px/1 var(--font-mono);
+  font: 500 12px/1 var(--font-mono);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-faint);
@@ -335,7 +335,7 @@
 }
 
 .seer-run-id {
-  font: 400 10px/1.3 var(--font-mono);
+  font: 400 12px/1.3 var(--font-mono);
   color: var(--text-faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -343,7 +343,7 @@
 }
 
 .seer-run-meta {
-  font: 400 10px/1.3 var(--font-mono);
+  font: 400 12px/1.3 var(--font-mono);
   color: var(--text-faint);
   flex: 0 0 auto;
 }
@@ -358,7 +358,7 @@
 
 .seer-empty {
   max-width: 620px;
-  margin: 12vh auto 0;
+  margin: calc(12vh / var(--chrome-zoom, 1)) auto 0;
   text-align: center;
   display: flex;
   flex-direction: column;
@@ -376,6 +376,135 @@
   margin: 0;
   color: var(--text-dim);
   font: 400 13px/1.7 var(--font-ui);
+}
+
+/* Offline: the stage carries a bundled sample run under the intro. The empty
+   state widens for it — a 620px column on a 4K stage was a thread of text in
+   a void. */
+.seer-empty.is-offline {
+  max-width: 760px;
+  margin-top: calc(6vh / var(--chrome-zoom, 1));
+}
+
+.seer-sample {
+  margin: 8px 0 4px;
+  padding: 20px 22px 18px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--bg-raise);
+  box-shadow: var(--shadow-card);
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.seer-sample-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+
+.seer-sample-badge {
+  padding: 3px 9px;
+  border: 1px dashed color-mix(in srgb, var(--warn) 70%, transparent);
+  border-radius: 999px;
+  color: var(--warn);
+  font: 650 12px/1.4 var(--font-ui);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.seer-sample-head h3 {
+  margin: 0;
+  color: var(--text);
+  font: 600 15px/1.3 var(--font-ui);
+}
+
+.seer-sample-dim {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.seer-sample-lanes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.seer-sample-row {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  align-items: center;
+  gap: 10px;
+}
+
+.seer-sample-lane {
+  color: var(--text-dim);
+  font: 400 12px/1 var(--font-mono);
+  text-align: right;
+}
+
+.seer-sample-track {
+  position: relative;
+  height: 12px;
+  background: linear-gradient(90deg, var(--hairline) 50%, transparent 0) 0 50% / 6px 1px repeat-x;
+}
+
+.seer-sample-track i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 2px;
+  border-radius: 2px;
+}
+
+.seer-sample-axis .seer-sample-track {
+  height: 16px;
+  background: none;
+}
+
+.seer-sample-axis b {
+  position: absolute;
+  top: 2px;
+  transform: translateX(-50%);
+  color: var(--text-dim);
+  font: 400 12px/1 var(--font-mono);
+}
+
+.seer-sample-axis b:first-child {
+  transform: none;
+}
+
+.seer-empty .seer-sample-caption {
+  color: var(--text-dim);
+  font: 400 13px/1.6 var(--font-ui);
+}
+
+.seer-sample-cta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+}
+
+.seer-sample-cta .btn-primary {
+  min-height: 44px;
+  padding-inline: 18px;
+}
+
+.seer-sample-cta .btn-primary code {
+  font: 600 13px/1 var(--font-mono);
+}
+
+.seer-sample-cta-note {
+  color: var(--text-dim);
+  font: 400 13px/1.5 var(--font-ui);
+}
+
+.seer-rail-offline .seer-note code {
+  color: var(--text);
 }
 
 .seer-detail {
@@ -401,7 +530,7 @@
 
 .seer-dim {
   color: var(--text-faint);
-  font: 400 11px/1.3 var(--font-ui);
+  font: 400 12px/1.3 var(--font-ui);
   letter-spacing: 0;
   text-transform: none;
 }
@@ -412,7 +541,7 @@
   flex-wrap: wrap;
   gap: 8px;
   color: var(--text-faint);
-  font: 400 11.5px/1.4 var(--font-ui);
+  font: 400 12px/1.4 var(--font-ui);
 }
 
 .seer-state {
@@ -428,7 +557,7 @@
   padding: 1px 7px;
   border: 1px solid color-mix(in srgb, var(--warn) 50%, transparent);
   color: var(--warn);
-  font-size: 10px;
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -469,7 +598,7 @@
 .seer-repo {
   margin: 0;
   color: var(--text-faint);
-  font: 400 10.5px/1.4 var(--font-mono);
+  font: 400 12px/1.4 var(--font-mono);
 }
 
 .seer-detail-tools {
@@ -483,7 +612,7 @@
   border: 1px solid var(--hairline);
   background: transparent;
   color: var(--text-dim);
-  font: 500 11px/1.2 var(--font-ui);
+  font: 500 12px/1.2 var(--font-ui);
   cursor: pointer;
   text-decoration: none;
   transition: color var(--t-fast) var(--ease-out);
@@ -591,7 +720,7 @@
   align-items: baseline;
   max-width: 60%;
   padding: 4px 8px;
-  font: 500 10px/1.4 var(--font-mono, ui-monospace, monospace);
+  font: 500 12px/1.4 var(--font-mono, ui-monospace, monospace);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -610,7 +739,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
-  font: 500 9px/1 var(--font-ui);
+  font: 500 12px/1 var(--font-ui);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   opacity: 0.75;
@@ -686,7 +815,7 @@
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font: 500 10px/1.5 var(--font-ui);
+  font: 500 12px/1.5 var(--font-ui);
   white-space: nowrap;
 }
 
@@ -735,7 +864,7 @@
 }
 
 .seer-thought-body {
-  font: 400 11px/1.55 var(--font-ui);
+  font: 400 12px/1.55 var(--font-ui);
   color: var(--text-dim);
   display: -webkit-box;
   -webkit-line-clamp: 3;
@@ -772,7 +901,7 @@
 }
 
 .seer-lane-name {
-  font: 500 9px/1 var(--font-ui);
+  font: 500 12px/1 var(--font-ui);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   opacity: 0.8;
@@ -835,7 +964,7 @@
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font: 400 11.5px/1.5 var(--font-ui);
+  font: 400 12px/1.5 var(--font-ui);
   color: var(--text-dim);
 }
 
@@ -896,7 +1025,7 @@
 }
 
 .seer-bars-label {
-  font: 500 10px/1.2 var(--font-ui);
+  font: 500 12px/1.2 var(--font-ui);
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -915,7 +1044,7 @@
 .seer-bars li b {
   text-align: right;
   color: var(--text);
-  font: 500 11px/1.2 var(--font-ui);
+  font: 500 12px/1.2 var(--font-ui);
 }
 
 /* measured values -------------------------------------------------------- */
@@ -936,7 +1065,7 @@
 
 .seer-fid {
   color: var(--warn);
-  font-size: 9px;
+  font-size: 12px;
   margin-left: 1px;
 }
 
@@ -960,7 +1089,7 @@
 }
 
 .seer-quality-block li {
-  font: 400 11px/1.5 var(--font-ui);
+  font: 400 12px/1.5 var(--font-ui);
   color: var(--text-dim);
 }
 
@@ -973,7 +1102,7 @@
 .seer-chips li {
   padding: 1px 7px;
   border: 1px solid var(--hairline);
-  font: 400 10px/1.5 var(--font-mono);
+  font: 400 12px/1.5 var(--font-mono);
   color: var(--text-faint);
 }
 
@@ -995,7 +1124,7 @@
   grid-template-columns: 168px 62px 1fr auto;
   gap: 8px;
   align-items: baseline;
-  font: 400 10.5px/1.6 var(--font-mono);
+  font: 400 12px/1.6 var(--font-mono);
   color: var(--text-dim);
 }
 
@@ -1016,7 +1145,7 @@
 
 .seer-tail-fid {
   color: var(--text-faint);
-  font-size: 9px;
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -1027,7 +1156,7 @@
   padding: 2px 9px;
   border: 1px solid var(--hairline);
   color: var(--text);
-  font: 500 11px/1.4 var(--font-ui);
+  font: 500 12px/1.4 var(--font-ui);
 }
 
 /* A refusal is a result: it gets the accent edge and sits above the table,
@@ -1055,12 +1184,12 @@
 
 .seer-refusals li b {
   color: var(--text);
-  font: 500 11.5px/1.3 var(--font-mono);
+  font: 500 12px/1.3 var(--font-mono);
 }
 
 .seer-refusals li span {
   color: var(--text-dim);
-  font: 400 11.5px/1.6 var(--font-ui);
+  font: 400 12px/1.6 var(--font-ui);
 }
 
 .seer-table-wrap {
@@ -1083,7 +1212,7 @@
 
 .seer-table thead th {
   color: var(--text-faint);
-  font: 600 10px/1.2 var(--font-ui);
+  font: 600 12px/1.2 var(--font-ui);
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -1109,7 +1238,7 @@
 .seer-native > summary {
   cursor: pointer;
   color: var(--text-faint);
-  font: 400 10.5px/1.6 var(--font-ui);
+  font: 400 12px/1.6 var(--font-ui);
   list-style: none;
 }
 
@@ -1135,7 +1264,7 @@
 
 .seer-btn.is-small {
   padding: 3px 8px;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .seer-card h3 .seer-btn {
@@ -1191,7 +1320,7 @@
 .seer-refusal {
   margin: 0;
   color: var(--text-dim);
-  font: 400 11px/1.55 var(--font-ui);
+  font: 400 12px/1.55 var(--font-ui);
 }
 
 .seer-rules {
@@ -1208,7 +1337,7 @@
   gap: 8px;
   align-items: baseline;
   color: var(--text-dim);
-  font: 400 11px/1.5 var(--font-ui);
+  font: 400 12px/1.5 var(--font-ui);
 }
 
 /* a rule that could not run reads as unlit, not as a zero */
@@ -1234,7 +1363,7 @@
 .seer-table {
   width: 100%;
   border-collapse: collapse;
-  font: 400 10.5px/1.5 var(--font-ui);
+  font: 400 12px/1.5 var(--font-ui);
 }
 
 .seer-table th {
@@ -1259,7 +1388,7 @@
 .seer-derivation > summary {
   cursor: pointer;
   color: var(--text-faint);
-  font: 400 10.5px/1.6 var(--font-ui);
+  font: 400 12px/1.6 var(--font-ui);
   list-style: none;
 }
 
@@ -1278,7 +1407,7 @@
 .seer-formula {
   margin: 6px 0 4px;
   color: var(--text-dim);
-  font: 400 10.5px/1.6 var(--font-mono);
+  font: 400 12px/1.6 var(--font-mono);
 }
 
 .seer-evidence {
@@ -1289,7 +1418,7 @@
   flex-direction: column;
   gap: 2px;
   color: var(--text-dim);
-  font: 400 10px/1.5 var(--font-ui);
+  font: 400 12px/1.5 var(--font-ui);
 }
 
 .seer-evidence code {
@@ -1325,7 +1454,7 @@
   padding: 1px 6px;
   border: 1px solid var(--hairline);
   color: var(--text-faint);
-  font: 400 9.5px/1.5 var(--font-ui);
+  font: 400 12px/1.5 var(--font-ui);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -1354,7 +1483,7 @@
   border-radius: var(--radius-form-ctl);
   background: var(--bg);
   color: var(--text-dim);
-  font: 500 10px/1.2 var(--font-ui);
+  font: 500 12px/1.2 var(--font-ui);
   cursor: pointer;
 }
 

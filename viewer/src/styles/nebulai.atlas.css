@@ -1,0 +1,741 @@
+/* nebulai.atlas.css — the Atlas experience's map page: workspace, results
+   table, inspector, pin notice, narrow Map/Results switch.
+   Owner: Nebulai (Atlas). Imported by nebulai.css before chrome.responsive.css. */
+
+.atlas-workspace,
+.inspector {
+  position: absolute;
+  top: var(--nav-clear);
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - var(--nav-clear) - 88px);
+  box-sizing: border-box;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px 18px 18px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-card);
+  color: var(--text);
+  font: 400 12.5px/1.45 var(--font-ui);
+}
+
+.atlas-workspace {
+  left: 32px;
+  width: 372px;
+}
+
+/* with a map open the panel takes its full height and the results list
+   absorbs the slack, so the pager never scrolls out of reach */
+.atlas-workspace.has-data {
+  height: calc(calc(100vh / var(--chrome-zoom, 1)) - var(--nav-clear) - 88px);
+}
+
+.atlas-workspace > * {
+  flex: none;
+}
+
+/* The results block takes the panel's slack and its scroller takes the
+   block's. An explicit floor, not `auto`: a column flex item's automatic
+   minimum is its whole content — all 50 rows — which would push the pager
+   below the fold. 340px = heading, search, a two-line summary, pager and a
+   few rows, so the pager can never be squeezed under the next section. */
+.atlas-workspace > .rt {
+  flex: 1 1 auto;
+  min-height: 340px;
+}
+
+.atlas-workspace[hidden] {
+  display: none;
+}
+
+.inspector {
+  right: 32px;
+  width: 348px;
+}
+
+/* ── evidence header ─────────────────────────────────────────────────── */
+
+.aw-title {
+  margin: 0;
+  font: 650 16px/1.3 var(--font-ui);
+  letter-spacing: -0.01em;
+}
+
+.aw-subtitle {
+  margin: 0;
+  color: var(--text-dim);
+  font: 650 11px/1.4 var(--font-ui);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.aw-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aw-facts,
+.aw-meaning,
+.aw-note,
+.aw-state,
+.aw-flag {
+  margin: 0;
+}
+
+.aw-facts {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.aw-meaning,
+.aw-note,
+.aw-state {
+  color: var(--text-dim);
+}
+
+.aw-flag {
+  padding: 6px 8px;
+  border-left: 2px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  color: var(--text);
+}
+
+.aw-note {
+  padding: 8px 10px;
+  border: 1px solid var(--hairline);
+}
+
+.aw-mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+/* secondary text uses --text-dim, not --text-faint: faint is 3.4:1 on the
+   raised panel, under WCAG AA for text this small */
+.aw-dim,
+.aw-raw {
+  color: var(--text-dim);
+}
+
+.aw-about > summary,
+.aw-disclosure > summary {
+  cursor: pointer;
+  padding: 6px 0;
+  color: var(--text-dim);
+  font: 600 12px/1.3 var(--font-ui);
+}
+
+.aw-about > summary:hover,
+.aw-disclosure > summary:hover {
+  color: var(--text);
+}
+
+.aw-dl,
+.inspector-dl,
+.pin-notice-dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 12px;
+  margin: 6px 0 0;
+}
+
+.aw-dl dt,
+.inspector-dl dt,
+.pin-notice-dl dt {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.aw-dl dd,
+.inspector-dl dd,
+.pin-notice-dl dd {
+  margin: 0;
+  min-width: 0;
+}
+
+/* ── buttons ─────────────────────────────────────────────────────────── */
+
+.aw-btn,
+.aw-seg,
+.inspector-close {
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-pill);
+  color: var(--text);
+  font: 600 12px/1.2 var(--font-ui);
+  cursor: pointer;
+  transition:
+    border-color var(--t-fast) var(--ease-out),
+    background var(--t-fast) var(--ease-out);
+}
+
+.aw-btn:hover:not(:disabled),
+.aw-seg:hover:not(:disabled),
+.inspector-close:hover {
+  border-color: var(--text-dim);
+}
+
+.aw-btn:disabled,
+.aw-seg:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.aw-btn-primary {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.aw-btn-quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.aw-seg.is-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.aw-btn:focus-visible,
+.aw-seg:focus-visible,
+.inspector-close:focus-visible,
+.rt-inspect:focus-visible,
+.rt-search:focus-visible,
+.aw-advanced:focus-visible,
+.aw-about > summary:focus-visible,
+.aw-disclosure > summary:focus-visible,
+.inspector-title:focus-visible,
+.pin-notice:focus-visible,
+.inspector textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── toolbar ─────────────────────────────────────────────────────────── */
+
+.aw-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+/* map names run to ~45 characters ("GPT-2 Small · SAE decoder directions ·
+   Layer 8"): stack the label and give the select the panel's full width so
+   the name is never cut under the chevron */
+.aw-toolbar > .ctl-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.aw-toolbar .ctl-select {
+  width: 100%;
+  max-width: none;
+  min-height: 36px;
+  padding-right: 28px;
+  text-overflow: ellipsis;
+}
+
+.aw-dims {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.aw-advanced {
+  margin-left: auto;
+  color: var(--text-dim);
+  font: 500 12px/1.3 var(--font-ui);
+  text-decoration: underline;
+  text-decoration-color: var(--hairline-strong);
+  text-underline-offset: 3px;
+}
+
+.aw-advanced:hover {
+  color: var(--text);
+}
+
+/* ── results table ───────────────────────────────────────────────────── */
+
+.rt {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.rt-search-label {
+  color: var(--text-dim);
+  font: 500 12px/1.3 var(--font-ui);
+}
+
+.rt-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-form-ctl);
+  background: var(--bg-pill);
+  color: var(--text);
+  font: 500 13px/1.2 var(--font-ui);
+}
+
+.rt-summary {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rt-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--hairline);
+}
+
+.rt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.rt-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 8px;
+  background: var(--bg-raise);
+  color: var(--text-dim);
+  font: 600 10.5px/1.3 var(--font-ui);
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.rt-table td,
+.rt-table tbody th {
+  padding: 0 8px;
+  border-top: 1px solid var(--hairline);
+  vertical-align: middle;
+  text-align: left;
+  font-weight: 400;
+}
+
+.rt-num {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.rt-cluster {
+  max-width: 96px;
+  overflow: hidden;
+  color: var(--text-dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rt-cluster.is-noise {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.rt-inspect {
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: 500 12px/1.3 var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+
+.rt-inspect:hover {
+  color: var(--accent);
+}
+
+.rt-table tr.is-selected {
+  background: var(--accent-soft);
+}
+
+.rt-table tr.is-selected .rt-inspect {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.rt-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-dim);
+}
+
+.rt-empty p {
+  margin: 0;
+}
+
+.rt-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rt-page {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.aw-disclosure {
+  border-top: 1px solid var(--hairline);
+  padding-top: 4px;
+}
+
+.aw-disclosure-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 6px;
+}
+
+/* the lens panels were built for the floating search card; inside the
+   workspace they sit flush */
+.aw-disclosure-body .search-section {
+  margin: 0;
+  padding: 8px 0 0;
+}
+
+.aw-import {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+/* ── inspector ───────────────────────────────────────────────────────── */
+
+.inspector-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inspector-kicker {
+  flex: 1;
+  margin: 0;
+  color: var(--text-dim);
+  font: 650 11px/1.3 var(--font-ui);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.inspector-close {
+  width: 32px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.inspector-back {
+  padding-left: 0;
+}
+
+.inspector-title {
+  margin: 0;
+  font: 650 17px/1.3 var(--font-ui);
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.inspector-badge {
+  margin: 0;
+  padding: 6px 8px;
+  border-left: 2px solid var(--success);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+}
+
+.inspector-note {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.inspector-label {
+  margin: 0 0 4px;
+  color: var(--text-dim);
+  font: 650 11px/1.3 var(--font-ui);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.inspector-imported {
+  padding: 8px 10px;
+  border: 1px solid var(--hairline);
+}
+
+.inspector-note-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.inspector-limits ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-dim);
+}
+
+.inspector-limits li + li {
+  margin-top: 4px;
+}
+
+.inspector-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.inspector-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.inspector-save {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inspector-save p {
+  margin: 0;
+}
+
+.inspector textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--bg-pill);
+  color: var(--text);
+  font: 400 12.5px/1.4 var(--font-ui);
+  resize: vertical;
+}
+
+.inspector-copy-state {
+  margin: 0;
+  min-height: 1em;
+}
+
+.inspector-copy-state:empty {
+  display: none;
+}
+
+/* ── pin notice ──────────────────────────────────────────────────────── */
+
+.pin-notice {
+  position: absolute;
+  top: var(--nav-clear);
+  left: 50%;
+  z-index: 21;
+  width: min(520px, calc(calc(100vw / var(--chrome-zoom, 1)) - 32px));
+  box-sizing: border-box;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--danger);
+  background: var(--bg-raise);
+  box-shadow: var(--shadow-float);
+  color: var(--text);
+  font: 400 12.5px/1.45 var(--font-ui);
+}
+
+.pin-notice.is-pending {
+  border-color: var(--hairline-strong);
+  color: var(--text-dim);
+}
+
+.pin-notice-title {
+  margin: 0;
+  font: 650 14px/1.3 var(--font-ui);
+}
+
+.pin-notice-body {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.pin-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ── no renderer / narrow ────────────────────────────────────────────── */
+
+.atlas-stage-note {
+  position: absolute;
+  top: 50%;
+  left: calc(50% + 202px);
+  width: min(380px, calc(calc(100vw / var(--chrome-zoom, 1)) - 500px));
+  margin: 0;
+  transform: translate(-50%, -50%);
+  color: var(--text-dim);
+  font: 500 13px/1.5 var(--font-ui);
+  text-align: center;
+}
+
+.atlas-switch {
+  position: absolute;
+  bottom: 80px;
+  left: 50%;
+  z-index: 13;
+  display: flex;
+  transform: translateX(-50%);
+  box-shadow: var(--shadow-float);
+}
+
+.atlas-switch .aw-seg {
+  min-width: 96px;
+  min-height: 44px;
+  background: var(--bg-raise);
+}
+
+.atlas-switch .aw-seg.is-on {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-raise));
+}
+
+@media (max-width: 1023px) {
+  .atlas-workspace,
+  .inspector {
+    left: 16px;
+    right: 16px;
+    width: auto;
+    max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - var(--nav-clear) - 136px);
+  }
+
+  .atlas-workspace.has-data {
+    height: calc(calc(100vh / var(--chrome-zoom, 1)) - var(--nav-clear) - 136px);
+  }
+}
+
+@media (max-width: 900px) {
+  .atlas-workspace,
+  .inspector,
+  .pin-notice {
+    top: 130px;
+  }
+
+  .atlas-workspace,
+  .inspector {
+    max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - 130px - 136px);
+  }
+
+  .atlas-workspace.has-data {
+    height: calc(calc(100vh / var(--chrome-zoom, 1)) - 130px - 136px);
+  }
+}
+
+@media (pointer: coarse) {
+  .aw-btn,
+  .aw-seg,
+  .inspector-close,
+  .rt-inspect {
+    min-height: 44px;
+  }
+
+  .inspector-close {
+    width: 44px;
+  }
+}
+
+/* Display rows in a 372px column: the shared ctl-label is nowrap because the
+   old sidebar clipped overflow. Here a long hint must wrap, never scroll the
+   workspace sideways, and small hint text needs the passing dim tone. */
+.atlas-workspace {
+  overflow-x: hidden;
+}
+
+.atlas-workspace .ctl-label {
+  white-space: normal;
+  min-width: 0;
+}
+
+.atlas-workspace .ctl-hint {
+  display: block;
+  color: var(--text-dim);
+}
+
+/* Floating map tools (direction rail, hand rig) sit bottom-left on the old
+   layout, which is exactly under the workspace. On the desktop Atlas they move
+   into the map area beside it; the rig steps right again if the rail is up. */
+@media (min-width: 1024px) {
+  body:has(.atlas-workspace:not([hidden])) .axis-rail,
+  body:has(.atlas-workspace:not([hidden])) .hand-rig {
+    left: 420px;
+    bottom: 80px;
+  }
+
+  body:has(.atlas-workspace:not([hidden])):has(.axis-rail) .hand-rig {
+    left: 736px;
+  }
+}
+
+/* the switch is a labelled region (so it is inside a landmark) holding the
+   named button group the tests and screen readers address */
+.atlas-switch > [role="group"] {
+  display: flex;
+}
+
+/* The inspector scrolls as one column; on short viewports (1180×820 tablets,
+   small laptops) its evidence list pushed Save finding / Copy unit link out
+   of view. Pin the action block to the bottom edge of the scroller so the
+   primary task is always reachable. Negative margins let the footer's own
+   background reach the panel's padding edge. */
+.inspector-actions {
+  position: sticky;
+  bottom: -18px;
+  z-index: 1;
+  margin: 0 -18px -18px;
+  padding: 12px 18px 18px;
+  background: color-mix(in srgb, var(--bg-raise) 94%, transparent);
+  border-radius: 0 0 var(--radius-card) var(--radius-card);
+}
+
+/* Camera framing (AtlasDriver.occlusionInsets): below 1024px the inspector
+   spans the width under the nav, so it hides the top of the map rather than
+   a side, and the workspace is a Map/Results tab, never beside the map. */
+@media (max-width: 1023px) {
+  .inspector {
+    --map-occluder: top;
+  }
+
+  .atlas-workspace {
+    --map-occluder: none;
+  }
+}

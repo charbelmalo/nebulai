@@ -30,6 +30,7 @@ import { ACTIONS, isAbsent, type Action, type Measured, type SeerEvent } from ".
 import { ACTION_COLOR, stateInk } from "../seer/encoding";
 import { LiveModel } from "../seer/live";
 import { SeerLive } from "./SeerLive";
+import { SeerRailOffline, SeerSample } from "./SeerSample";
 import { SeerThoughts } from "./SeerThoughts";
 import {
   $health,
@@ -281,8 +282,14 @@ function SeerRail() {
     <aside class="seer-rail">
       <LinkStatus />
       <ObservingStatus />
-      <Launcher />
-      <Importer />
+      {$link.value === "down" ? (
+        <SeerRailOffline />
+      ) : (
+        <>
+          <Launcher />
+          <Importer />
+        </>
+      )}
       <RunList />
     </aside>
   );
@@ -649,14 +656,16 @@ function RunRow(props: { run: RunSummary; selected: boolean }) {
 }
 
 function SeerEmpty() {
+  const offline = $link.value === "down";
   return (
-    <div class="seer-empty">
+    <div class={`seer-empty${offline ? " is-offline" : ""}`}>
       <h2>Watch an agent work</h2>
       <p>
         SessionSeer launches Codex, Claude Code or Hermes headless, reads their structured output as
         it streams, and folds it into one event vocabulary — so the same question can be asked of
         all three, and refused where it cannot honestly be answered.
       </p>
+      {offline && <SeerSample />}
       <p class="seer-note">
         Start the collector with <code>seer serve</code>, then launch a run on the left, or
         pick one already captured. Select two to compare them.

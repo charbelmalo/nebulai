@@ -30,6 +30,7 @@ import { appStore } from "../../app/store";
 import { $appearance } from "./appearance";
 import { $behavior } from "./behavior";
 import {
+  $atlasPanel,
   $axis,
   $channel,
   $compare,
@@ -39,16 +40,30 @@ import {
   $datasets,
   $dims,
   $loading,
+  $pendingDatasetId,
+  $loadError,
+  $inspectorOpen,
   $mapQuery,
+  $pin,
+  $renderer,
   $selection,
+  $unverifiedDefault,
   $toggles,
   $viewMode,
 } from "./atlas";
-import { $interp, $interpSelection, $tour } from "./interp";
+import { $interp, $interpModel, $interpSelection, $tour } from "./interp";
 import { $probing, $progress } from "./probing";
 import { $seer } from "./seer";
 import { $sessions } from "./sessions";
-import { $app, $capabilities, $page, $settings, $settingsOpen } from "./shell";
+import {
+  $app,
+  $capabilities,
+  $experience,
+  $experienceNotice,
+  $page,
+  $settings,
+  $settingsOpen,
+} from "./shell";
 import { $snapshot } from "./snapshot";
 
 appStore.subscribe((st) => {
@@ -58,6 +73,8 @@ appStore.subscribe((st) => {
   if (st.datasetId !== $datasetId.value) $datasetId.value = st.datasetId;
   if (st.dataset !== $dataset.value) $dataset.value = st.dataset;
   if (st.loading !== $loading.value) $loading.value = st.loading;
+  if (st.pendingDatasetId !== $pendingDatasetId.value) $pendingDatasetId.value = st.pendingDatasetId;
+  if (st.loadError !== $loadError.value) $loadError.value = st.loadError;
   if (st.viewMode !== $viewMode.value) $viewMode.value = st.viewMode;
   if (st.dims !== $dims.value) $dims.value = st.dims;
   if (st.selection !== $selection.value) $selection.value = st.selection;
@@ -71,6 +88,8 @@ appStore.subscribe((st) => {
   if (st.progress !== $progress.value) $progress.value = st.progress;
   if (st.settingsOpen !== $settingsOpen.value) $settingsOpen.value = st.settingsOpen;
   if (st.page !== $page.value) $page.value = st.page;
+  if (st.experience !== $experience.value) $experience.value = st.experience;
+  if (st.experienceNotice !== $experienceNotice.value) $experienceNotice.value = st.experienceNotice;
   if (st.snapshot !== $snapshot.value) $snapshot.value = st.snapshot;
   if (st.sessions !== $sessions.value) $sessions.value = st.sessions;
   if (st.behavior !== $behavior.value) $behavior.value = st.behavior;
@@ -78,7 +97,13 @@ appStore.subscribe((st) => {
   if (st.interpSelection !== $interpSelection.value)
     $interpSelection.value = st.interpSelection;
   if (st.tour !== $tour.value) $tour.value = st.tour;
+  if (st.interpModel !== $interpModel.value) $interpModel.value = st.interpModel;
   if (st.compareData !== $compareData.value) $compareData.value = st.compareData;
   if (st.compare !== $compare.value) $compare.value = st.compare;
   if (st.seer !== $seer.value) $seer.value = st.seer;
+  if (st.pin !== $pin.value) $pin.value = st.pin;
+  if (st.inspectorOpen !== $inspectorOpen.value) $inspectorOpen.value = st.inspectorOpen;
+  if (st.atlasPanel !== $atlasPanel.value) $atlasPanel.value = st.atlasPanel;
+  if (st.renderer !== $renderer.value) $renderer.value = st.renderer;
+  if (st.unverifiedDefault !== $unverifiedDefault.value) $unverifiedDefault.value = st.unverifiedDefault;
 });

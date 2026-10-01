@@ -1,0 +1,417 @@
+/* nebulai.learn.css — the Learn experience's lesson stage: lesson panel, step
+   markers, tasks and feedback, and the step bar for narrated map episodes.
+   Owner: Nebulai (Learn). Imported by nebulai.css after nebulai.atlas.css,
+   whose panel, button and inspector rules it reuses. */
+
+.lesson-panel {
+  position: absolute;
+  top: var(--nav-clear);
+  left: 32px;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 400px;
+  max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - var(--nav-clear) - 88px);
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px 18px 18px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-card);
+  color: var(--text);
+  font: 400 12.5px/1.45 var(--font-ui);
+}
+
+.lesson-panel[hidden] {
+  display: none;
+}
+
+.lesson-panel > * {
+  flex: none;
+}
+
+.lesson-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lesson-kicker {
+  margin: 0;
+  color: var(--accent);
+  font: 650 10.5px/1.3 var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.lesson-kicker span {
+  color: var(--text-dim);
+}
+
+.lesson-steps {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lesson-step {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--hairline);
+  border-radius: 50%;
+  color: var(--text-dim);
+  font: 650 11px/1 var(--font-ui);
+}
+
+.lesson-step.is-done {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--hairline));
+  color: var(--accent);
+}
+
+.lesson-step.is-current {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text);
+}
+
+.lesson-title {
+  margin: 0;
+  font: 650 18px/1.3 var(--font-ui);
+  letter-spacing: -0.01em;
+}
+
+.lesson-title:focus {
+  outline: none;
+}
+
+.lesson-title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.lesson-caption {
+  margin: 0;
+  color: var(--text);
+  font: 400 13px/1.55 var(--font-ui);
+}
+
+/* the evidence header reads as a quoted source inside the lesson */
+.lesson-panel .aw-evidence {
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+}
+
+.lesson-task {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* the results list keeps a usable height inside the scrolling lesson */
+.lesson-panel .rt-scroll {
+  flex: none;
+  height: min(300px, calc(40vh / var(--chrome-zoom, 1)));
+  min-height: 160px;
+}
+
+.lesson-check {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.lesson-question {
+  margin-bottom: 6px;
+  padding: 0;
+  font: 600 13px/1.45 var(--font-ui);
+}
+
+.lesson-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  cursor: pointer;
+  font: 400 13px/1.4 var(--font-ui);
+}
+
+.lesson-option:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--hairline));
+}
+
+.lesson-option.is-chosen {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.lesson-option input {
+  flex: none;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.lesson-option:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.lesson-feedback:empty {
+  display: none;
+}
+
+.lesson-hint,
+.lesson-verdict {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font: 400 12.5px/1.5 var(--font-ui);
+}
+
+.lesson-hint {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--text-dim);
+}
+
+.lesson-verdict {
+  border-left: 3px solid var(--hairline);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.lesson-verdict.is-right {
+  border-left-color: var(--success);
+}
+
+.lesson-verdict.is-wrong {
+  border-left-color: var(--warn);
+}
+
+.lesson-need {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.lesson-need p {
+  margin: 0;
+}
+
+.lesson-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+a.aw-btn {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.lesson-nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.lesson-reason {
+  flex: 1 0 100%;
+  margin: 0;
+  text-align: right;
+}
+
+.lesson-blocked {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lesson-blocked p {
+  margin: 0;
+}
+
+/* narrow screens: the unit sits inside the lesson, full width */
+.lesson-inline-unit .inspector {
+  position: static;
+  width: auto;
+  max-height: none;
+  overflow: visible;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+
+/* the step bar of a narrated map episode sits above the map's lower edge */
+.episode-bar {
+  bottom: 24px;
+  z-index: 12;
+}
+
+.episode-bar .interp-tourbar-title {
+  margin: 0 0 4px;
+}
+
+@media (max-width: 1023px) {
+  .lesson-panel {
+    left: 16px;
+    right: 16px;
+    width: auto;
+    max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - var(--nav-clear) - 136px);
+  }
+
+  .episode-bar {
+    bottom: 136px;
+  }
+}
+
+@media (max-width: 900px) {
+  .lesson-panel {
+    top: 130px;
+    max-height: calc(calc(100vh / var(--chrome-zoom, 1)) - 130px - 136px);
+  }
+}
+
+@media (pointer: coarse) {
+  .lesson-step {
+    width: 32px;
+    height: 32px;
+  }
+}
+
+/* ── the catalog's featured lesson ───────────────────────────────────── */
+
+.lesson-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 300px);
+  gap: 0 28px;
+  max-width: 960px;
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--hairline));
+}
+
+.lesson-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* a close-up of the lesson's own map around its first unit */
+.lesson-card-art {
+  align-self: center;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+@media (max-width: 720px) {
+  .lesson-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .lesson-card-art {
+    order: -1;
+    margin-bottom: 16px;
+  }
+}
+
+.lesson-card-kicker {
+  margin: 0;
+  color: var(--accent);
+  font: 650 10.5px/1.3 var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.lesson-card-done {
+  color: var(--success);
+}
+
+.lesson-card-title {
+  margin: 0;
+  font: 650 22px/1.25 var(--font-ui);
+  letter-spacing: -0.01em;
+}
+
+.lesson-card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.lesson-card-actions .aw-btn {
+  min-height: 40px;
+  padding-inline: 16px;
+  font-size: 13px;
+}
+
+.lesson-complete:focus {
+  outline: none;
+}
+
+.lesson-complete:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* The step content (results table, the unit's evidence) is taller than the
+   panel on every screen short of 4K, so the step controls stay pinned to the
+   panel's lower edge instead of scrolling out of reach. */
+.lesson-nav {
+  position: sticky;
+  bottom: -18px;
+  z-index: 1;
+  margin: 0 -18px -18px;
+  padding: 10px 18px 14px;
+  background: var(--bg-raise);
+  border-radius: 0 0 var(--radius-card) var(--radius-card);
+}
+
+/* phones: the task, not the chrome around it, gets the height — tighter
+   panel padding, and the search field's label duplicates the section title */
+@media (max-width: 720px) {
+  .lesson-panel {
+    gap: 10px;
+    padding: 12px 14px 18px;
+  }
+
+  .lesson-nav {
+    margin: 0 -14px -18px;
+    padding: 8px 14px 12px;
+  }
+
+  .lesson-panel .rt-search-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .lesson-panel .rt-scroll {
+    height: min(300px, calc(46vh / var(--chrome-zoom, 1)));
+  }
+}

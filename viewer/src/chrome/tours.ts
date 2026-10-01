@@ -47,8 +47,31 @@ export interface TourStep {
   /** how far onto that axis, 0–1. Ignored unless `axis` is set. */
   axisT?: number;
 
+  /** A lesson step the reader has to DO, not watch. Only lessons carry one;
+   *  the runner never marks such a step complete because it was shown. */
+  task?: LessonTask;
+
   title: string;
   caption: string;
+}
+
+/** What a lesson step asks of the reader. Pure data: whether it is done is
+ *  decided by chrome/learn/lesson.ts from the reader's actual selection and
+ *  answers, never from a timer or an animation finishing. */
+export type LessonTask =
+  /** select one unit whose own label matches `match` (case-insensitive) */
+  | { kind: "find"; match: string; hint: string }
+  /** a qualitative question; only the correct option completes the step */
+  | { kind: "check"; question: string; options: LessonOption[] }
+  /** save the unit, continue in Atlas, or finish explicitly */
+  | { kind: "finish" };
+
+export interface LessonOption {
+  id: string;
+  text: string;
+  correct: boolean;
+  /** shown after the option is chosen, right or wrong */
+  why: string;
 }
 
 /** What an episode needs in order to be told truthfully.
@@ -87,6 +110,9 @@ export interface TourManifest {
 
 export interface Tour {
   id: string;
+  /** "lesson" = an introductory lesson with reader tasks (chrome/learn);
+   *  omitted = a narrated episode */
+  kind?: "lesson";
   label: string;
   blurb: string;
   /** tours quote bundle-specific numbers — only offered on this model */

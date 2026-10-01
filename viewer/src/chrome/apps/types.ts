@@ -16,4 +16,13 @@ export interface AppShell extends AppChrome {
    *  already makes unreachable (see APP_PAGES), so it is a belt-and-braces
    *  default rather than a state the UI can get into. */
   renderPage(page: Page): ComponentChildren;
+  /** Optional: replaces the default pill nav + cross links (NebulAI's
+   *  per-experience navigation). Absent on Seer, which keeps the default. */
+  renderTopNav?(): ComponentChildren;
+  /** Optional: drawn right after the wordmark (NebulAI's experience chip). */
+  renderBrandExtras?(): ComponentChildren;
+  /** Optional: a banner under the top bar (NebulAI's context notice). */
+  renderBanner?(): ComponentChildren;
+  /** Optional: where the wordmark links (NebulAI's root chooser). */
+  homeHref?: string;
 }

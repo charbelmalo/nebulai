@@ -16,9 +16,24 @@ import {
 } from "../data/directions";
 import type { GuideFormula, InterpGroup } from "../scene/interp/InterpDriver";
 import { GROUP_LABEL, INTERP_FEATURES } from "../scene/interp/registry";
+import { APP_ROOT } from "../data/base";
+import { experienceHref } from "./ExperienceNav";
+import { requestFeature } from "./research/ResearchIntro";
 import { guideResearchFor } from "./guideResearch";
-import { $datasets } from "./state";
+import { $datasetId, $datasets, $experience } from "./state";
 import { episodeAvailability, TOURS, type EpisodeContext } from "./tours";
+import { manifestStatus } from "../data/experience";
+import {
+  completedLessons,
+  isLessonTour,
+  lessonAvailability,
+  takeLessonExit,
+  WHAT_IS_A_POINT,
+} from "./learn/lesson";
+import { useEffect, useRef } from "preact/hooks";
+
+/** Narrated episodes; lessons have their own card and their own URL keys. */
+const EPISODES = TOURS.filter((t) => !isLessonTour(t));
 
 const GROUP_ORDER: InterpGroup[] = ["weights", "forward", "sae", "trained", "live"];
 
@@ -43,6 +58,9 @@ const GROUP_SOURCE: Record<InterpGroup, string> = {
 
 function openInInternals(id: string): void {
   const s = appStore.getState();
+  // Research picks an export before any analysis, so remember which one was
+  // asked for and let the chooser say where it exists
+  if (s.experience === "research" && s.interpModel === null) requestFeature(id);
   s.setInterpFeature(id);
   s.setPage("interp");
 }
@@ -80,7 +98,13 @@ function GuideFormulaView({ formula }: { formula: GuideFormula }) {
  *    would produce it. It never falls back to another model, and it never
  *    plays with the numbers missing (§2.2).
  */
-function EpisodeSection() {
+/** An episode's address in Learn: guided walks run there, whatever page a
+ *  step borrows, so Research's Methods links across instead of playing it. */
+export function learnEpisodeHref(id: string): string {
+  return `${new URL("learn/", APP_ROOT).href}#episode=${encodeURIComponent(id)}&step=0`;
+}
+
+function EpisodeSection({ mode }: { mode: "play" | "handoff" }) {
   const entries = $datasets.value;
   // touching the signal here is what subscribes this component to the fetch
   // resolving, so a "pending" card becomes a "ready" one without a click
@@ -91,7 +115,7 @@ function EpisodeSection() {
   // point count the index already knows — the same expected length the map
   // itself checks with, so a channels.json aligned to a different build is
   // rejected here exactly as it would be there
-  for (const t of TOURS) {
+  for (const t of EPISODES) {
     const dsId = t.manifest?.dataset ?? (t.manifest?.channels?.length ? t.model : null);
     if (!dsId) continue;
     const entry = entries.find((e) => e.id === dsId);
@@ -101,7 +125,7 @@ function EpisodeSection() {
   // because an episode may name directions without naming channels — the
   // refusal-style one does exactly that, since its direction is in resid.L8
   // and therefore has no channels on this map at all.
-  for (const t of TOURS) {
+  for (const t of EPISODES) {
     const dsId = t.manifest?.directions?.length ? (t.manifest.dataset ?? t.model) : null;
     if (dsId && entries.some((e) => e.id === dsId)) ensureDirections(dsId);
   }
@@ -118,15 +142,16 @@ function EpisodeSection() {
   return (
     <section class="guide-group guide-episodes">
       <div class="guide-group-head">
-        <h2 class="guide-group-title">Episodes</h2>
+        <h2 class="guide-group-title">{mode === "play" ? "Guided episodes" : "Episodes"}</h2>
         <p class="guide-group-src">
           Guided walks through one finding at a time. Each one quotes exact numbers from
           one named artifact and says which; if that artifact is not in this deploy, the
           episode says so rather than running with the numbers missing.
+          {mode === "handoff" && " Episodes play in NebulAI Learn, which keeps the step controls with you."}
         </p>
       </div>
       <div class="guide-cards">
-        {TOURS.map((t) => {
+        {EPISODES.map((t) => {
           const av = episodeAvailability(t, ctx);
           const m = t.manifest;
           return (
@@ -134,14 +159,20 @@ function EpisodeSection() {
               <div class="guide-card-head">
                 <span class="guide-card-n">{t.steps.length} steps</span>
                 <h3 class="guide-card-label">{t.label}</h3>
-                <button
-                  type="button"
-                  class="guide-card-open"
-                  disabled={av.state !== "ready"}
-                  onClick={() => requestEpisodeStep(t.id, 0)}
-                >
-                  Play this episode →
-                </button>
+                {mode === "handoff" && av.state === "ready" ? (
+                  <a class="guide-card-open" href={learnEpisodeHref(t.id)}>
+                    Play in Learn ↗
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    class="guide-card-open"
+                    disabled={av.state !== "ready"}
+                    onClick={() => requestEpisodeStep(t.id, 0)}
+                  >
+                    Play this episode →
+                  </button>
+                )}
               </div>
               <p class="guide-card-blurb">{t.blurb}</p>
               <div class="guide-card-row">
@@ -218,7 +249,121 @@ function ClaimContract() {
   );
 }
 
+/** The introductory lesson, first on Learn's catalog. Ready only when the
+ *  release manifest publishes its exact map; otherwise the card says why and
+ *  the button is disabled — it never starts on a substitute. */
+function IntroLessonCard() {
+  const tour = WHAT_IS_A_POINT;
+  const entries = $datasets.value;
+  const av = lessonAvailability(tour, manifestStatus(), entries.length ? entries.map((e) => e.id) : null);
+  const done = completedLessons().includes("what-is-a-point");
+  const startRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (takeLessonExit()) startRef.current?.focus();
+  }, []);
+  return (
+    <section class="guide-group guide-lesson" aria-labelledby="lesson-card-title">
+      <article class={`guide-card lesson-card is-${av.state}`}>
+        <div class="lesson-card-body">
+          <p class="lesson-card-kicker">
+            Start here · {tour.steps.length} steps
+            {done && <span class="lesson-card-done"> · Completed</span>}
+          </p>
+          <h2 class="lesson-card-title" id="lesson-card-title">
+            {tour.label}
+          </h2>
+          <p class="guide-card-blurb">{tour.blurb}</p>
+          <div class="guide-card-row">
+            <span class="guide-card-tag">Map</span>
+            <span class="guide-card-source">
+              GPT-2 Small · SAE directions at layer 8
+              {av.state === "ready" ? ` · sha256 ${av.sha256.slice(0, 12)}…` : ""}
+            </span>
+          </div>
+          {av.state !== "ready" && (
+            <p class={`episode-gate is-${av.state}`}>
+              {av.state === "pending" ? av.reason : `Not available here — ${av.reason}`}
+            </p>
+          )}
+          <div class="lesson-card-actions">
+            <button
+              type="button"
+              class="aw-btn aw-btn-primary"
+              ref={startRef}
+              disabled={av.state !== "ready"}
+              onClick={() => requestEpisodeStep(tour.id, 0)}
+            >
+              {done ? "Take the lesson again" : "Start the lesson"}
+            </button>
+          </div>
+        </div>
+        <img
+          class="lesson-card-art"
+          src={new URL("chooser/learn.webp", APP_ROOT).href}
+          alt="A close-up of the lesson's map: one direction ringed, its neighbours scattered around it"
+          width="640"
+          height="400"
+          loading="lazy"
+          decoding="async"
+        />
+      </article>
+    </section>
+  );
+}
+
+/** Learn's catalog: lessons and guided episodes only. The per-view method
+ *  cards open unguided Internals analysis, which belongs to Research, so here
+ *  they are one explicit link away rather than 26 equal choices. */
+function LessonsPage() {
+  const datasetId = $datasetId.value;
+  return (
+    <div class="guide-page" role="main">
+      <div class="guide-scroll">
+        <div class="guide-head">
+          <p class="guide-kicker">NebulAI Learn · Lessons</p>
+          <h1 class="guide-title">How model maps work</h1>
+          <p class="guide-lede">
+            A model map places things a model has learned — words, directions, features —
+            so that related ones sit near each other. Each lesson shows one idea on real
+            published data and says what the map cannot tell you. You can stop a lesson at
+            any step.
+          </p>
+        </div>
+
+        <IntroLessonCard />
+
+        <EpisodeSection mode="play" />
+
+        <section class="guide-group guide-next" aria-labelledby="guide-next-title">
+          <div class="guide-group-head">
+            <h2 class="guide-group-title" id="guide-next-title">
+              Where next
+            </h2>
+          </div>
+          <div class="guide-next-links">
+            <a class="guide-next-link" href={experienceHref("atlas", "learn", datasetId)}>
+              <strong>Continue in Atlas</strong>
+              <span>Search the full map on your own, inspect a unit and save an exact record.</span>
+            </a>
+            <a class="guide-next-link" href={`${new URL("research/", APP_ROOT).href}#page=guide`}>
+              <strong>Read the methods in Research</strong>
+              <span>How each of the registered analyses is calculated, with its sources.</span>
+            </a>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 export function GuidePage() {
+  if ($experience.value === "learn") return <LessonsPage />;
+  return <MethodsPage />;
+}
+
+/** Research's Methods: every registered view's calculation, data source and
+ *  references, plus the episode list handing off to Learn. */
+function MethodsPage() {
   const live = INTERP_FEATURES.length;
   // the roadmap in docs/INTERP_FEATURES.md planned 25 views, all of which ship;
   // #26 is the intervention rail, added later by ATTRACTORS-PLAN phase 4. Both
@@ -235,8 +380,8 @@ export function GuidePage() {
   return (
     <div class="guide-page" role="main">
       <div class="guide-scroll">
-        <header class="guide-head">
-          <p class="guide-kicker">Nebul.AI · Model Guide</p>
+        <div class="guide-head">
+          <p class="guide-kicker">NebulAI Research · Methods</p>
           <h1 class="guide-title">How to read every model view</h1>
           <p class="guide-lede">
             Each view shows one measurement taken from a model. Hover to inspect exact
@@ -259,9 +404,9 @@ export function GuidePage() {
             visualization. Views that still need data or computation stay hidden
             until they are ready.
           </p>
-        </header>
+        </div>
 
-        <EpisodeSection />
+        <EpisodeSection mode={$experience.value === null ? "play" : "handoff"} />
 
         {GROUP_ORDER.filter((g) => byGroup.has(g)).map((group) => (
           <section key={group} class="guide-group">

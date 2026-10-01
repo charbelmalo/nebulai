@@ -28,7 +28,7 @@ import type { Dataset } from "../../data/loader";
 import { hullRadius, type ClusterHull } from "../../data/hulls";
 import { BeamBadges, type BadgeSpec } from "../../chrome/BeamBadges";
 import { Tooltip } from "../../chrome/Tooltip";
-import { Camera2D, centerForTarget, easeInOutCubic } from "../camera2d";
+import { Camera2D, centerForTarget, cloudFrameBox, easeInOutCubic, NO_INSETS, type ViewInsets } from "../camera2d";
 import { axisLayout, blendedPosition, mapBounds } from "../axisLayout";
 import { LabelOverlay } from "../labels/LabelOverlay";
 import { BeamsLayer, type Beam } from "../layers/BeamsLayer";
@@ -47,15 +47,19 @@ const MAX_CLUSTER_BEAMS = 12; // strongest neighbors of the selected hub
 const HALO_HUBS = 8; // top clusters by summed edge weight get pulsing rings
 
 // orbit (3-D only): middle/right-drag rotates azimuth+elevation; a trackpad
-// two-finger horizontal swipe rotates azimuth. Elevation offset is clamped so
-// the camera never dips under the map or snaps fully overhead.
+// two-finger horizontal swipe rotates azimuth. The elevation *offset* range is
+// intentionally generous — a firm drag reaches the hard limits below — so the
+// view spans straight-down (top view, matching the flat 2-D map) to just short
+// of the horizon; the two EL_CLAMP bounds are what actually keep the camera
+// from tipping past overhead or under the map.
 const ORBIT_AZ_SPEED = 0.008; // rad per px of horizontal drag
 const ORBIT_EL_SPEED = 0.006; // rad per px of vertical drag
-const ORBIT_EL_MIN = -0.55;
-const ORBIT_EL_MAX = 0.85;
+const ORBIT_EL_MIN = -0.75; // reaches top-down (el=0) with a little overrun
+const ORBIT_EL_MAX = 0.9; // reaches the near-horizon cap with a little overrun
 const WHEEL_ORBIT_AZ = 0.004; // rad per px of horizontal wheel/swipe
 const WHEEL_ORBIT_EL = 0.003; // rad per px of shift+vertical wheel/swipe
-const EL_CLAMP_MAX = 1.45; // ~83° from overhead — keep the horizon off-screen
+const EL_CLAMP_MIN = 0.0; // straight overhead (top-down) — never tip past it
+const EL_CLAMP_MAX = 1.5; // ~86° from overhead — near the horizon, cos(el) still safe
 
 // wheel/trackpad. Browsers report deltas in three units (px / line / page) and
 // only Chrome-on-mac reliably uses px, so everything is normalized to px before
@@ -83,6 +87,22 @@ const AUTO_ORBIT_RAD_S = 0.06; // base auto-orbit rate, scaled by orbitSpeed
 const TILT_RAD = (38 * Math.PI) / 180;
 const MORPH_MS = 900;
 const ID_PICK_INTERVAL_MS = 33; // ~30Hz async id-buffer hover in 3D
+
+// The orbit-pivot fallback needs the median depth of the points in frame. It
+// runs synchronously inside a pointer handler at every gesture start, so it
+// samples rather than scanning: walking all 49k points of a pythia-70m map cost
+// 2.5ms median / 11.2ms worst (measured), which is a visible hitch at the exact
+// instant the orbit begins, and it grows linearly with the map. A strided
+// sample of this size puts the median well inside the depth resolution the
+// camera can express, at a fixed ~0.1ms.
+const PIVOT_DEPTH_SAMPLES = 4096;
+
+// A wheel gesture picks orbit-or-zoom once and keeps it. Deciding per event
+// makes a diagonal trackpad swipe alternate between the two branches, and since
+// the zoom branch drops the pivot, the orbit branch re-grabs it on the next
+// event: one 40-event swipe measured 6 grab/clear pairs and 22.4ms of blocked
+// main thread, with the rotation centre visibly jumping mid-gesture.
+const WHEEL_GESTURE_GAP_MS = 400;
 
 // hand rig: Gaussian half-width of the shockwave packet, in viewport widths at
 // cast time. Narrow enough that the front reads as a front rather than as the
@@ -122,13 +142,29 @@ export class AtlasDriver implements SceneDriver {
   /** map extent (max bound dimension) — scale reference for flare sizing */
   private mapExtent = 1;
 
-  private cameraDirty = true;
+  /** Backing field for `cameraDirty`. Assigning `cameraDirty = true` anywhere
+   *  also raises `needsRender`, so the repaint gate can never go stale behind a
+   *  camera change without that call site having to know the gate exists. */
+  private _cameraDirty = true;
+  private get cameraDirty(): boolean {
+    return this._cameraDirty;
+  }
+  private set cameraDirty(v: boolean) {
+    this._cameraDirty = v;
+    if (v) this.needsRender = true;
+  }
+  /** Something changed since the last submitted frame. Paths that mutate a
+   *  uniform without touching the camera must set this themselves. */
+  private needsRender = true;
   private mouse: { x: number; y: number } | null = null;
   private hoverDirty = false;
   private hoveredIndex: number | null = null;
 
   private dragging = false;
   private pointerDown: { x: number; y: number } | null = null;
+  /** the cluster whose label pill the current press started on — a press
+   *  that never becomes a drag is that pill's click (see onPointerDown) */
+  private pillDown: number | null = null;
   private lastPointer: { x: number; y: number } | null = null;
 
   // orbit: user azimuth + extra elevation, scaled by morph so a flat 2-D map
@@ -159,7 +195,13 @@ export class AtlasDriver implements SceneDriver {
   // around it instead of swinging off-frame around a z=0 ground point.
   private orbitPivot: { p2: [number, number]; p3: [number, number, number] } | null = null;
   private orbitAnchor: { a: number; b: number } | null = null;
-  private wheelOrbitAt = 0; // last wheel-orbit tick — a fresh swipe re-grabs
+  // last wheel-orbit tick — a fresh swipe re-grabs. -Infinity, not 0: 0 reads
+  // as "an orbit just now" for the first WHEEL_GESTURE_GAP_MS of page life,
+  // so a dims toggle that early skipped its re-frame (see onDimsChange)
+  private wheelOrbitAt = -Infinity;
+  /** orbit-vs-zoom latched for the duration of one wheel gesture */
+  private wheelMode: "orbit" | "zoom" | null = null;
+  private wheelGestureAt = 0;
   /** wheel zoom: pending log-factor drained over ~120 ms, cursor-anchored */
   private zoomPending = 0;
   private zoomAnchor = { x: 0, y: 0 };
@@ -201,11 +243,16 @@ export class AtlasDriver implements SceneDriver {
   private bounds3: [number, number, number, number] | null = null;
   /** max xy dimension of the pos3 cloud — scale reference for 3D fly-to */
   private extent3 = 1;
+  /** pos3 depth (z) midpoint — with the xy bounds, the cloud center the
+   *  camera's depth window is kept on (see frame()) */
+  private zMid3 = 0;
   private camDist = 30;
   private idPicker: IdPicker | null = null;
   private lastIdPickAt = 0;
   private idPickBusy = false;
   private projScratch = new THREE.Vector3();
+  /** reused by resolveOrbitPivot so a gesture start allocates nothing */
+  private pivotDepthScratch = new Float32Array(PIVOT_DEPTH_SAMPLES);
 
   private abort = new AbortController();
   private unsubscribes: (() => void)[] = [];
@@ -248,6 +295,8 @@ export class AtlasDriver implements SceneDriver {
         if (s.selection !== prev.selection) {
           this.labels?.setSelected(s.selection?.kind === "cluster" ? s.selection.id : null);
           this.applySelection(s.selection);
+          this.applyFocus(s.selection);
+          this.needsRender = true;
         }
         if (s.toggles !== prev.toggles) {
           if (this.territories) this.territories.visible = s.toggles.territories;
@@ -260,6 +309,10 @@ export class AtlasDriver implements SceneDriver {
         if (s.settings !== prev.settings) {
           this.applyPointSettings();
           this.bloomOn = this.bloomPipe !== null && s.settings.bloom;
+          // point scale / confidence floor / bloom are uniform-and-pipeline
+          // changes with no camera move — without this the repaint gate would
+          // hold the old frame until something else happened to dirty it
+          this.needsRender = true;
         }
         if (s.appearance !== prev.appearance) {
           if (this.beams) this.beams.uWidthScale.value = s.appearance.atlas.beamWidth;
@@ -446,12 +499,16 @@ export class AtlasDriver implements SceneDriver {
     this.centroid3ById = new Map(ds.columns.clusters.map((c) => [c.id, c.centroid]));
 
     const overlay = document.getElementById("overlay-html")!;
-    this.labels = new LabelOverlay(overlay, ds.hulls, ds.columns.clusters, (cid) => {
-      appStore.getState().setSelection({ kind: "cluster", id: cid });
-      // flyToCluster is morph-aware — it aims at the pos2 hull anchor when flat
-      // and the pos3 centroid mid-flythrough, so pills fly correctly in both
-      this.flyToCluster(cid);
-    });
+    this.labels = new LabelOverlay(
+      overlay,
+      ds.hulls,
+      ds.columns.clusters,
+      (cid) => this.selectClusterPill(cid),
+      {
+        pointerdown: (e, cid) => this.onPointerDown(e, cid),
+        wheel: (e) => this.onWheel(e),
+      },
+    );
 
     const t = appStore.getState().toggles;
     this.territories.visible = t.territories;
@@ -474,15 +531,20 @@ export class AtlasDriver implements SceneDriver {
     // dimension morph can re-frame the camera onto the 3-D cloud
     const q = ds.columns.pos3;
     let m3x0 = Infinity, m3y0 = Infinity, m3x1 = -Infinity, m3y1 = -Infinity;
+    let m3z0 = Infinity, m3z1 = -Infinity;
     for (let i = 0; i < ds.columns.count; i++) {
-      const x = q[i * 3]!, y = q[i * 3 + 1]!;
+      const x = q[i * 3]!, y = q[i * 3 + 1]!, z = q[i * 3 + 2]!;
       if (x < m3x0) m3x0 = x;
       if (x > m3x1) m3x1 = x;
       if (y < m3y0) m3y0 = y;
       if (y > m3y1) m3y1 = y;
+      if (z < m3z0) m3z0 = z;
+      if (z > m3z1) m3z1 = z;
     }
     this.bounds3 = [m3x0, m3y0, m3x1, m3y1];
     this.extent3 = Math.max(m3x1 - m3x0, m3y1 - m3y0) || 1;
+    this.zMid3 = Number.isFinite(m3z0) ? (m3z0 + m3z1) / 2 : 0;
+    const zSpan3 = Number.isFinite(m3z0) ? m3z1 - m3z0 : 0;
 
     // per-cluster pos3 xy spread, so a 3D fly-to frames the neighborhood at a
     // sane zoom. RMS*2 (not max) so one stray point can't inflate the window;
@@ -510,10 +572,14 @@ export class AtlasDriver implements SceneDriver {
       }
     }
 
-    // the tilt orbit needs the camera pulled back past the 3-D cloud's depth
-    this.camDist = this.mapExtent * 2;
+    // the tilt orbit needs the camera pulled back past the cloud's depth. pos3
+    // is its own frame (offset and scaled apart from pos2), so size on the
+    // larger of both layouts including pos3's depth — twice the biggest side
+    // clears the half-diagonal of any morph blend. frame() keeps the eye this
+    // far from the cloud *center*, so the window can't drift off the cloud.
+    this.camDist = Math.max(this.mapExtent, this.extent3, zSpan3) * 2;
     this.camera.near = 0.1;
-    this.camera.far = this.mapExtent * 8;
+    this.camera.far = this.camDist * 4;
 
     this.fitPending = true;
     this.userDroveCamera = false;
@@ -571,8 +637,20 @@ export class AtlasDriver implements SceneDriver {
     // fresh layers start flat — re-apply the current dimension morph
     this.applyMorph();
 
+    // a selection made before the renderer had this map (a pinned unit
+    // opened while the GPU was still starting) is drawn now
+    const sel = appStore.getState().selection;
+    this.applySelection(sel);
+    this.applyFocus(sel);
+
     this.cameraDirty = true;
     this.hoverClear();
+  }
+
+  private applyFocus(sel: Selection | null): void {
+    if (!this.points) return;
+    const n = this.dataset?.columns.count ?? 0;
+    this.points.uFocus.value = sel?.kind === "point" && sel.id >= 0 && sel.id < n ? sel.id : -1;
   }
 
   frame(dt: number, t: number): void {
@@ -620,10 +698,35 @@ export class AtlasDriver implements SceneDriver {
       const cosEl = Math.cos(el);
       const sinAz = Math.sin(az);
       const cosAz = Math.cos(az);
+      // Keep the depth window on the cloud. The view ray runs through the
+      // ground point (cx, cy, 0) along -o (o = unit eye offset below), but near
+      // the horizon the orbit pivot's compensating pan slides (cx, cy) tens of
+      // map-widths along that ray — an eye a fixed camDist from the ground point
+      // then ends up *past* the cloud and every point falls behind the near
+      // plane while the HTML labels, which have no depth clip, keep tracking
+      // (the "cloud vanishes mid-orbit" report). Sliding the look-at target
+      // along the ray to the spot nearest the cloud's center leaves the
+      // orthographic image exactly unchanged and puts the cloud mid-window.
+      const ox = sinAz * sinEl, oy = -cosAz * sinEl, oz = cosEl;
+      const m = this.morph;
+      let tx = this.cam.cx, ty = this.cam.cy, tz = 0;
+      if (this.bounds && this.bounds3) {
+        const [a0, b0, a1, b1] = this.bounds;
+        const [c0, d0, c1, d1] = this.bounds3;
+        const px = (a0 + a1) / 2 + ((c0 + c1) / 2 - (a0 + a1) / 2) * m;
+        const py = (b0 + b1) / 2 + ((d0 + d1) / 2 - (b0 + b1) / 2) * m;
+        const pz = this.zMid3 * m;
+        const s = (px - tx) * ox + (py - ty) * oy + pz * oz;
+        if (Number.isFinite(s)) {
+          tx += ox * s;
+          ty += oy * s;
+          tz += oz * s;
+        }
+      }
       this.camera.position.set(
-        this.cam.cx + sinAz * sinEl * this.camDist,
-        this.cam.cy - cosAz * sinEl * this.camDist,
-        cosEl * this.camDist,
+        tx + ox * this.camDist,
+        ty + oy * this.camDist,
+        tz + oz * this.camDist,
       );
       // This map is Z-up, so three's default camera.up (world +Y) lies *inside*
       // the map plane. Letting lookAt derive the roll from it pins world +Y to
@@ -633,7 +736,7 @@ export class AtlasDriver implements SceneDriver {
       // every (az, el), and at az=el=0 it is (0,1,0), so the flat 2-D map keeps
       // the orientation the HTML/SVG overlays project against.
       this.camera.up.set(-cosEl * sinAz, cosEl * cosAz, sinEl);
-      this.camera.lookAt(this.cam.cx, this.cam.cy, 0);
+      this.camera.lookAt(tx, ty, tz);
       this.camera.updateProjectionMatrix();
       // refresh matrixWorldInverse now (render would too, but a frame later)
       // so projectWorld-anchored pills track this frame's camera, not last's
@@ -645,8 +748,42 @@ export class AtlasDriver implements SceneDriver {
       this.cameraDirty = false;
     }
 
+    // Repaint gate. The loop used to submit a frame on every rAF tick whether
+    // or not anything had changed — 49k sprites plus, on the webgpu rung, a
+    // full-res bloom chain, redrawn at 60Hz over a completely static scene.
+    //
+    // Note this is deliberately a no-op in the default configuration: breathing
+    // halos are a genuine per-frame animation, so `animating` stays true while
+    // they are on. The win is for reduced-motion users, halos-off, and idle
+    // background tabs — not for the default view, which really does need every
+    // frame. Anything that changes the picture without animating must raise
+    // needsRender; the `cameraDirty` setter does that for every camera path.
+    const spinning =
+      appStore.getState().appearance.atlas.orbitEnabled && this.morph > 0.5 && !this.reducedMotion;
+    const animating =
+      this.morphTween !== null ||
+      this.zoomPending !== 0 ||
+      this.orbiting ||
+      this.dragging ||
+      this.pinch !== null ||
+      spinning ||
+      (this.halos?.visible === true && !this.reducedMotion);
+    if (!this.needsRender && !animating) return;
+    this.renderNow();
+  }
+
+  /** Submit one frame immediately, outside the repaint gate.
+   *
+   *  On-demand rendering has a readback consequence: a WebGL drawing buffer is
+   *  only defined for `drawImage`/`getImageData` in the same task it was drawn
+   *  in — once composited the spec lets the browser clear it, and we don't pay
+   *  for `preserveDrawingBuffer`. On screen that is invisible (the compositor
+   *  keeps showing the last committed frame), but anything sampling pixels off
+   *  the canvas has to draw first. Call this immediately before reading. */
+  renderNow(): void {
     if (this.bloomOn && this.bloomPipe) this.bloomPipe.post.render();
     else this.renderer.render(this.scene, this.camera);
+    this.needsRender = false;
   }
 
   /** The rendered spherical camera angles: azimuth around the map's +Z axis and
@@ -657,7 +794,10 @@ export class AtlasDriver implements SceneDriver {
    *  of step with the matrix frame() builds. */
   private orbitAngles(morph = this.morph): [az: number, el: number] {
     const el = Math.min(Math.max(this.orbitEl, ORBIT_EL_MIN), ORBIT_EL_MAX);
-    return [morph * this.orbitAz, Math.min(morph * (TILT_RAD + el), EL_CLAMP_MAX)];
+    return [
+      morph * this.orbitAz,
+      Math.min(Math.max(morph * (TILT_RAD + el), EL_CLAMP_MIN), EL_CLAMP_MAX),
+    ];
   }
 
   /** The angles a fly-to has to be solved against: the ones the camera will
@@ -716,9 +856,19 @@ export class AtlasDriver implements SceneDriver {
 
   /** Resolve the orbit pivot and capture its anchor. Called at the start of
    *  every orbit interaction, before hover is cleared. */
-  private grabOrbitPivot(useHover = true): void {
-    this.orbitPivot = this.resolveOrbitPivot(useHover);
+  private grabOrbitPivot(useHover = true, cluster: number | null = null): void {
+    this.orbitPivot = (cluster !== null && this.clusterPivot(cluster)) || this.resolveOrbitPivot(useHover);
     this.captureOrbitAnchor();
+  }
+
+  /** A cluster as an orbit pivot: its label anchor flat, its pos3 centroid in
+   *  the flythrough (the same pair its pill projects from). */
+  private clusterPivot(
+    id: number,
+  ): { p2: [number, number]; p3: [number, number, number] } | null {
+    const c3 = this.centroid3ById.get(id);
+    const hull = this.hullsById.get(id);
+    return c3 && hull ? { p2: [hull.anchor[0], hull.anchor[1]], p3: [c3[0], c3[1], c3[2]] } : null;
   }
 
   private clearOrbitPivot(): void {
@@ -745,28 +895,75 @@ export class AtlasDriver implements SceneDriver {
     const sel = appStore.getState().selection;
     if (sel?.kind === "point") return point(sel.id);
     if (sel?.kind === "cluster") {
-      const c3 = this.centroid3ById.get(sel.id);
-      const hull = this.hullsById.get(sel.id);
-      if (c3 && hull) return { p2: [hull.anchor[0], hull.anchor[1]], p3: [...c3] };
+      const pv = this.clusterPivot(sel.id);
+      if (pv) return pv;
     }
-    // median depth of the points currently in frame, pivot at the view center
+    // median depth of the points currently in frame, pivot at the view center.
+    // Strided sample, not a full scan — see PIVOT_DEPTH_SAMPLES. The stride is
+    // an odd-ish step over the whole array rather than a prefix, so a map whose
+    // points are ordered by cluster still samples across all of them.
+    //
+    // Both halves go through the orbit frame. cam.cx/cy is a spot on the z = 0
+    // plane, not what sits mid-screen: a point at height z rides up-screen by
+    // z·sin(el), so the old (cx, cy, zMed) pivot landed ~570 px above the view
+    // center on the default atlas — off the top edge — and auto-orbit swung the
+    // cloud around that off-screen axis. So: test "in frame" by each point's
+    // screen offsets (right a, up b — the captureOrbitAnchor basis), and put the
+    // pivot on the view ray through the screen center, at the in-frame points'
+    // median distance along that ray.
     const m = this.morph;
     const [hx, hy] = this.cam.halfExtents();
+    const [az, el] = this.orbitAngles();
+    const ca = Math.cos(az), sa = Math.sin(az);
+    const ce = Math.cos(el), se = Math.sin(el);
+    // o = unit offset toward the eye (same as frame())
+    const ox = sa * se, oy = -ca * se, oz = ce;
     const n = Math.min(p.length / 2, q.length / 3);
-    const zs: number[] = [];
-    for (let i = 0; i < n; i++) {
-      const x = p[i * 2]! + (q[i * 3]! - p[i * 2]!) * m;
-      const y = p[i * 2 + 1]! + (q[i * 3 + 1]! - p[i * 2 + 1]!) * m;
-      if (Math.abs(x - this.cam.cx) <= hx && Math.abs(y - this.cam.cy) <= hy)
-        zs.push(q[i * 3 + 2]!);
+    const stride = Math.max(1, Math.floor(n / PIVOT_DEPTH_SAMPLES));
+    const zs = this.pivotDepthScratch;
+    let k = 0;
+    for (let i = 0; i < n && k < zs.length; i += stride) {
+      const dx = p[i * 2]! + (q[i * 3]! - p[i * 2]!) * m - this.cam.cx;
+      const dy = p[i * 2 + 1]! + (q[i * 3 + 1]! - p[i * 2 + 1]!) * m - this.cam.cy;
+      const z = q[i * 3 + 2]! * m;
+      const a = dx * ca + dy * sa;
+      const b = (-dx * sa + dy * ca) * ce + z * se;
+      if (Math.abs(a) <= hx && Math.abs(b) <= hy) zs[k++] = dx * ox + dy * oy + z * oz;
     }
-    if (zs.length) {
-      zs.sort((a, b) => a - b);
-      const zMed = zs[zs.length >> 1]!;
+    if (k) {
+      const inFrame = zs.subarray(0, k);
+      inFrame.sort(); // TypedArray sorts numerically
+      const t = inFrame[k >> 1]!;
+      const px = this.cam.cx + ox * t;
+      const py = this.cam.cy + oy * t;
+      const pz = oz * t;
+      // pivotWorld() renders p3.z scaled by the morph — pre-divide so the pivot
+      // lands exactly on the ray at the current morph (a flat map has el = 0,
+      // so pz is the ray's own depth there and dropping it changes nothing)
       return {
-        p2: [this.cam.cx, this.cam.cy],
-        p3: [this.cam.cx, this.cam.cy, zMed],
+        p2: [px, py],
+        p3: [px, py, m > 1e-3 ? pz / m : 0],
       };
+    }
+    // Nothing in frame — the view has been panned clear of the cloud. Pivoting
+    // on the empty ground plane under the view center (the old z=0 fallback)
+    // makes the next orbit swing the whole cloud away in a wide arc — the
+    // "panning ruins the orbit" report. Fall back to the cloud's own center
+    // (bounds3 centroid at the sampled median depth) so an orbit re-grabs the
+    // whole map and turntables around it instead of around empty space.
+    const b = this.bounds3;
+    if (b) {
+      let g = 0;
+      for (let i = 0; i < n && g < zs.length; i += stride) zs[g++] = q[i * 3 + 2]!;
+      let zMed = 0;
+      if (g) {
+        const all = zs.subarray(0, g);
+        all.sort();
+        zMed = all[g >> 1]!;
+      }
+      const cx = (b[0] + b[2]) / 2;
+      const cy = (b[1] + b[3]) / 2;
+      return { p2: [cx, cy], p3: [cx, cy, zMed] };
     }
     return { p2: [this.cam.cx, this.cam.cy], p3: [this.cam.cx, this.cam.cy, 0] };
   }
@@ -809,7 +1006,10 @@ export class AtlasDriver implements SceneDriver {
     if (!this.orbitPivot || !this.orbitAnchor) return;
     const [px, py, pz] = this.pivotWorld();
     const [az, el] = this.orbitAngles();
-    const b2 = (this.orbitAnchor.b - pz * Math.sin(el)) / Math.cos(el); // el clamped < 90°
+    // el is clamped short of 90°, but near the cap cos(el) is small — floor it
+    // (0.06 sits just under cos(EL_CLAMP_MAX)) so this compensating pan can never
+    // blow up as the view approaches the horizon.
+    const b2 = (this.orbitAnchor.b - pz * Math.sin(el)) / Math.max(Math.cos(el), 0.06);
     const cosAz = Math.cos(az);
     const sinAz = Math.sin(az);
     const cx = px - (this.orbitAnchor.a * cosAz - b2 * sinAz);
@@ -821,11 +1021,13 @@ export class AtlasDriver implements SceneDriver {
     }
   }
 
-  /** Wheel orbit has no gesture boundaries — treat a >400 ms gap as a fresh
-   *  swipe and re-grab the pivot (the cursor may be on a different node). */
+  /** Wheel orbit has no gesture boundaries — treat a gap as a fresh swipe and
+   *  re-grab the pivot (the cursor may be on a different node). Within one
+   *  latched gesture this is a no-op after the first event. */
   private refreshWheelOrbitPivot(): void {
     const now = performance.now();
-    if (!this.orbitPivot || now - this.wheelOrbitAt > 400) this.grabOrbitPivot();
+    if (!this.orbitPivot || now - this.wheelOrbitAt > WHEEL_GESTURE_GAP_MS)
+      this.grabOrbitPivot();
     this.wheelOrbitAt = now;
   }
 
@@ -889,15 +1091,66 @@ export class AtlasDriver implements SceneDriver {
     this.cameraDirty = true;
   }
 
+  private occluderWatch: ResizeObserver | null = null;
+
+  /** Re-frame the automatic overview when a panel that covers the map mounts
+   *  or changes size — the workspace rail gets its data after the first fit.
+   *  Once the user drives the camera their view is left alone. */
+  private watchOccluders(): void {
+    if (this.occluderWatch || typeof ResizeObserver === "undefined" || typeof document === "undefined") return;
+    let refitQueued = false;
+    const refit = () => {
+      if (refitQueued) return;
+      refitQueued = true;
+      requestAnimationFrame(() => {
+        refitQueued = false;
+        if (this.userDroveCamera || !this.bounds || this.cam.isFlying) return;
+        this.fitPending = true;
+        this.applyFit();
+        this.cameraDirty = true;
+      });
+    };
+    const ro = new ResizeObserver(refit);
+    let scanQueued = false;
+    const scan = () => {
+      if (scanQueued) return;
+      scanQueued = true;
+      requestAnimationFrame(() => {
+        scanQueued = false;
+        for (const el of document.querySelectorAll("[data-map-occluder]")) ro.observe(el);
+      });
+    };
+    scan();
+    const mo = new MutationObserver(scan);
+    mo.observe(document.getElementById("chrome") ?? document.body, { childList: true, subtree: true });
+    this.occluderWatch = ro;
+    this.unsubscribes.push(() => {
+      ro.disconnect();
+      mo.disconnect();
+      this.occluderWatch = null;
+    });
+  }
+
   private applyFit(): void {
+    this.watchOccluders();
     if (!this.fitPending) return;
     if (this.cam.viewportW < 2 || this.cam.viewportH < 2) return;
     // frame whichever cloud the current dimension shows
-    const b = appStore.getState().dims === 3 ? this.bounds3 : this.bounds;
+    const flat = appStore.getState().dims !== 3;
+    const b = flat ? this.bounds : this.frameBox3();
     if (!b) return;
-    this.cam.fitBounds(b[0], b[1], b[2], b[3], 72);
+    this.cam.fitBounds(b[0], b[1], b[2], b[3], 72, flat ? this.occlusionInsets() : NO_INSETS);
     this.clearOrbitPivot();
     this.fitPending = false;
+  }
+
+  /** The box a 3-D fit frames: the pos3 cloud as seen at the angles the
+   *  camera settles at (see cloudFrameBox) — its xy bounds alone ignore the
+   *  tilt, and the default atlas opened half off the top edge. */
+  private frameBox3(): [number, number, number, number] | null {
+    const ds = this.dataset;
+    if (!ds) return this.bounds3;
+    return cloudFrameBox(ds.columns.pos3, ds.columns.count, ...this.settledAngles()) ?? this.bounds3;
   }
 
   // ── 2D↔3D dimension morph ───────────────────────────────────────────────
@@ -915,18 +1168,21 @@ export class AtlasDriver implements SceneDriver {
     // anchor compensation carries the grabbed node through the morph. Only a
     // deliberate dims toggle gets the cinematic full-cloud re-frame.
     const orbitLift =
-      this.orbiting || this.pinch !== null || now - this.wheelOrbitAt < 400;
+      this.orbiting || this.pinch !== null || now - this.wheelOrbitAt < WHEEL_GESTURE_GAP_MS;
     if (orbitLift) return;
 
     this.clearOrbitPivot();
-    const b = dims === 3 ? this.bounds3 : this.bounds;
+    const b = dims === 3 ? this.frameBox3() : this.bounds;
     if (b && this.cam.viewportW >= 2) {
-      const pad = 72;
-      const wpp = Math.max(
-        (b[2] - b[0]) / Math.max(this.cam.viewportW - pad * 2, 1),
-        (b[3] - b[1]) / Math.max(this.cam.viewportH - pad * 2, 1),
+      const [cx, cy, wpp] = this.cam.fitFor(
+        b[0],
+        b[1],
+        b[2],
+        b[3],
+        72,
+        dims === 2 ? this.occlusionInsets() : NO_INSETS,
       );
-      this.cam.flyTo((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, wpp, now, duration);
+      this.cam.flyTo(cx, cy, wpp, now, duration);
     }
     // the dimension switch re-frames — resizes keep auto-fitting again
     this.userDroveCamera = false;
@@ -1098,12 +1354,101 @@ export class AtlasDriver implements SceneDriver {
       this.cam.flyTo(cx, cy, wpp, performance.now());
       return;
     }
+    // The same selection opens the inspector, which is not in the DOM yet on
+    // this tick: measuring now frames the point under that panel. Wait two
+    // frames so the occluders are laid out, then frame the free area.
+    const token = ++this.flyToken;
+    const run = () => {
+      if (token === this.flyToken) this.flyToPoint2D(id);
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => requestAnimationFrame(run));
+    else run();
+  }
+
+  private flyToken = 0;
+
+  private flyToPoint2D(id: number): void {
+    if (!this.dataset) return;
     const p = this.dataset.columns.pos2;
     const x = p[id * 2];
     const y = p[id * 2 + 1];
     if (x === undefined || y === undefined) return;
-    const wpp = Math.max((this.mapExtent * 0.06) / fitPx, this.cam.minWpp);
-    this.cam.flyTo(x, y, wpp, performance.now());
+    // frame the unit WITH its nearest neighbours: a fixed window lands on a
+    // lone dot wherever the map is sparse, and the context is the point
+    const insets = this.occlusionInsets();
+    const freePx = Math.min(this.cam.freeW(insets), this.cam.freeH(insets)) * 0.6;
+    const span = Math.min(
+      Math.max(this.neighbourRadius(id, 24) * 2.4, this.mapExtent * 0.12),
+      this.mapExtent * 0.4,
+    );
+    const wpp = Math.max(span / freePx, this.cam.minWpp);
+    const [cx, cy] = this.cam.centerFor(x, y, wpp, insets);
+    this.cam.flyTo(cx, cy, wpp, performance.now());
+  }
+
+  /** Distance from point `id` to its k-th nearest neighbour on the flat map
+   *  (one linear pass; runs only on an explicit select). */
+  private neighbourRadius(id: number, k: number): number {
+    const p = this.dataset?.columns.pos2;
+    if (!p) return 0;
+    const x = p[id * 2]!;
+    const y = p[id * 2 + 1]!;
+    const best = new Float64Array(k).fill(Infinity);
+    const n = p.length / 2;
+    for (let i = 0; i < n; i++) {
+      if (i === id) continue;
+      const dx = p[i * 2]! - x;
+      const dy = p[i * 2 + 1]! - y;
+      const d = dx * dx + dy * dy;
+      if (d >= best[k - 1]!) continue;
+      let j = k - 1;
+      while (j > 0 && best[j - 1]! > d) {
+        best[j] = best[j - 1]!;
+        j--;
+      }
+      best[j] = d;
+    }
+    const r = best[k - 1]!;
+    return Number.isFinite(r) ? Math.sqrt(r) : 0;
+  }
+
+  /** How much of the canvas each chrome panel covers, from the elements that
+   *  declare `data-map-occluder="left|right|top|bottom"`. A side panel counts
+   *  only when it spans most of the canvas along that side — a short legend
+   *  card in a corner does not shrink the whole frame. Neither axis gives
+   *  away more than 60 % of the canvas, so a phone never frames a sliver. */
+  private occlusionInsets(): ViewInsets {
+    if (typeof document === "undefined") return NO_INSETS;
+    const c = this.renderer.domElement.getBoundingClientRect();
+    if (c.width < 2 || c.height < 2) return NO_INSETS;
+    // the nav rows end where the stylesheet's --nav-clear says content may start
+    // …in chrome px: on 4K screens #chrome is zoomed (--chrome-zoom), so
+    // scale it to the screen px the canvas rect is measured in
+    const chrome = document.getElementById("chrome");
+    const zoom = chrome ? parseFloat(getComputedStyle(chrome).getPropertyValue("--chrome-zoom")) || 1 : 1;
+    const navClear =
+      parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--nav-clear")) * zoom;
+    const ins = { l: 0, r: 0, t: Number.isFinite(navClear) ? Math.max(0, navClear - 12 - c.top) : 0, b: 0 };
+    for (const el of document.querySelectorAll<HTMLElement>("[data-map-occluder]")) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) continue;
+      // a stylesheet may move a panel per breakpoint (a left rail becomes a
+      // bottom sheet on phones): --map-occluder overrides the attribute
+      const side = getComputedStyle(el).getPropertyValue("--map-occluder").trim() || el.dataset.mapOccluder;
+      const tall = r.height >= c.height * 0.5;
+      const wide = r.width >= c.width * 0.5;
+      if (side === "left" && tall) ins.l = Math.max(ins.l, r.right - c.left);
+      else if (side === "right" && tall) ins.r = Math.max(ins.r, c.right - r.left);
+      else if (side === "top" && wide) ins.t = Math.max(ins.t, r.bottom - c.top);
+      else if (side === "bottom" && wide) ins.b = Math.max(ins.b, c.bottom - r.top);
+    }
+    const shrink = (a: number, b: number, total: number): [number, number] => {
+      const s = a + b > total * 0.6 ? (total * 0.6) / (a + b) : 1;
+      return [Math.max(0, a * s), Math.max(0, b * s)];
+    };
+    [ins.l, ins.r] = shrink(ins.l, ins.r, c.width);
+    [ins.t, ins.b] = shrink(ins.t, ins.b, c.height);
+    return ins;
   }
 
   /** Cinematic zoom onto one cluster (pill click / future keyboard nav). */
@@ -1130,8 +1475,11 @@ export class AtlasDriver implements SceneDriver {
     const hull = this.hullsById.get(clusterId);
     if (!hull) return;
     this.userDroveCamera = true;
-    const wpp = Math.max((hullRadius(hull) * 2) / fitPx, this.cam.minWpp);
-    this.cam.flyTo(hull.anchor[0], hull.anchor[1], wpp, performance.now());
+    const insets = this.occlusionInsets();
+    const freePx = Math.min(this.cam.freeW(insets), this.cam.freeH(insets)) * 0.55;
+    const wpp = Math.max((hullRadius(hull) * 2) / freePx, this.cam.minWpp);
+    const [cx, cy] = this.cam.centerFor(hull.anchor[0], hull.anchor[1], wpp, insets);
+    this.cam.flyTo(cx, cy, wpp, performance.now());
   }
 
   // ── hand rig ────────────────────────────────────────────────────────────
@@ -1281,50 +1629,22 @@ export class AtlasDriver implements SceneDriver {
     this.hullsById.clear();
   }
 
+  /** A label pill was activated — by keyboard, or by a press on it that
+   *  never became a drag. */
+  private selectClusterPill(cid: number): void {
+    appStore.getState().setSelection({ kind: "cluster", id: cid });
+    // flyToCluster is morph-aware — it aims at the pos2 hull anchor when flat
+    // and the pos3 centroid mid-flythrough, so pills fly correctly in both
+    this.flyToCluster(cid);
+  }
+
   // ── pointer gestures ────────────────────────────────────────────────────
 
   private attachPointer(): void {
     const c = this.canvas;
     const opts = { signal: this.abort.signal };
 
-    c.addEventListener(
-      "pointerdown",
-      (e) => {
-        if (e.pointerType === "touch") {
-          this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-          // a second finger ends whatever the first one was doing and starts
-          // the pinch/twist/tilt gesture from a fresh baseline
-          if (this.touches.size >= 2) {
-            this.pointerDown = null;
-            this.lastPointer = null;
-            this.dragging = false;
-            this.orbiting = false;
-            this.orbitLast = null;
-            this.beginPinch();
-            this.hoverClear();
-            return;
-          }
-        }
-        // middle (wheel-click) or right button → orbit the camera
-        if (e.button === 1 || e.button === 2) {
-          e.preventDefault();
-          c.setPointerCapture(e.pointerId);
-          this.orbiting = true;
-          this.orbitLast = { x: e.clientX, y: e.clientY };
-          // before hoverClear — the node under the cursor heads the pivot chain
-          this.grabOrbitPivot();
-          this.hoverClear();
-          c.style.cursor = "move";
-          return;
-        }
-        if (e.button !== 0) return;
-        c.setPointerCapture(e.pointerId);
-        this.pointerDown = { x: e.clientX, y: e.clientY };
-        this.lastPointer = { x: e.clientX, y: e.clientY };
-        this.dragging = false;
-      },
-      opts,
-    );
+    c.addEventListener("pointerdown", (e) => this.onPointerDown(e, null), opts);
 
     // right-drag orbits; suppress the browser context menu on the canvas
     c.addEventListener("contextmenu", (e) => e.preventDefault(), opts);
@@ -1384,8 +1704,10 @@ export class AtlasDriver implements SceneDriver {
         this.pointerDown = null;
         this.lastPointer = null;
         this.dragging = false;
+        this.pillDown = null;
         this.orbiting = false;
         this.orbitLast = null;
+        this.clearOrbitPivot(); // same reason as pointerup — don't leave a live anchor
         c.style.cursor = "";
       },
       opts,
@@ -1415,15 +1737,27 @@ export class AtlasDriver implements SceneDriver {
         if (this.orbiting) {
           this.orbiting = false;
           this.orbitLast = null;
+          // release the pivot the gesture pinned: once the orbit ends, a live
+          // anchor would keep re-solving the camera center every frame and
+          // fight the next wheel-zoom's cursor anchoring. Auto-orbit and the
+          // next gesture each re-grab their own pivot.
+          this.clearOrbitPivot();
           c.style.cursor = "";
           return;
         }
         const wasDrag = this.dragging;
+        const pill = this.pillDown;
         this.pointerDown = null;
         this.lastPointer = null;
         this.dragging = false;
+        this.pillDown = null;
         c.style.cursor = "";
         if (wasDrag) return;
+        // a press on a label pill that never moved is that pill's click
+        if (pill !== null) {
+          this.selectClusterPill(pill);
+          return;
+        }
 
         // click/tap: select the picked point's cluster (noise → point selection)
         if (this.morph > 0.5 && this.hoveredIndex === null) {
@@ -1447,58 +1781,10 @@ export class AtlasDriver implements SceneDriver {
       opts,
     );
 
-    c.addEventListener(
-      "wheel",
-      (e) => {
-        e.preventDefault();
-        this.userDroveCamera = true;
-        // normalize to pixels first — Firefox reports lines and a page-scroll
-        // wheel reports pages, both of which read as a near-dead zoom otherwise
-        const unit =
-          e.deltaMode === 1 ? WHEEL_LINE_PX : e.deltaMode === 2 ? WHEEL_PAGE_PX : 1;
-        const dx = e.deltaX * unit;
-        const dy = e.deltaY * unit;
-        // trackpad pinch arrives as ctrl+wheel with a much smaller delta, so it
-        // needs its own gain to feel 1:1 with the fingers
-        const pinching = e.ctrlKey;
-
-        if (this.morph > 0.02 && !pinching) {
-          // in 3-D a horizontal-dominant two-finger swipe orbits the azimuth,
-          // and shift+swipe takes elevation — vertical stays zoom, which is the
-          // one gesture a plain mouse wheel also has to serve
-          if (Math.abs(dx) > Math.abs(dy)) {
-            this.refreshWheelOrbitPivot();
-            this.ensure3DForOrbit();
-            this.orbitBy(dx * WHEEL_ORBIT_AZ, 0);
-            return;
-          }
-          if (e.shiftKey) {
-            this.refreshWheelOrbitPivot();
-            this.ensure3DForOrbit();
-            this.orbitBy(0, dy * WHEEL_ORBIT_EL);
-            return;
-          }
-        }
-
-        // zoom re-centers on its own cursor anchor — the orbit pivot yields
-        this.clearOrbitPivot();
-        // accumulate in log space, drained over ~120 ms in stepNavigation so
-        // discrete wheel ticks read as one continuous glide
-        const step = Math.max(
-          -WHEEL_ZOOM_MAX,
-          Math.min(dy * (pinching ? PINCH_ZOOM_GAIN : WHEEL_ZOOM_GAIN), WHEEL_ZOOM_MAX),
-        );
-        if (this.reducedMotion) {
-          this.zoomAtScreen(e.clientX, e.clientY, Math.exp(step));
-        } else {
-          this.zoomPending += step;
-          this.zoomAnchor = { x: e.clientX, y: e.clientY };
-        }
-        this.cameraDirty = true;
-        this.hoverDirty = true;
-      },
-      { signal: this.abort.signal, passive: false },
-    );
+    c.addEventListener("wheel", (e) => this.onWheel(e), {
+      signal: this.abort.signal,
+      passive: false,
+    });
 
     window.addEventListener(
       "keydown",
@@ -1507,6 +1793,115 @@ export class AtlasDriver implements SceneDriver {
       },
       opts,
     );
+  }
+
+  /** Pointer-down on the canvas, or on a label pill over it (`pill` = its
+   *  cluster). A pill hands its press here so a drag, orbit or pinch that
+   *  starts on a label drives the map like any other: the pointer is captured
+   *  to the canvas, whose move/up listeners then run the gesture, and a press
+   *  that never becomes a drag is the pill's click (see pointerup). */
+  private onPointerDown(e: PointerEvent, pill: number | null): void {
+    const c = this.canvas;
+    if (pill !== null) {
+      e.stopPropagation();
+      try {
+        c.setPointerCapture(e.pointerId);
+      } catch {
+        return; // pointer already gone (released before this ran)
+      }
+    }
+    if (e.pointerType === "touch") {
+      this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      // a second finger ends whatever the first one was doing and starts
+      // the pinch/twist/tilt gesture from a fresh baseline
+      if (this.touches.size >= 2) {
+        this.pointerDown = null;
+        this.lastPointer = null;
+        this.dragging = false;
+        this.orbiting = false;
+        this.orbitLast = null;
+        this.pillDown = null;
+        this.beginPinch();
+        this.hoverClear();
+        return;
+      }
+    }
+    // middle (wheel-click) or right button → orbit the camera
+    if (e.button === 1 || e.button === 2) {
+      e.preventDefault();
+      c.setPointerCapture(e.pointerId);
+      this.orbiting = true;
+      this.orbitLast = { x: e.clientX, y: e.clientY };
+      // before hoverClear — the node under the cursor heads the pivot chain,
+      // unless the orbit started on a label: then it spins about that cluster
+      this.grabOrbitPivot(true, pill);
+      this.hoverClear();
+      c.style.cursor = "move";
+      return;
+    }
+    if (e.button !== 0) return;
+    c.setPointerCapture(e.pointerId);
+    this.pointerDown = { x: e.clientX, y: e.clientY };
+    this.lastPointer = { x: e.clientX, y: e.clientY };
+    this.dragging = false;
+    this.pillDown = pill;
+  }
+
+  private onWheel(e: WheelEvent): void {
+    e.preventDefault();
+    this.userDroveCamera = true;
+    // normalize to pixels first — Firefox reports lines and a page-scroll
+    // wheel reports pages, both of which read as a near-dead zoom otherwise
+    const unit =
+      e.deltaMode === 1 ? WHEEL_LINE_PX : e.deltaMode === 2 ? WHEEL_PAGE_PX : 1;
+    const dx = e.deltaX * unit;
+    const dy = e.deltaY * unit;
+    // trackpad pinch arrives as ctrl+wheel with a much smaller delta, so it
+    // needs its own gain to feel 1:1 with the fingers
+    const pinching = e.ctrlKey;
+
+    // Latch orbit-vs-zoom for the whole gesture. A trackpad swipe is never
+    // purely one axis, so deciding per event flips branches mid-swipe and
+    // thrashes the pivot (see WHEEL_GESTURE_GAP_MS). The first event of a
+    // gesture decides; the rest follow it until the fingers lift.
+    const now = performance.now();
+    if (now - this.wheelGestureAt > WHEEL_GESTURE_GAP_MS) this.wheelMode = null;
+    this.wheelGestureAt = now;
+    if (this.wheelMode === null) {
+      // in 3-D a horizontal-dominant two-finger swipe orbits the azimuth,
+      // and shift+swipe takes elevation — vertical stays zoom, which is the
+      // one gesture a plain mouse wheel also has to serve
+      const orbits =
+        this.morph > 0.02 && !pinching && (Math.abs(dx) > Math.abs(dy) || e.shiftKey);
+      this.wheelMode = orbits ? "orbit" : "zoom";
+    }
+
+    if (this.wheelMode === "orbit") {
+      this.refreshWheelOrbitPivot();
+      this.ensure3DForOrbit();
+      // shift is read live so a swipe can cross from azimuth to elevation
+      // without the pivot being torn down and re-resolved between them
+      if (e.shiftKey) this.orbitBy(0, dy * WHEEL_ORBIT_EL);
+      else this.orbitBy(dx * WHEEL_ORBIT_AZ, 0);
+      return;
+    }
+
+    // zoom re-centers on its own cursor anchor — the orbit pivot yields
+    this.clearOrbitPivot();
+    // accumulate in log space, drained over ~120 ms in stepNavigation so
+    // discrete wheel ticks read as one continuous glide
+    const step = Math.max(
+      -WHEEL_ZOOM_MAX,
+      Math.min(dy * (pinching ? PINCH_ZOOM_GAIN : WHEEL_ZOOM_GAIN), WHEEL_ZOOM_MAX),
+    );
+    if (this.reducedMotion) {
+      this.zoomAtScreen(e.clientX, e.clientY, Math.exp(step));
+    } else {
+      this.zoomPending += step;
+      this.zoomAnchor = { x: e.clientX, y: e.clientY };
+    }
+    this.cameraDirty = true;
+    this.hoverDirty = true;
   }
 
   /** Turn a picked point into a store selection: its cluster, or the bare point
@@ -1654,6 +2049,7 @@ export class AtlasDriver implements SceneDriver {
       this.hoveredIndex = index;
       this.points?.setHover(index);
       appStore.getState().setHover(index !== null ? { kind: "point", id: index } : null);
+      this.needsRender = true; // the hover highlight is a uniform, not a camera move
     }
 
     if (index !== null && this.tooltip && this.dataset) {

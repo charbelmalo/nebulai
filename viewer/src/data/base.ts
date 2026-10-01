@@ -28,4 +28,7 @@
  *  an argument, so a test that means to fetch passes its own. */
 const DOC_HREF = typeof location === "undefined" ? "http://localhost/" : location.href;
 const APP_BASE = new URL(import.meta.env.BASE_URL || "/", DOC_HREF);
+/** The app root (absolute, trailing slash): where the chooser lives and the
+ *  parent of every experience entry (`learn/`, `atlas/`, `research/`). */
+export const APP_ROOT = APP_BASE.href;
 export const DATA_BASE = new URL("out/", APP_BASE).href.replace(/\/+$/, "");

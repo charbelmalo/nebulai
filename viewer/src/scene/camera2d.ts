@@ -15,6 +15,18 @@ export interface CameraTween {
   duration: number;
 }
 
+/** CSS px of the viewport hidden behind chrome panels on each side. Fits and
+ *  fly-tos frame the free rectangle between them instead of the whole canvas,
+ *  so a map is never centred under the rail that covers it. */
+export interface ViewInsets {
+  l: number;
+  r: number;
+  t: number;
+  b: number;
+}
+
+export const NO_INSETS: ViewInsets = Object.freeze({ l: 0, r: 0, t: 0, b: 0 });
+
 export function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
@@ -44,16 +56,55 @@ export class Camera2D {
     this.viewportH = Math.max(h, 1);
   }
 
-  /** Frame a world-space AABB with paddingPx of margin on every side. */
-  fitBounds(minX: number, minY: number, maxX: number, maxY: number, paddingPx = 48): void {
+  /** Frame a world-space AABB with paddingPx of margin on every side of the
+   *  free rectangle the insets leave. */
+  fitBounds(
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number,
+    paddingPx = 48,
+    insets: ViewInsets = NO_INSETS,
+  ): void {
+    const [cx, cy, wpp] = this.fitFor(minX, minY, maxX, maxY, paddingPx, insets);
+    this.cx = cx;
+    this.cy = cy;
+    this.wpp = wpp;
+    this.tween = null;
+  }
+
+  /** The camera (cx, cy, wpp) that fitBounds would settle on — for flyTo. */
+  fitFor(
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number,
+    paddingPx = 48,
+    insets: ViewInsets = NO_INSETS,
+  ): [number, number, number] {
     const w = Math.max(maxX - minX, 1e-9);
     const h = Math.max(maxY - minY, 1e-9);
-    const availW = Math.max(this.viewportW - paddingPx * 2, 1);
-    const availH = Math.max(this.viewportH - paddingPx * 2, 1);
-    this.cx = (minX + maxX) / 2;
-    this.cy = (minY + maxY) / 2;
-    this.wpp = this.clampWpp(Math.max(w / availW, h / availH));
-    this.tween = null;
+    const availW = Math.max(this.freeW(insets) - paddingPx * 2, 1);
+    const availH = Math.max(this.freeH(insets) - paddingPx * 2, 1);
+    const wpp = this.clampWpp(Math.max(w / availW, h / availH));
+    const [cx, cy] = this.centerFor((minX + maxX) / 2, (minY + maxY) / 2, wpp, insets);
+    return [cx, cy, wpp];
+  }
+
+  freeW(insets: ViewInsets = NO_INSETS): number {
+    return Math.max(this.viewportW - insets.l - insets.r, 1);
+  }
+
+  freeH(insets: ViewInsets = NO_INSETS): number {
+    return Math.max(this.viewportH - insets.t - insets.b, 1);
+  }
+
+  /** The camera centre that shows world (x, y) at the middle of the free
+   *  rectangle at zoom wpp (screen y grows down, world y up). */
+  centerFor(x: number, y: number, wpp: number, insets: ViewInsets = NO_INSETS): [number, number] {
+    const dx = (insets.l - insets.r) / 2;
+    const dy = (insets.t - insets.b) / 2;
+    return [x - dx * wpp, y + dy * wpp];
   }
 
   panPixels(dxPx: number, dyPx: number): void {
@@ -188,4 +239,48 @@ export function centerForTarget(
 ): [number, number] {
   const lift = pz * Math.tan(el);
   return [px - lift * Math.sin(az), py + lift * Math.cos(az)];
+}
+
+/** The ground-frame box that frames a whole 3-D cloud at orbit angles (az, el)
+ *  — pass it to `fitFor`/`fitBounds` in place of the cloud's xy bounds.
+ *
+ *  Fitting the xy bounds alone ignores the same tilt `centerForTarget` solves
+ *  out for one point: every point rides up-screen by z·sin(el), so a cloud
+ *  whose depth sits well off z = 0 (pos3 is its own frame; the default atlas
+ *  lives at z ≈ 4–10) opened half off the top edge with the orbit spinning
+ *  around it. This projects every point onto the camera's screen axes
+ *  (right = (cos az, sin az, 0), up = (−cos el·sin az, cos el·cos az, sin el)),
+ *  takes that screen box, and returns an axis-aligned box of the same
+ *  width/height centered on the ground point that puts the box's middle at the
+ *  viewport center — so the fit's zoom accounts for the depth spread too.
+ *  Exact for the orthographic projection; with az = el = 0 it is the plain xy
+ *  bounds. Returns null for an empty cloud. */
+export function cloudFrameBox(
+  pos3: ArrayLike<number>,
+  count: number,
+  az: number,
+  el: number,
+): [number, number, number, number] | null {
+  const ca = Math.cos(az), sa = Math.sin(az);
+  const ce = Math.cos(el), se = Math.sin(el);
+  let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+  for (let i = 0; i < count; i++) {
+    const x = pos3[i * 3]!, y = pos3[i * 3 + 1]!, z = pos3[i * 3 + 2]!;
+    const a = x * ca + y * sa;
+    const b = (-x * sa + y * ca) * ce + z * se;
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    if (a < a0) a0 = a;
+    if (a > a1) a1 = a;
+    if (b < b0) b0 = b;
+    if (b > b1) b1 = b;
+  }
+  if (!(a1 >= a0)) return null;
+  // ground point whose screen offsets are the box middle — el is clamped
+  // short of 90° app-wide, but floor cos(el) as applyOrbitPivot does
+  const am = (a0 + a1) / 2;
+  const v = (b0 + b1) / 2 / Math.max(ce, 0.06);
+  const cx = am * ca - v * sa;
+  const cy = am * sa + v * ca;
+  const hw = (a1 - a0) / 2, hh = (b1 - b0) / 2;
+  return [cx - hw, cy - hh, cx + hw, cy + hh];
 }

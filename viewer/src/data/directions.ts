@@ -23,6 +23,7 @@
  *  as an axis reading zero.
  */
 
+import { sidecarKnownAbsent } from "./experience";
 import { signal } from "@preact/signals";
 import { DATA_BASE } from "./base";
 import { type Channel, channelFor, channelsFor, channelsLoaded, isKnownSpace } from "./channels";
@@ -251,8 +252,9 @@ export function ensureDirections(datasetId: string, base = DATA_BASE): void {
   void (async () => {
     let set: DirectionSet | null = null;
     try {
-      const res = await fetch(`${base}/${datasetId}/directions.json`);
-      if (res.ok) set = parseDirectionSet(await res.json(), datasetId);
+      const absent = base === DATA_BASE && sidecarKnownAbsent(datasetId, "directions.json");
+      const res = absent ? null : await fetch(`${base}/${datasetId}/directions.json`);
+      if (res?.ok) set = parseDirectionSet(await res.json(), datasetId);
     } catch {
       set = null;
     }
