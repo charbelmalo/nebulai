@@ -138,7 +138,7 @@ footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);color:v
 <div class="wrap">
 <nav class="toc" aria-label="Contents">
   <p class="brand">Nebul.AI Field Guide</p>
-  <p class="sub">main @ 83282a3 · 2026-09-12</p>
+  <p class="sub">main @ be95be5 · 2026-09-12</p>
   <ol>
     <li><a href="#about">0 · How to read this</a></li>
     <li><a href="#install">1 · Install surface</a>
@@ -169,7 +169,7 @@ footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);color:v
 <main>
 <p class="kicker">Nebul.AI · offline field guide</p>
 <h1>What shipped on 2026-09-11/12, and how to use it</h1>
-<p class="lede">Every command, page, panel and permalink key added by the roadmap merge (Attractors P0–5, Behavioral divergence P0–2, the generative-variance kit, weight-geometry Track 2b, and the Seer carry-overs). Written against <code>main</code> at <code>83282a3</code>. Nothing here is aspirational: each feature is either shown with the output it produced on this checkout, or marked as a gap.</p>
+<p class="lede">Every command, page, panel and permalink key added by the roadmap merge (Attractors P0–5, Behavioral divergence P0–2, the generative-variance kit, weight-geometry Track 2b, and the Seer carry-overs). Written against <code>main</code> at <code>be95be5</code>. Nothing here is aspirational: each feature is either shown with the output it produced on this checkout, or marked as a gap.</p>
 
 <div class="legend">
   <span><span class="b b-ship">shipped</span>exists and is exercised by tests</span>
@@ -227,7 +227,7 @@ pip install 'nebulai[organisms]'     # the same extra, for a pip install</code><
 </table></div>
 
 <h2 id="commands">2 · Command map</h2>
-<p>Seventeen top-level <code>nebulai</code> verbs. The first eleven predate the roadmap; the last seven are new or grew a subgroup. <code>seer</code> is its own script.</p>
+<p>Seventeen top-level <code>nebulai</code> verbs. The first ten predate the roadmap; the last seven are new or grew a subgroup. <code>seer</code> is its own script.</p>
 <div class="tbl"><table>
 <tr><th>Verb</th><th>Does</th><th>Section</th></tr>
 <tr><td><code>tokens</code> · <code>sae</code> · <code>neurons</code></td><td>the three map front-ends (unchanged)</td><td><span class="faint">README</span></td></tr>
@@ -321,7 +321,7 @@ nebulai direction drop [--keep-channels] MODEL ID [ID ...]</code></pre>
 <pre class="cmd"><code>python -m nebulai.backend.eval_awareness --revision SHA --out DIR
     [--model HuggingFaceTB/SmolLM2-135M-Instruct] [--local-dir DIR] [--layers 0,1,2,…]
     [--prompt-set eval_awareness.v1] [--batch-size 16]</code></pre>
-<p>Result on disk: <code>out/HuggingFaceTB__SmolLM2-135M-Instruct/directions.json</code> holds 30 entries <code>eval-awareness-v1-L0 … L29</code> (d = 576) and a <code>channels.json</code> whose <code>point_source</code> says <code>prompts:eval_awareness.v1 (the N prompt activations, not a map)</code>. Six layers clear their null on the held-out split (L10, L11, L12, L13, L15, L16); the best is L12 (in-sample d 0.997 against a null p95 of 0.680; held-out d 0.601). The other 24 layers carry no direction, including L19, the persona space's own layer. A weak mid-stack direction that transfers to two unseen framings, and nothing late.</p>
+<p>Result on disk: <code>out/HuggingFaceTB__SmolLM2-135M-Instruct/directions.json</code> holds 30 entries <code>eval-awareness-v1-L0 … L29</code> (d = 576) and a <code>channels.json</code> whose <code>point_source</code> says <code>prompts:eval_awareness.v1 (the 128 prompt activations, not a map)</code>. Six layers clear their null <em>in sample</em> (L10, L11, L12, L13, L15, L16); the best is L12 (in-sample d 0.997 against a label-permutation p95 of 0.680). The other 24 layers carry no direction in sample, including L19, the persona space's own layer. <strong>None of those six clears that null on the held-out split over unseen framings.</strong> L12's held-out d is 0.601 against its own p95 of 0.680 — the smallest shortfall of the six; the other five fall short by 0.16 (L10) to 0.47 (L16). The two layers whose held-out d does clear the permutation null are L6 (0.708 vs 0.659) and L9 (0.667 vs 0.652), and neither clears it in sample — so no layer clears both. The module prints the distinction in its own summary: <em>'clears' is the in-sample effect against the LABEL-PERMUTATION p95</em> (<code>eval_awareness.py</code>). A weak mid-stack direction in sample that does not demonstrably survive a change of framing, and nothing late.</p>
 
 <h2 id="intervene">5 · Interventions <span class="b b-ship">shipped</span> <span class="b b-meas">measured</span></h2>
 <p><code>nebulai intervene</code> sweeps <em>one</em> verb over a grid of α on a real numpy GPT-2 forward pass and writes a curve bundle into <code>out/&lt;model&gt;/interp/</code>, registered in that folder's <code>index.json</code>. It is the only place in the repo permitted to make a causal claim, and the one that must never write a weight (D6).</p>
@@ -597,6 +597,7 @@ two ctfish runs: n_events 69 and 118, n_unmapped 0,
 <tr><td><code>a-direction</code></td><td>A direction, and the thing that says it is one</td><td>gpt2; direction <code>male-minus-female-names</code> + its four channels</td></tr>
 <tr><td><code>refusal-style</code></td><td>The direction that would not fit</td><td>gpt2; direction <code>refusal-style-v1-L8</code></td></tr>
 <tr><td><code>assistant-axis</code></td><td>The assistant axis (no artefact published)</td><td>listed so the reason for its absence is visible: the upstream repository publishes the pipeline and not the numbers</td></tr>
+<tr><td><code>golden-gate</code></td><td>Golden Gate GPT-2 (it does not work, and that is the result)</td><td>gpt2; Internals feature <code>steer-rail</code>; bundle <code>out/gpt2/interp/intervene_golden_gate.json</code>. Renders <code>ready</code> and plays — but see §16: the rail loads the <em>add</em> bundle, not this clamp, so its steer cells address a grid that bundle does not have</td></tr>
 </table></div>
 <p>A step can set page, dataset, channel and window, search, selection, axis and blend, an Internals feature, or a steer cell (α, prompt). Steps go through the same setters a drag uses, so an episode state and a hand-driven state are identical. Permalink: <code>episode=&lt;id&gt;&amp;step=&lt;n&gt;</code>, applied last so it wins. The <span class="ui">Claims</span> block renders on the card of any view that intervenes (today, #26): the one permitted sentence shape, <em>Under protocol P, intervening on direction d at layer L changed behaviour B from X to Y (n = …, seed = …)</em>, and what that sentence does not say about what <em>d</em> is.</p>
 
@@ -788,7 +789,7 @@ two ctfish runs: n_events 69 and 118, n_unmapped 0,
 </div>
 
 <footer>
-  <p>Nebul.AI field guide · written against <code>main</code> @ <code>83282a3</code> on 2026-09-12 · a single self-contained file; no script, no network, no external font. Numbers are quoted from the artifacts in <code>out/</code> on that checkout and from the CLI's own output; UI strings are quoted from the source. If a number here disagrees with an artifact, the artifact is right and this file is stale.</p>
+  <p>Nebul.AI field guide · written against <code>main</code> @ <code>be95be5</code> on 2026-09-12 · a single self-contained file; no script, no network, no external font. Numbers are quoted from the artifacts in <code>out/</code> on that checkout and from the CLI's own output; UI strings are quoted from the source. If a number here disagrees with an artifact, the artifact is right and this file is stale.</p>
 </footer>
 </main>
 </div>
